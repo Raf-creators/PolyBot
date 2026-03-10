@@ -57,7 +57,25 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - `services/persistence.py`: 10s flush interval, off the hot path
 - `server.py`: WebSocket hub (2s broadcast), /api/markets/summary, /api/health/feeds
 
-### P0 — Next (Phase 3)
+### P0 — Next (Phase 3) ✅ COMPLETED
+- ✅ Binary complement arbitrage scanner with full edge computation
+- ✅ Composable pricing models: fees, slippage, execution penalty, confidence scoring
+- ✅ Paired YES+NO paper execution with lifecycle tracking
+- ✅ Cooldown deduplication (120s per condition_id)
+- ✅ Pre-flight risk checks + kill switch gating
+- ✅ Position + trade context (market_question, outcome) populated
+- ✅ API: /api/strategies/arb/opportunities, /executions, /health
+- ✅ Persistence: arb_opportunities + arb_executions to MongoDB
+- **Testing**: 31/32 tests passed (96.9%)
+
+### Phase 3 Implementation Details (2026-03-10)
+- `engine/strategies/arb_scanner.py`: Main strategy with scan loop, pair detection, evaluation, execution
+- `engine/strategies/arb_models.py`: ArbConfig, ArbOpportunity, ArbExecution, ArbPairStatus
+- `engine/strategies/arb_pricing.py`: estimate_fees, estimate_slippage, estimate_execution_penalty, compute_confidence
+- `engine/paper.py`: Fixed to populate market_question/outcome on positions and trades
+- `server.py`: Arb API endpoints, unique-ID test inject endpoint
+
+### P1 — Next (Phase 4)
 - Structural arbitrage strategy (binary complement scanner)
 - Arb execution with paired YES+NO orders
 - Partial fill protection
