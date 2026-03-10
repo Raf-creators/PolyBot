@@ -23,6 +23,10 @@ class TradingEngine:
         self.execution_engine = ExecutionEngine()
         self._strategies: List[BaseStrategy] = []
         self._running = False
+        # Phase 2 components (set before start)
+        self.market_data = None
+        self.price_feeds = None
+        self.persistence = None
 
     def register_strategy(self, strategy: BaseStrategy):
         self._strategies.append(strategy)
@@ -43,15 +47,38 @@ class TradingEngine:
             await self.bus.start()
             self.state.register_component("event_bus", "running")
 
-            # 2. Risk engine
+            # 2. Market data feed
+            if self.market_data:
+                try:
+                    await self.market_data.start(self.state, self.bus)
+                    self.state.register_component("market_data", "running")
+                except Exception as e:
+                    logger.warning(f"Market data start failed (non-fatal): {e}")
+                    self.state.register_component("market_data", "error")
+
+            # 3. Price feeds
+            if self.price_feeds:
+                try:
+                    await self.price_feeds.start(self.state, self.bus)
+                    self.state.register_component("price_feeds", "running")
+                except Exception as e:
+                    logger.warning(f"Price feeds start failed (non-fatal): {e}")
+                    self.state.register_component("price_feeds", "error")
+
+            # 4. Risk engine
             await self.risk_engine.start(self.state, self.bus)
             self.state.register_component("risk_engine", "running")
 
-            # 3. Execution engine
+            # 5. Execution engine
             await self.execution_engine.start(self.state, self.bus)
             self.state.register_component("execution_engine", "running")
 
-            # 4. Strategies (only enabled ones)
+            # 6. Persistence
+            if self.persistence:
+                await self.persistence.start(self.state, self.bus)
+                self.state.register_component("persistence", "running")
+
+            # 7. Strategies (only enabled ones)
             for strategy in self._strategies:
                 cfg = self.state.strategies.get(strategy.strategy_id)
                 if cfg and cfg.enabled:
@@ -93,11 +120,17 @@ class TradingEngine:
             except Exception as e:
                 logger.error(f"Error stopping {strategy.name}: {e}")
 
-        for name, component in [
+        components = [
+            ("persistence", self.persistence),
             ("execution_engine", self.execution_engine),
             ("risk_engine", self.risk_engine),
+            ("price_feeds", self.price_feeds),
+            ("market_data", self.market_data),
             ("event_bus", self.bus),
-        ]:
+        ]
+        for name, component in components:
+            if component is None:
+                continue
             try:
                 await component.stop()
                 self.state.update_component(name, "stopped")

@@ -44,6 +44,19 @@ class StateManager:
         self.win_count: int = 0
         self.loss_count: int = 0
 
+        # Health / observability
+        self.health: Dict[str, Any] = {
+            "last_market_data_update": None,
+            "last_spot_btc_update": None,
+            "last_spot_eth_update": None,
+            "market_data_stale": True,
+            "spot_btc_stale": True,
+            "spot_eth_stale": True,
+            "last_order_latency_ms": None,
+            "binance_connected": False,
+            "polymarket_connected": False,
+        }
+
         # Internal pub/sub
         self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
 
@@ -150,5 +163,6 @@ class StateManager:
                 "open_orders": len(self.get_open_orders()),
                 "markets_tracked": len(self.markets),
                 "spot_prices": dict(self.spot_prices),
+                "health": dict(self.health),
             },
         ).model_dump()

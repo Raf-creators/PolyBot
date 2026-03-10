@@ -175,3 +175,15 @@ class EngineStateResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     trading_mode: Optional[TradingMode] = None
     risk: Optional[RiskConfig] = None
+
+
+class HealthMetrics(BaseModel):
+    last_market_data_update: Optional[float] = None
+    last_spot_btc_update: Optional[float] = None
+    last_spot_eth_update: Optional[float] = None
+    market_data_stale: bool = True
+    spot_btc_stale: bool = True
+    spot_eth_stale: bool = True
+    last_order_latency_ms: Optional[float] = None
+    binance_connected: bool = False
+    polymarket_connected: bool = False

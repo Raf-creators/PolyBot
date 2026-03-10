@@ -51,6 +51,14 @@ class RiskEngine:
         if self._state.daily_pnl <= -cfg.max_daily_loss:
             return False, f"daily loss limit hit ({self._state.daily_pnl})"
 
+        # Total exposure check
+        total_exposure = sum(
+            p.size * p.current_price for p in self._state.positions.values()
+        )
+        order_value = order.size * order.price
+        if total_exposure + order_value > cfg.max_market_exposure:
+            return False, f"total exposure {total_exposure + order_value:.2f} > max {cfg.max_market_exposure}"
+
         return True, "approved"
 
     async def _on_order_request(self, event: Event):

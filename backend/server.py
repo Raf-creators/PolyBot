@@ -1,12 +1,13 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from contextlib import asynccontextmanager
+import asyncio
 import os
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Set
 
 from models import (
     TradingMode, ConfigUpdateRequest, Event, EventType,
@@ -15,6 +16,9 @@ from models import (
 from engine.state import StateManager
 from engine.events import EventBus
 from engine.core import TradingEngine
+from engine.market_data import MarketDataFeed
+from engine.price_feeds import PriceFeedManager
+from services.persistence import PersistenceService
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -35,15 +39,42 @@ logger = logging.getLogger(__name__)
 state: Optional[StateManager] = None
 bus: Optional[EventBus] = None
 engine: Optional[TradingEngine] = None
+ws_clients: Set[WebSocket] = set()
+ws_broadcast_task: Optional[asyncio.Task] = None
+
+
+async def _ws_broadcast_loop():
+    """Push state snapshots to all connected WebSocket clients every 2 seconds."""
+    while True:
+        try:
+            if ws_clients and state:
+                snapshot = state.snapshot()
+                dead = set()
+                for ws in ws_clients.copy():
+                    try:
+                        await ws.send_json(snapshot)
+                    except Exception:
+                        dead.add(ws)
+                ws_clients.difference_update(dead)
+            await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(2)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine
+    global state, bus, engine, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
     engine = TradingEngine(state, bus)
+
+    # Attach Phase 2 components
+    engine.market_data = MarketDataFeed()
+    engine.price_feeds = PriceFeedManager()
+    engine.persistence = PersistenceService(db)
 
     # Trading mode from env
     mode_str = os.environ.get("TRADING_MODE", "paper")
@@ -55,10 +86,20 @@ async def lifespan(app: FastAPI):
         state.trading_mode = TradingMode.PAPER
         logger.info("No Polymarket credentials. Paper mode enforced.")
 
+    # Start WebSocket broadcast
+    ws_broadcast_task = asyncio.create_task(_ws_broadcast_loop())
+
     logger.info(f"Polymarket Edge OS initialized [{state.trading_mode.value}]")
 
     yield
 
+    # Shutdown
+    if ws_broadcast_task:
+        ws_broadcast_task.cancel()
+        try:
+            await ws_broadcast_task
+        except asyncio.CancelledError:
+            pass
     if engine and engine.is_running:
         await engine.stop()
     mongo_client.close()
@@ -190,7 +231,30 @@ async def get_trades():
 async def get_markets():
     if not state:
         raise HTTPException(500, "Engine not initialized")
-    return [m.model_dump() for m in state.markets.values()]
+    markets = list(state.markets.values())
+    return [m.model_dump() for m in sorted(markets, key=lambda x: x.volume_24h, reverse=True)[:200]]
+
+
+@api_router.get("/markets/summary")
+async def get_markets_summary():
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    return {
+        "total_markets": len(state.markets),
+        "top_by_volume": [
+            {"question": m.question, "outcome": m.outcome, "mid_price": m.mid_price, "volume_24h": m.volume_24h}
+            for m in sorted(state.markets.values(), key=lambda x: x.volume_24h, reverse=True)[:10]
+        ],
+    }
+
+
+# ---- Health metrics ----
+
+@api_router.get("/health/feeds")
+async def get_feed_health():
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    return state.health
 
 
 # ---- Test endpoint (paper order through full pipeline) ----
@@ -227,6 +291,21 @@ async def test_paper_order():
     ))
 
     return {"status": "submitted", "order_id": order.id}
+
+
+# ---- WebSocket ----
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    ws_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        ws_clients.discard(websocket)
 
 
 # ---- Wire up ----

@@ -1,4 +1,5 @@
 import logging
+import time
 
 from models import (
     OrderRecord, OrderStatus, TradeRecord, Position,
@@ -16,6 +17,7 @@ class PaperAdapter:
         self._bus = bus
 
     async def execute(self, order: OrderRecord):
+        t_start = time.time()
         market = self._state.get_market(order.token_id)
         fill_price = order.price
 
@@ -91,10 +93,12 @@ class PaperAdapter:
                     realized_pnl=round(existing.realized_pnl + pnl, 4),
                 ))
 
-        logger.info(f"[PAPER] {order.side.value.upper()} {order.size}@{fill_price:.4f} token={order.token_id[:12]}...")
+        latency_ms = round((time.time() - t_start) * 1000, 2)
+        self._state.health["last_order_latency_ms"] = latency_ms
+        logger.info(f"[PAPER] {order.side.value.upper()} {order.size}@{fill_price:.4f} token={order.token_id[:12]}... ({latency_ms}ms)")
 
         await self._bus.emit(Event(
             type=EventType.ORDER_UPDATE,
             source="paper_adapter",
-            data={"order_id": order.id, "status": "filled", "fill_price": fill_price},
+            data={"order_id": order.id, "status": "filled", "fill_price": fill_price, "latency_ms": latency_ms},
         ))
