@@ -1,0 +1,58 @@
+Project: Polymarket Edge OS
+
+Current state: Phase 1–3 complete.
+
+Polymarket Edge OS is a modular automated trading engine designed to detect structural arbitrage opportunities in Polymarket markets.
+
+Architecture:
+- Async Python event-driven backend
+- In-memory hot path with StateManager
+- EventBus for decoupled internal communication
+- MongoDB persistence via async write-behind
+- Paper trading execution with realistic fill simulation
+- Risk engine with kill switch and exposure limits
+
+Core components:
+- StateManager: central in-memory state store
+- EventBus: async event pipeline for signals/orders
+- TradingEngine: lifecycle orchestrator
+- RiskEngine: mandatory execution gate
+- ExecutionEngine: order lifecycle handler
+- PaperAdapter: simulated execution for testing
+
+Phase 2 added:
+- Polymarket market discovery and midpoint pricing
+- Binance WebSocket feeds for BTC/ETH spot
+- MongoDB persistence
+- API endpoints for markets, positions, trades
+- WebSocket state streaming
+- health and latency observability
+
+Phase 3 added:
+- ArbScanner strategy detecting complement arbitrage
+- Pricing models for fees, slippage, execution penalty
+- Confidence scoring for opportunities
+- Paired trade execution lifecycle
+- APIs for arb opportunities, executions, and strategy health
+- persistence of opportunities and results
+
+Current capabilities:
+- scans 100+ binary markets every 10 seconds
+- identifies arbitrage where YES + NO < 1 after costs
+- simulates paired trades in paper mode
+- risk engine blocks invalid trades
+- results persisted to MongoDB
+- health metrics exposed via API
+
+Known limitations:
+- midpoint pricing instead of full order book
+- approximate fee model
+- simulated fills instead of live execution
+- no frontend dashboard yet
+
+Next phases:
+Phase 4: frontend dashboard
+Phase 5: crypto sniper strategy
+Phase 6: alerts and analytics polish
+
+Goal: evolve this engine into a reliable automated arbitrage trading system for Polymarket markets.
