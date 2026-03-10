@@ -18,6 +18,7 @@ from engine.events import EventBus
 from engine.core import TradingEngine
 from engine.market_data import MarketDataFeed
 from engine.price_feeds import PriceFeedManager
+from engine.strategies.arb_scanner import ArbScanner
 from services.persistence import PersistenceService
 
 ROOT_DIR = Path(__file__).parent
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 state: Optional[StateManager] = None
 bus: Optional[EventBus] = None
 engine: Optional[TradingEngine] = None
+arb_scanner_ref: Optional[ArbScanner] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -65,16 +67,22 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
     engine = TradingEngine(state, bus)
 
-    # Attach Phase 2 components
+    # Phase 2 components
     engine.market_data = MarketDataFeed()
     engine.price_feeds = PriceFeedManager()
     engine.persistence = PersistenceService(db)
+
+    # Phase 3: register arb strategy (enabled by default)
+    arb = ArbScanner()
+    engine.register_strategy(arb)
+    state.strategies["arb_scanner"].enabled = True
+    arb_scanner_ref = arb
 
     # Trading mode from env
     mode_str = os.environ.get("TRADING_MODE", "paper")
@@ -257,6 +265,40 @@ async def get_feed_health():
     return state.health
 
 
+# ---- Arb Strategy ----
+
+@api_router.get("/strategies/arb/opportunities")
+async def get_arb_opportunities(limit: int = 50):
+    if not arb_scanner_ref:
+        raise HTTPException(500, "Arb scanner not initialized")
+    opps = arb_scanner_ref.get_opportunities(limit=limit)
+    tradable = [o for o in opps if o.get("is_tradable")]
+    rejected = [o for o in opps if not o.get("is_tradable")]
+    return {
+        "tradable": tradable,
+        "rejected": rejected[:limit],
+        "total_tradable": len(tradable),
+        "total_rejected": len(rejected),
+    }
+
+
+@api_router.get("/strategies/arb/executions")
+async def get_arb_executions():
+    if not arb_scanner_ref:
+        raise HTTPException(500, "Arb scanner not initialized")
+    return {
+        "active": arb_scanner_ref.get_active_executions(),
+        "completed": arb_scanner_ref.get_completed_executions(limit=50),
+    }
+
+
+@api_router.get("/strategies/arb/health")
+async def get_arb_health():
+    if not arb_scanner_ref:
+        raise HTTPException(500, "Arb scanner not initialized")
+    return arb_scanner_ref.get_health()
+
+
 # ---- Test endpoint (paper order through full pipeline) ----
 
 @api_router.post("/test/paper-order")
@@ -291,6 +333,48 @@ async def test_paper_order():
     ))
 
     return {"status": "submitted", "order_id": order.id}
+
+
+@api_router.post("/test/inject-arb-opportunity")
+async def test_inject_arb_opportunity():
+    """Inject a synthetic market pair with sub-1.0 pricing to test arb pipeline."""
+    if not engine or not engine.is_running:
+        raise HTTPException(400, "Engine must be running")
+
+    from models import MarketSnapshot
+    condition_id = "test-arb-condition-001"
+
+    state.update_market("test-arb-yes", MarketSnapshot(
+        token_id="test-arb-yes",
+        condition_id=condition_id,
+        question="[TEST] Synthetic arb opportunity",
+        outcome="Yes",
+        complement_token_id="test-arb-no",
+        mid_price=0.45,
+        last_price=0.45,
+        volume_24h=50000,
+        liquidity=5000,
+    ))
+    state.update_market("test-arb-no", MarketSnapshot(
+        token_id="test-arb-no",
+        condition_id=condition_id,
+        question="[TEST] Synthetic arb opportunity",
+        outcome="No",
+        complement_token_id="test-arb-yes",
+        mid_price=0.48,
+        last_price=0.48,
+        volume_24h=50000,
+        liquidity=5000,
+    ))
+
+    return {
+        "status": "injected",
+        "condition_id": condition_id,
+        "yes_price": 0.45,
+        "no_price": 0.48,
+        "gross_edge_bps": 700,
+        "note": "Scanner will detect on next scan cycle (~10s)",
+    }
 
 
 # ---- WebSocket ----

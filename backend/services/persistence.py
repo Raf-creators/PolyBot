@@ -89,3 +89,21 @@ class PersistenceService:
                 )
             except Exception as e:
                 logger.error(f"Position snapshot error: {e}")
+
+        # ---- Arb opportunities log ----
+        if self._state.arb_opportunities_log:
+            batch = self._state.arb_opportunities_log[:]
+            self._state.arb_opportunities_log.clear()
+            try:
+                await self._db.arb_opportunities.insert_many(batch)
+            except Exception as e:
+                logger.error(f"Arb opportunities persist error: {e}")
+
+        # ---- Arb executions log ----
+        if self._state.arb_executions_log:
+            batch = self._state.arb_executions_log[:]
+            self._state.arb_executions_log.clear()
+            try:
+                await self._db.arb_executions.insert_many(batch)
+            except Exception as e:
+                logger.error(f"Arb executions persist error: {e}")

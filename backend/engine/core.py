@@ -83,6 +83,8 @@ class TradingEngine:
                 cfg = self.state.strategies.get(strategy.strategy_id)
                 if cfg and cfg.enabled:
                     await strategy.start(self.state, self.bus)
+                    if hasattr(strategy, 'set_execution_context'):
+                        strategy.set_execution_context(self.risk_engine, self.execution_engine)
                     self.state.update_component(strategy.name, "running")
                 else:
                     self.state.register_component(strategy.name, "disabled")

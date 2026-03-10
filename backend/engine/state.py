@@ -57,6 +57,10 @@ class StateManager:
             "polymarket_connected": False,
         }
 
+        # Arb strategy data (for persistence write-behind)
+        self.arb_opportunities_log: List[dict] = []
+        self.arb_executions_log: List[dict] = []
+
         # Internal pub/sub
         self._subscribers: Dict[str, List[Callable]] = defaultdict(list)
 
