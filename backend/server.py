@@ -342,25 +342,29 @@ async def test_inject_arb_opportunity():
         raise HTTPException(400, "Engine must be running")
 
     from models import MarketSnapshot
-    condition_id = "test-arb-condition-001"
+    import uuid
+    uid = uuid.uuid4().hex[:8]
+    condition_id = f"test-arb-{uid}"
+    yes_tid = f"test-arb-yes-{uid}"
+    no_tid = f"test-arb-no-{uid}"
 
-    state.update_market("test-arb-yes", MarketSnapshot(
-        token_id="test-arb-yes",
+    state.update_market(yes_tid, MarketSnapshot(
+        token_id=yes_tid,
         condition_id=condition_id,
-        question="[TEST] Synthetic arb opportunity",
+        question=f"[TEST] Synthetic arb opportunity {uid}",
         outcome="Yes",
-        complement_token_id="test-arb-no",
+        complement_token_id=no_tid,
         mid_price=0.45,
         last_price=0.45,
         volume_24h=50000,
         liquidity=5000,
     ))
-    state.update_market("test-arb-no", MarketSnapshot(
-        token_id="test-arb-no",
+    state.update_market(no_tid, MarketSnapshot(
+        token_id=no_tid,
         condition_id=condition_id,
-        question="[TEST] Synthetic arb opportunity",
+        question=f"[TEST] Synthetic arb opportunity {uid}",
         outcome="No",
-        complement_token_id="test-arb-yes",
+        complement_token_id=yes_tid,
         mid_price=0.48,
         last_price=0.48,
         volume_24h=50000,
@@ -370,6 +374,8 @@ async def test_inject_arb_opportunity():
     return {
         "status": "injected",
         "condition_id": condition_id,
+        "yes_token_id": yes_tid,
+        "no_token_id": no_tid,
         "yes_price": 0.45,
         "no_price": 0.48,
         "gross_edge_bps": 700,

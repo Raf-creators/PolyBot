@@ -41,10 +41,15 @@ class PaperAdapter:
         )
 
         # Record trade
+        mkt_question = market.question if market else ""
+        mkt_outcome = market.outcome if market else ""
+
         trade = TradeRecord(
             id=new_id(),
             order_id=order.id,
             token_id=order.token_id,
+            market_question=mkt_question,
+            outcome=mkt_outcome,
             side=order.side,
             price=fill_price,
             size=order.size,
@@ -74,6 +79,8 @@ class PaperAdapter:
             else:
                 self._state.update_position(order.token_id, Position(
                     token_id=order.token_id,
+                    market_question=mkt_question,
+                    outcome=mkt_outcome,
                     size=order.size,
                     avg_cost=fill_price,
                     current_price=fill_price,
