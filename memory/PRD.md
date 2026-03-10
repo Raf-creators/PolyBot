@@ -41,15 +41,23 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 
 ## Prioritized Backlog
 
-### P0 — Next (Phase 2)
-- Market data ingestion (Polymarket public REST)
-- Binance WebSocket for BTC/ETH spot prices
-- Risk engine: actual limit enforcement with live state
-- Paper execution with real market prices
-- Async persistence to MongoDB
-- WebSocket endpoint for frontend real-time data
+### P0 — Next (Phase 2) ✅ COMPLETED
+- ✅ Market data ingestion (Polymarket Gamma API, 200 markets)
+- ✅ Binance WebSocket for BTC/ETH spot prices
+- ✅ Risk engine: total exposure check + all limit enforcement
+- ✅ Paper execution with latency tracking
+- ✅ Async write-behind persistence to MongoDB
+- ✅ WebSocket endpoint `/api/ws` for frontend real-time data
+- ✅ Health metrics and feed staleness detection
+- **Testing**: 17/17 tests passed (100%)
 
-### P1 — Phase 3
+### Phase 2 Implementation Details (2026-03-10)
+- `engine/market_data.py`: Gamma API discovery + CLOB midpoint refresh
+- `engine/price_feeds.py`: Binance WS with auto-reconnect + staleness monitor
+- `services/persistence.py`: 10s flush interval, off the hot path
+- `server.py`: WebSocket hub (2s broadcast), /api/markets/summary, /api/health/feeds
+
+### P0 — Next (Phase 3)
 - Structural arbitrage strategy (binary complement scanner)
 - Arb execution with paired YES+NO orders
 - Partial fill protection
