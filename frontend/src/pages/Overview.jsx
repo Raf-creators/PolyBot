@@ -6,7 +6,6 @@ import { SectionCard } from '../components/SectionCard';
 import { HealthBadge } from '../components/HealthBadge';
 import { DataTable } from '../components/DataTable';
 import { formatPnl, formatPercent, formatNumber, formatUptime, formatTimestamp, formatPrice, truncate, pnlColor } from '../utils/formatters';
-import { Activity, TrendingUp, Wallet, BarChart3, Zap, Radio } from 'lucide-react';
 
 export default function Overview() {
   const status = useDashboardStore((s) => s.status);

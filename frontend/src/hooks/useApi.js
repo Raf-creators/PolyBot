@@ -6,70 +6,80 @@ import { useDashboardStore } from '../state/dashboardStore';
 const api = axios.create({ baseURL: API_BASE });
 
 export function useApi() {
-  const store = useDashboardStore();
+  // Extract ONLY setter functions via selectors — these are stable refs
+  // that never change, so useCallback deps stay stable across WS updates.
+  const setPositions = useDashboardStore((s) => s.setPositions);
+  const setTrades = useDashboardStore((s) => s.setTrades);
+  const setOrders = useDashboardStore((s) => s.setOrders);
+  const setMarkets = useDashboardStore((s) => s.setMarkets);
+  const setArbOpportunities = useDashboardStore((s) => s.setArbOpportunities);
+  const setArbExecutions = useDashboardStore((s) => s.setArbExecutions);
+  const setArbHealth = useDashboardStore((s) => s.setArbHealth);
+  const setFeedHealth = useDashboardStore((s) => s.setFeedHealth);
+  const setConfig = useDashboardStore((s) => s.setConfig);
 
   const fetchPositions = useCallback(async () => {
     try {
       const { data } = await api.get('/positions');
-      store.setPositions(data);
+      setPositions(data);
     } catch {}
-  }, [store]);
+  }, [setPositions]);
 
   const fetchTrades = useCallback(async () => {
     try {
       const { data } = await api.get('/trades');
-      store.setTrades(data);
+      setTrades(data);
     } catch {}
-  }, [store]);
+  }, [setTrades]);
 
   const fetchOrders = useCallback(async () => {
     try {
       const { data } = await api.get('/orders');
-      store.setOrders(data);
+      setOrders(data);
     } catch {}
-  }, [store]);
+  }, [setOrders]);
 
   const fetchMarkets = useCallback(async () => {
     try {
       const { data } = await api.get('/markets');
-      store.setMarkets(data);
+      setMarkets(data);
     } catch {}
-  }, [store]);
+  }, [setMarkets]);
 
   const fetchArbOpportunities = useCallback(async () => {
     try {
       const { data } = await api.get('/strategies/arb/opportunities');
-      store.setArbOpportunities(data);
+      setArbOpportunities(data);
     } catch {}
-  }, [store]);
+  }, [setArbOpportunities]);
 
   const fetchArbExecutions = useCallback(async () => {
     try {
       const { data } = await api.get('/strategies/arb/executions');
-      store.setArbExecutions(data);
+      setArbExecutions(data);
     } catch {}
-  }, [store]);
+  }, [setArbExecutions]);
 
   const fetchArbHealth = useCallback(async () => {
     try {
       const { data } = await api.get('/strategies/arb/health');
-      store.setArbHealth(data);
+      setArbHealth(data);
     } catch {}
-  }, [store]);
+  }, [setArbHealth]);
 
   const fetchFeedHealth = useCallback(async () => {
     try {
       const { data } = await api.get('/health/feeds');
-      store.setFeedHealth(data);
+      setFeedHealth(data);
     } catch {}
-  }, [store]);
+  }, [setFeedHealth]);
 
   const fetchConfig = useCallback(async () => {
     try {
       const { data } = await api.get('/config');
-      store.setConfig(data);
+      setConfig(data);
     } catch {}
-  }, [store]);
+  }, [setConfig]);
 
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');

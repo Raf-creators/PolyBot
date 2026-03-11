@@ -4,12 +4,9 @@ import { useApi } from '../hooks/useApi';
 import { StatCard } from '../components/StatCard';
 import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
-import { EmptyState } from '../components/EmptyState';
 import { formatBps, formatPrice, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 import { ARB_STATUS_COLORS } from '../utils/constants';
-import { Badge } from '../components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { ArrowLeftRight, CheckCircle, XCircle, Clock, TrendingUp } from 'lucide-react';
 
 export default function Arbitrage() {
   const arbOpps = useDashboardStore((s) => s.arbOpportunities);

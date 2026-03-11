@@ -2,12 +2,10 @@ import { useEffect, useMemo } from 'react';
 import { useDashboardStore } from '../state/dashboardStore';
 import { useApi } from '../hooks/useApi';
 import { SectionCard } from '../components/SectionCard';
-import { StatCard } from '../components/StatCard';
 import { HealthBadge } from '../components/HealthBadge';
 import { Button } from '../components/ui/button';
-import { Progress } from '../components/ui/progress';
-import { formatPnl, formatNumber, formatPercent, formatTimeAgo } from '../utils/formatters';
-import { ShieldAlert, ShieldCheck, Zap, ZapOff, AlertTriangle } from 'lucide-react';
+import { formatPnl, formatTimeAgo } from '../utils/formatters';
+import { ShieldCheck, Zap, ZapOff, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Risk() {

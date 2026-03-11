@@ -35,8 +35,7 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - `engine/execution.py`: ExecutionEngine — order routing to paper/live adapters
 - `engine/paper.py`: PaperAdapter — simulated fills for paper mode
 - `engine/strategies/base.py`: BaseStrategy ABC
-- `server.py`: FastAPI with 15+ endpoints (status, engine control, config, risk, trades, positions, orders, markets)
-- `.env`: All credential placeholders (Polymarket, Telegram, trading mode)
+- `server.py`: FastAPI with 15+ endpoints
 - **Testing**: 23/23 backend tests passed (100%)
 
 ### Phase 2 — Market Data & Feeds (2026-03-10)
@@ -47,48 +46,29 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - **Testing**: 17/17 tests passed (100%)
 
 ### Phase 3 — Arbitrage Strategy (2026-03-10)
-- `engine/strategies/arb_scanner.py`: Main strategy with scan loop, pair detection, evaluation, execution
-- `engine/strategies/arb_models.py`: ArbConfig, ArbOpportunity, ArbExecution, ArbPairStatus
+- `engine/strategies/arb_scanner.py`: Binary complement arb scanner
+- `engine/strategies/arb_models.py`: ArbConfig, ArbOpportunity, ArbExecution
 - `engine/strategies/arb_pricing.py`: Pricing models (fees, slippage, execution penalty, confidence)
-- `engine/paper.py`: Fixed to populate market_question/outcome on positions and trades
-- `server.py`: Arb API endpoints, unique-ID test inject endpoint
 - **Testing**: 31/32 tests passed (96.9%)
 
-### Phase 4 — Frontend Dashboard (2026-03-11) ✅ COMPLETED
-- **Architecture**: React SPA with zustand state store, single global WebSocket, REST hydration
-- **Components**:
-  - `AppShell.jsx`: Main layout with Sidebar + TopBar + Outlet
-  - `Sidebar.jsx`: Navigation with 6 links, engine status indicator, WS connection status
-  - `TopBar.jsx`: Engine status, mode, uptime, kill switch indicator, Start/Stop button
-  - `StatCard.jsx`, `SectionCard.jsx`, `EmptyState.jsx`, `HealthBadge.jsx`, `DataTable.jsx`: Reusable shared components
-- **State**: `dashboardStore.js` — zustand store with WS snapshot + REST-hydrated data
-- **Hooks**: `useWebSocket.js` (single global WS), `useApi.js` (REST helpers)
-- **Utils**: `formatters.js`, `constants.js`
-- **Pages**:
-  1. **Overview**: 6 stat cards, System Status, Active Strategies, Feed Health, Recent Trades
-  2. **Arbitrage**: 4 tabs (Opportunities, Rejected, Executions, Health), sortable tables, scanner metrics/config
-  3. **Positions**: 3 tabs (Positions, Trades, Orders), exposure/PnL stats, sortable tables
-  4. **Risk**: Kill switch toggle + banner, risk gauges (exposure, positions, daily loss), alerts, config, component/strategy health
-  5. **Markets**: 200-market table with search/filter, volume/liquidity stats, sortable columns
-  6. **Settings**: Trading mode toggle, credentials status, risk config form with save, strategy config display
-- **Design**: Dark trading terminal theme (Inter + JetBrains Mono), custom scrollbars, professional color palette
+### Phase 4 — Frontend Dashboard (2026-03-11) ✅ COMPLETED + AUDITED
+- **Architecture**: Single global WS, zustand store, REST hydration, selector subscriptions
+- **Layout**: AppShell, Sidebar (6 nav links + WS indicator), TopBar (engine controls)
+- **Shared Components**: StatCard, SectionCard, DataTable (sortable), EmptyState, HealthBadge
+- **Pages**: Overview, Arbitrage (4 tabs), Positions (3 tabs), Risk (kill switch + gauges), Markets (search), Settings (config forms)
+- **Design**: Dark terminal theme (Inter + JetBrains Mono), custom scrollbars
 - **Testing**: 23/23 backend + 26/26 frontend (100%)
+- **Audit (2026-03-11)**: All 10 audit points passed. Fixed: useApi store subscription bug (critical), StatCard PnL coloring (important), unused imports (low). Zero backend changes.
 
 ## Frontend Structure
 ```
 src/
-  pages/
-    Overview.jsx, Arbitrage.jsx, Positions.jsx, Risk.jsx, Markets.jsx, Settings.jsx
-  components/
-    AppShell.jsx, Sidebar.jsx, TopBar.jsx, StatCard.jsx, SectionCard.jsx,
-    DataTable.jsx, EmptyState.jsx, HealthBadge.jsx
-    ui/ (shadcn components)
-  hooks/
-    useWebSocket.js, useApi.js
-  state/
-    dashboardStore.js
-  utils/
-    formatters.js, constants.js
+  state/dashboardStore.js          — zustand central store
+  hooks/useWebSocket.js            — single global WS
+  hooks/useApi.js                  — REST helpers (stable selector refs)
+  utils/formatters.js, constants.js
+  components/AppShell, Sidebar, TopBar, StatCard, SectionCard, DataTable, EmptyState, HealthBadge
+  pages/Overview, Arbitrage, Positions, Risk, Markets, Settings
 ```
 
 ## Prioritized Backlog
@@ -102,25 +82,3 @@ src/
 - Rich analytics
 - Config persistence
 - Copy trading skeleton
-- Weather research placeholder
-
-## API Endpoints
-- GET /api/ — Root info
-- GET /api/health — Health check
-- GET /api/status — Full state snapshot
-- GET /api/config — Config + credentials
-- PUT /api/config — Update config (mode, risk)
-- POST /api/engine/start — Start engine
-- POST /api/engine/stop — Stop engine
-- POST /api/risk/kill-switch/activate
-- POST /api/risk/kill-switch/deactivate
-- GET /api/positions
-- GET /api/orders
-- GET /api/trades
-- GET /api/markets
-- GET /api/markets/summary
-- GET /api/health/feeds
-- GET /api/strategies/arb/opportunities
-- GET /api/strategies/arb/executions
-- GET /api/strategies/arb/health
-- WS /api/ws — Real-time state broadcast (2s)
