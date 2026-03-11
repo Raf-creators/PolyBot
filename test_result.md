@@ -101,3 +101,139 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "Build a professional, real-time, dark-mode trading dashboard for Polymarket Edge OS. 6 pages: Overview, Arbitrage, Positions & Trades, Risk Monitor, Markets, Settings. Single global WebSocket connection, zustand state store, REST APIs for detailed data hydration."
+
+backend:
+  - task: "API endpoints for dashboard (status, config, markets, positions, trades, orders, arb, health, ws)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "All backend APIs were built in Phase 1-3. 15+ endpoints available. Backend is stable core, not modified in Phase 4."
+
+frontend:
+  - task: "App Shell (Sidebar + TopBar + global WebSocket)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/components/AppShell.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Created AppShell with Sidebar navigation, TopBar with engine controls, single global WebSocket via useWebSocket hook."
+
+  - task: "Overview Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Overview.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "6 stat cards (Daily PnL, Paper Balance, Win Rate, Total Trades, Open Positions, Markets Tracked), System Status, Active Strategies, Feed Health, Recent Trades table."
+
+  - task: "Arbitrage Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Arbitrage.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Tabs: Opportunities, Rejected, Executions, Health. Data tables with sorting. Scanner metrics and config display. REST-hydrated with 8s polling."
+
+  - task: "Positions & Trades Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Positions.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Tabs: Positions, Trades, Orders. Data tables with sorting. Summary stats (exposure, unrealized/realized PnL). REST-hydrated with 8s polling."
+
+  - task: "Risk Monitor Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Risk.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Kill switch button with banner, risk gauges (exposure, position slots, daily loss limit), risk alerts, risk config display, component health, strategy health."
+
+  - task: "Markets Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Markets.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Markets data table with search/filter, volume and liquidity stats, sortable columns. REST-hydrated with 15s polling."
+
+  - task: "Settings Page"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Settings.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Trading mode toggle (paper/shadow/live), credentials status, risk configuration form with save, strategy configuration display. Uses updateConfig API."
+
+  - task: "State Management (Zustand store)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/state/dashboardStore.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Central zustand store with WS snapshot + REST-hydrated data. Single global WebSocket, components subscribe to specific slices."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 0
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "App Shell (Sidebar + TopBar + global WebSocket)"
+    - "Overview Page"
+    - "Arbitrage Page"
+    - "Positions & Trades Page"
+    - "Risk Monitor Page"
+    - "Markets Page"
+    - "Settings Page"
+    - "State Management (Zustand store)"
+  stuck_tasks: []
+  test_all: true
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Phase 4 frontend dashboard fully implemented. All 6 pages built with shared components, single global WebSocket, zustand state store. Dark trading terminal theme. Backend not modified. All pages need UI/functionality testing. Engine can be started via the Start button in the top bar. Backend APIs are at /api/*. Start engine first, then test arb injection endpoint to generate test data."
