@@ -327,6 +327,21 @@ class WeatherTrader(BaseStrategy):
         # --- Compute bucket probabilities ---
         probs = compute_all_bucket_probabilities(cm.buckets, mu, sigma)
 
+        # --- Spread-sum validation: check if market prices are coherent ---
+        market_prices_sum = 0
+        price_count = 0
+        for bucket in cm.buckets:
+            snap = self._state.get_market(bucket.token_id)
+            if snap and snap.mid_price and 0 < snap.mid_price < 1:
+                market_prices_sum += snap.mid_price
+                price_count += 1
+        if price_count >= 2:
+            spread_sum_deviation = abs(market_prices_sum - 1.0)
+            if spread_sum_deviation > self.config.max_spread_sum:
+                return [self._reject_signal(cm, forecast, mu, sigma, lead_hours, 0, 0,
+                                            f"spread_sum_deviation ({spread_sum_deviation:.3f} > {self.config.max_spread_sum})",
+                                            bucket_label="(all)")]
+
         # --- Evaluate each bucket ---
         buckets_traded = 0
         for i, bucket in enumerate(cm.buckets):
@@ -620,6 +635,12 @@ class WeatherTrader(BaseStrategy):
             "feed_health": self._feed.health,
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),
+            "calibration_status": {
+                "using_defaults": len(self._calibrations) == 0,
+                "calibrated_stations": list(self._calibrations.keys()),
+                "total_stations": len(STATION_REGISTRY),
+                "note": "Using default NWS MOS sigma table" if not self._calibrations else "Historical calibration loaded",
+            },
             "classifications": {
                 cid: {
                     "station": cm.station_id,

@@ -4,6 +4,7 @@ import { AppShell } from "./components/AppShell";
 import Overview from "./pages/Overview";
 import Arbitrage from "./pages/Arbitrage";
 import Sniper from "./pages/Sniper";
+import Weather from "./pages/Weather";
 import Positions from "./pages/Positions";
 import Analytics from "./pages/Analytics";
 import Risk from "./pages/Risk";
@@ -19,6 +20,7 @@ function App() {
             <Route path="/" element={<Overview />} />
             <Route path="/arbitrage" element={<Arbitrage />} />
             <Route path="/sniper" element={<Sniper />} />
+            <Route path="/weather" element={<Weather />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/risk" element={<Risk />} />

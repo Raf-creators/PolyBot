@@ -6,6 +6,7 @@ export const NAV_ITEMS = [
   { path: '/', label: 'Overview', icon: 'LayoutDashboard' },
   { path: '/arbitrage', label: 'Arbitrage', icon: 'ArrowLeftRight' },
   { path: '/sniper', label: 'Sniper', icon: 'Crosshair' },
+  { path: '/weather', label: 'Weather', icon: 'CloudSun' },
   { path: '/positions', label: 'Positions', icon: 'Layers' },
   { path: '/analytics', label: 'Analytics', icon: 'TrendingUp' },
   { path: '/risk', label: 'Risk', icon: 'ShieldAlert' },

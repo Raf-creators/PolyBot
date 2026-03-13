@@ -20,6 +20,10 @@ export function useApi() {
   const setSniperSignals = useDashboardStore((s) => s.setSniperSignals);
   const setSniperExecutions = useDashboardStore((s) => s.setSniperExecutions);
   const setSniperHealth = useDashboardStore((s) => s.setSniperHealth);
+  const setWeatherSignals = useDashboardStore((s) => s.setWeatherSignals);
+  const setWeatherExecutions = useDashboardStore((s) => s.setWeatherExecutions);
+  const setWeatherHealth = useDashboardStore((s) => s.setWeatherHealth);
+  const setWeatherForecasts = useDashboardStore((s) => s.setWeatherForecasts);
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
   const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
@@ -108,6 +112,34 @@ export function useApi() {
     } catch {}
   }, [setSniperHealth]);
 
+  const fetchWeatherSignals = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/weather/signals');
+      setWeatherSignals(data);
+    } catch {}
+  }, [setWeatherSignals]);
+
+  const fetchWeatherExecutions = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/weather/executions');
+      setWeatherExecutions(data);
+    } catch {}
+  }, [setWeatherExecutions]);
+
+  const fetchWeatherHealth = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/weather/health');
+      setWeatherHealth(data);
+    } catch {}
+  }, [setWeatherHealth]);
+
+  const fetchWeatherForecasts = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/weather/forecasts');
+      setWeatherForecasts(data);
+    } catch {}
+  }, [setWeatherForecasts]);
+
   const fetchPnlHistory = useCallback(async () => {
     try {
       const { data } = await api.get('/analytics/pnl-history');
@@ -158,7 +190,9 @@ export function useApi() {
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
-    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
+    fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts,
+    fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,
