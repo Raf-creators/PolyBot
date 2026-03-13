@@ -403,6 +403,42 @@ async def test_inject_crypto_market():
     }
 
 
+# ---- Analytics ----
+
+@api_router.get("/analytics/pnl-history")
+async def get_pnl_history():
+    """Return cumulative P&L time series from trade history."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    trades = state.trades[-500:]
+    points = []
+    cumulative = 0.0
+    peak = 0.0
+    trough = 0.0
+
+    for t in trades:
+        cumulative += t.pnl
+        cumulative_r = round(cumulative, 4)
+        peak = max(peak, cumulative_r)
+        trough = min(trough, cumulative_r)
+        points.append({
+            "timestamp": t.timestamp,
+            "cumulative_pnl": cumulative_r,
+            "trade_pnl": round(t.pnl, 4),
+            "strategy": t.strategy_id,
+        })
+
+    return {
+        "points": points,
+        "current_pnl": round(cumulative, 4),
+        "peak_pnl": round(peak, 4),
+        "trough_pnl": round(trough, 4),
+        "max_drawdown": round(peak - trough, 4) if peak > trough else 0.0,
+        "total_trades": len(trades),
+    }
+
+
 # ---- Test endpoint (paper order through full pipeline) ----
 
 @api_router.post("/test/paper-order")

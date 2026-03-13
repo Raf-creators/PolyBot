@@ -5,6 +5,7 @@ import { StatCard } from '../components/StatCard';
 import { SectionCard } from '../components/SectionCard';
 import { HealthBadge } from '../components/HealthBadge';
 import { DataTable } from '../components/DataTable';
+import { PnlChart } from '../components/PnlChart';
 import { formatPnl, formatPercent, formatNumber, formatUptime, formatTimestamp, formatPrice, truncate, pnlColor } from '../utils/formatters';
 
 export default function Overview() {
@@ -17,17 +18,20 @@ export default function Overview() {
   const risk = useDashboardStore((s) => s.risk);
   const positions = useDashboardStore((s) => s.positions);
   const trades = useDashboardStore((s) => s.trades);
-  const { fetchPositions, fetchTrades } = useApi();
+  const pnlHistory = useDashboardStore((s) => s.pnlHistory);
+  const { fetchPositions, fetchTrades, fetchPnlHistory } = useApi();
 
   useEffect(() => {
     fetchPositions();
     fetchTrades();
+    fetchPnlHistory();
     const interval = setInterval(() => {
       fetchPositions();
       fetchTrades();
+      fetchPnlHistory();
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchPositions, fetchTrades]);
+  }, [fetchPositions, fetchTrades, fetchPnlHistory]);
 
   const health = stats.health || {};
   const spotPrices = stats.spot_prices || {};
@@ -69,6 +73,9 @@ export default function Overview() {
         <StatCard testId="stat-open-positions" label="Open Positions" value={formatNumber(stats.open_positions)} sub={`of ${risk.max_concurrent_positions || 10} max`} />
         <StatCard testId="stat-markets" label="Markets Tracked" value={formatNumber(stats.markets_tracked)} />
       </div>
+
+      {/* P&L Equity Curve */}
+      <PnlChart data={pnlHistory} testId="section-pnl-chart" />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* System Status */}

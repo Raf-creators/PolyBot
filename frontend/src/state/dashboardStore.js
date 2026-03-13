@@ -34,6 +34,7 @@ export const useDashboardStore = create((set, get) => ({
   sniperSignals: { tradable: [], rejected: [], total_tradable: 0, total_rejected: 0 },
   sniperExecutions: { active: [], completed: [] },
   sniperHealth: {},
+  pnlHistory: { points: [], current_pnl: 0, peak_pnl: 0, trough_pnl: 0, max_drawdown: 0, total_trades: 0 },
 
   // Connection state
   wsConnected: false,
@@ -65,4 +66,5 @@ export const useDashboardStore = create((set, get) => ({
   setSniperSignals: (data) => set({ sniperSignals: data }),
   setSniperExecutions: (data) => set({ sniperExecutions: data }),
   setSniperHealth: (data) => set({ sniperHealth: data }),
+  setPnlHistory: (data) => set({ pnlHistory: data }),
 }));

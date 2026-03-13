@@ -20,6 +20,7 @@ export function useApi() {
   const setSniperSignals = useDashboardStore((s) => s.setSniperSignals);
   const setSniperExecutions = useDashboardStore((s) => s.setSniperExecutions);
   const setSniperHealth = useDashboardStore((s) => s.setSniperHealth);
+  const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
 
   const fetchPositions = useCallback(async () => {
     try {
@@ -105,6 +106,13 @@ export function useApi() {
     } catch {}
   }, [setSniperHealth]);
 
+  const fetchPnlHistory = useCallback(async () => {
+    try {
+      const { data } = await api.get('/analytics/pnl-history');
+      setPnlHistory(data);
+    } catch {}
+  }, [setPnlHistory]);
+
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');
     return data;
@@ -134,7 +142,7 @@ export function useApi() {
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
-    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,
