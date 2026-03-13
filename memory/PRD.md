@@ -115,6 +115,23 @@ expired          → Expired on CLOB
 - 7 API endpoints: signals, executions, health, config, forecasts, stations, inject-test
 - **7/7 API tests passed**: `/app/backend/tests/test_phase10_weather_api.py`
 
+### Step 7 — Weather Dashboard (Complete, 2026-03-13)
+- `/weather` page with dark terminal style matching existing dashboard
+- 7 stat cards: Markets, Tradable, Rejected, Executed, Filled, Forecasts, Scan Latency
+- 5 tabs: Signals, Rejected, Executions, Forecasts, Health
+- Health tab: 6 sections (Calibration status with default NWS MOS sigma table, Scanner Metrics, Feed Health, Rejection Reasons, Strategy Config, Classified Markets)
+- Empty states render safely when engine idle
+- CloudSun icon in sidebar nav between Sniper and Positions
+- Spread-sum validation added to trader (max_spread_sum config)
+- Calibration status exposed in health API (using_defaults, calibrated_stations, note)
+
+### Step 8 — Full Integration Testing (Complete, 2026-03-13)
+- Testing agent: 26/26 backend + all frontend UI tests passed (100%)
+- All 7 weather API endpoints verified (correct response shapes)
+- No regression: all existing pages and APIs working
+- Empty states validated across all tabs
+- `/app/test_reports/iteration_16.json`
+
 ## Prioritized Backlog
 ### P1 — Phase 10 Implementation
 - Weather strategy models, pricing, feeds, trader, server integration, dashboard
