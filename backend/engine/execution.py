@@ -13,6 +13,7 @@ class ExecutionEngine:
         self._bus = None
         self._running = False
         self._paper_adapter = None
+        self._live_adapter = None
 
     async def start(self, state, bus):
         self._state = state
@@ -21,6 +22,15 @@ class ExecutionEngine:
 
         from engine.paper import PaperAdapter
         self._paper_adapter = PaperAdapter(state, bus)
+
+        from engine.live_adapter import LiveAdapter
+        self._live_adapter = LiveAdapter(state, bus)
+
+        # Try to initialize live adapter (non-blocking, fails gracefully)
+        try:
+            await self._live_adapter.initialize()
+        except Exception as e:
+            logger.warning(f"Live adapter init failed (non-fatal): {e}")
 
         self._bus.on(EventType.ORDER_UPDATE, self._on_risk_approved)
         logger.info("Execution engine started")
@@ -36,11 +46,21 @@ class ExecutionEngine:
             return
         self._state.add_order(order)
 
-        if self._state.trading_mode.value == "paper":
+        mode = self._state.trading_mode.value
+        if mode == "paper":
+            await self._paper_adapter.execute(order)
+        elif mode == "live":
+            if self._live_adapter and self._live_adapter._authenticated:
+                await self._live_adapter.execute(order)
+            else:
+                logger.warning(f"Live mode but adapter not authenticated. Falling back to paper for order {order.id}")
+                await self._paper_adapter.execute(order)
+        elif mode == "shadow":
+            # Shadow mode: execute on paper but log what live would do
+            logger.info(f"[SHADOW] Would submit live: {order.side.value} {order.size}@{order.price} token={order.token_id[:12]}...")
             await self._paper_adapter.execute(order)
         else:
-            # Live / shadow adapters added in later phases
-            logger.info(f"Live execution not implemented. Order {order.id} queued.")
+            await self._paper_adapter.execute(order)
 
     async def _on_risk_approved(self, event: Event):
         """Only process events from risk_engine with approval flag."""
@@ -52,3 +72,9 @@ class ExecutionEngine:
         data = {k: v for k, v in event.data.items() if not k.startswith("_")}
         order = OrderRecord(**data)
         await self.submit_order(order)
+
+    @property
+    def live_adapter_status(self) -> dict:
+        if self._live_adapter:
+            return self._live_adapter.status
+        return {"adapter": "live", "authenticated": False, "credentials": {}, "last_error": "not initialized"}

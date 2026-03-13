@@ -360,6 +360,86 @@ async def deactivate_kill_switch():
     return {"status": "kill_switch_deactivated"}
 
 
+# ---- Execution Mode ----
+
+@api_router.get("/execution/mode")
+async def get_execution_mode():
+    """Get current execution mode and adapter status."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    from engine.live_adapter import LiveAdapter
+    creds = LiveAdapter.credentials_present()
+    live_status = engine.execution_engine.live_adapter_status if engine else {}
+    return {
+        "mode": state.trading_mode.value,
+        "live_adapter_authenticated": live_status.get("authenticated", False),
+        "credentials": creds,
+        "live_enabled": state.trading_mode.value == "live",
+        "safe_to_switch_live": creds["ready"] and not state.risk_config.kill_switch_active,
+    }
+
+
+@api_router.post("/execution/mode")
+async def set_execution_mode(body: dict):
+    """Switch execution mode with safety checks."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    new_mode = body.get("mode", "").lower()
+    if new_mode not in ("paper", "live", "shadow"):
+        raise HTTPException(400, f"Invalid mode: {new_mode}. Must be paper/live/shadow")
+
+    if new_mode == "live":
+        from engine.live_adapter import LiveAdapter
+        creds = LiveAdapter.credentials_present()
+        if not creds["ready"]:
+            raise HTTPException(400, "Cannot switch to live: POLYMARKET_PRIVATE_KEY not set")
+        if state.risk_config.kill_switch_active:
+            raise HTTPException(400, "Cannot switch to live: kill switch is active")
+
+        # Apply conservative live defaults
+        from engine.live_adapter import LIVE_DEFAULTS
+        state.risk_config.max_order_size = min(state.risk_config.max_order_size, LIVE_DEFAULTS["max_order_size"])
+        state.risk_config.max_position_size = min(state.risk_config.max_position_size, LIVE_DEFAULTS["max_position_size"])
+        state.risk_config.max_market_exposure = min(state.risk_config.max_market_exposure, LIVE_DEFAULTS["max_market_exposure"])
+        state.risk_config.max_concurrent_positions = min(state.risk_config.max_concurrent_positions, LIVE_DEFAULTS["max_concurrent_positions"])
+        state.risk_config.max_daily_loss = min(state.risk_config.max_daily_loss, LIVE_DEFAULTS["max_daily_loss"])
+
+        # Ensure live adapter is initialized
+        live = engine.execution_engine._live_adapter
+        if live and not live._authenticated:
+            await live.initialize()
+
+    state.trading_mode = TradingMode(new_mode)
+
+    # Persist
+    if config_service:
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        await config_service.save(snapshot)
+
+    return {
+        "status": "mode_changed",
+        "mode": new_mode,
+        "risk_limits": state.risk_config.model_dump(),
+        "persisted": True,
+    }
+
+
+@api_router.get("/execution/status")
+async def get_execution_status():
+    """Get detailed execution adapter status."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    live_status = engine.execution_engine.live_adapter_status if engine else {}
+    return {
+        "mode": state.trading_mode.value,
+        "paper_adapter": "always_available",
+        "live_adapter": live_status,
+        "risk_config": state.risk_config.model_dump(),
+        "engine_running": engine.is_running if engine else False,
+    }
+
+
 # ---- Positions / Orders / Trades ----
 
 @api_router.get("/positions")

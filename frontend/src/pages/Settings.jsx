@@ -60,12 +60,22 @@ export default function Settings() {
   };
 
   const handleModeChange = async (newMode) => {
-    try {
-      await updateConfig({ trading_mode: newMode });
-      toast.success(`Trading mode changed to ${newMode}`);
-      fetchConfig();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Failed to change mode');
+    if (newMode === 'live' || newMode === 'shadow') {
+      try {
+        await axios.post(`${API_BASE}/execution/mode`, { mode: newMode });
+        toast.success(`Execution mode changed to ${newMode.toUpperCase()}`);
+        fetchConfig();
+      } catch (e) {
+        toast.error(e?.response?.data?.detail || 'Failed to change mode');
+      }
+    } else {
+      try {
+        await axios.post(`${API_BASE}/execution/mode`, { mode: newMode });
+        toast.success(`Execution mode changed to ${newMode.toUpperCase()}`);
+        fetchConfig();
+      } catch (e) {
+        toast.error(e?.response?.data?.detail || 'Failed to change mode');
+      }
     }
   };
 
@@ -104,7 +114,7 @@ export default function Settings() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Trading Mode */}
-        <SectionCard title="Trading Mode" testId="section-trading-mode">
+        <SectionCard title="Execution Mode" testId="section-trading-mode">
           <div className="space-y-3">
             <p className="text-xs text-zinc-500">Current mode: <span className="text-zinc-300 uppercase font-medium">{mode}</span></p>
             <div className="flex gap-2">
@@ -116,12 +126,18 @@ export default function Settings() {
                   variant={mode === m ? 'default' : 'outline'}
                   onClick={() => handleModeChange(m)}
                   disabled={mode === m}
-                  className={`text-xs h-8 px-4 ${mode === m ? '' : 'border-zinc-700 text-zinc-400'}`}
+                  className={`text-xs h-8 px-4 ${mode === m ? '' : 'border-zinc-700 text-zinc-400'} ${m === 'live' ? 'border-red-900/50 hover:border-red-700' : ''}`}
                 >
                   {m.toUpperCase()}
                 </Button>
               ))}
             </div>
+            {mode === 'live' && (
+              <p className="text-xs text-red-400 font-medium">LIVE MODE — Real money at risk</p>
+            )}
+            {mode === 'shadow' && (
+              <p className="text-xs text-amber-400">Shadow mode: paper fills + live logging</p>
+            )}
             {mode !== 'paper' && !creds.polymarket && (
               <p className="text-xs text-amber-400">Polymarket credentials required for {mode} mode</p>
             )}
@@ -129,7 +145,7 @@ export default function Settings() {
         </SectionCard>
 
         {/* Credentials Status */}
-        <SectionCard title="Credentials" testId="section-credentials">
+        <SectionCard title="Credentials & Adapters" testId="section-credentials">
           <div className="space-y-3 text-xs">
             <div className="flex items-center justify-between">
               <span className="text-zinc-500">Polymarket API</span>
@@ -141,6 +157,20 @@ export default function Settings() {
               <span className="text-zinc-500">Telegram Bot</span>
               <Badge variant={creds.telegram ? 'default' : 'secondary'} className="text-xs">
                 {creds.telegram ? 'Connected' : 'Not Set'}
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-500">Paper Adapter</span>
+              <Badge variant="default" className="text-xs">Always Available</Badge>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-zinc-500">Live Adapter</span>
+              <Badge
+                data-testid="live-adapter-badge"
+                variant={creds.polymarket ? 'default' : 'secondary'}
+                className="text-xs"
+              >
+                {creds.polymarket ? 'Ready' : 'No Credentials'}
               </Badge>
             </div>
             <p className="text-zinc-600 pt-1">Configure credentials via backend .env file</p>
