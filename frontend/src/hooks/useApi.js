@@ -21,6 +21,7 @@ export function useApi() {
   const setSniperExecutions = useDashboardStore((s) => s.setSniperExecutions);
   const setSniperHealth = useDashboardStore((s) => s.setSniperHealth);
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
+  const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
 
   const fetchPositions = useCallback(async () => {
     try {
@@ -113,6 +114,13 @@ export function useApi() {
     } catch {}
   }, [setPnlHistory]);
 
+  const fetchTickerFeed = useCallback(async () => {
+    try {
+      const { data } = await api.get('/ticker/feed');
+      setTickerFeed(data);
+    } catch {}
+  }, [setTickerFeed]);
+
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');
     return data;
@@ -142,7 +150,7 @@ export function useApi() {
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
-    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory, fetchTickerFeed,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,

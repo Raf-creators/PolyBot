@@ -403,6 +403,55 @@ async def test_inject_crypto_market():
     }
 
 
+# ---- Ticker Feed ----
+
+def _extract_asset_tag(question: str) -> str:
+    q = question.upper()
+    if "BTC" in q or "BITCOIN" in q:
+        return "BTC"
+    if "ETH" in q or "ETHEREUM" in q:
+        return "ETH"
+    return "MKT"
+
+
+@api_router.get("/ticker/feed")
+async def get_ticker_feed(limit: int = 50):
+    """Unified execution feed for the trade ticker strip."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    items = []
+
+    if arb_scanner_ref:
+        for e in arb_scanner_ref.get_active_executions() + arb_scanner_ref.get_completed_executions(limit=25):
+            items.append({
+                "id": e["id"],
+                "strategy": "ARB",
+                "asset": _extract_asset_tag(e.get("question", "")),
+                "side": "BUY",
+                "size": e["size"],
+                "price": e.get("yes_fill_price") or 0,
+                "edge_bps": e.get("realized_edge_bps") or e.get("target_edge_bps", 0),
+                "timestamp": e.get("completed_at") or e["submitted_at"],
+            })
+
+    if crypto_sniper_ref:
+        for e in crypto_sniper_ref.get_active_executions() + crypto_sniper_ref.get_completed_executions(limit=25):
+            items.append({
+                "id": e["id"],
+                "strategy": "SNIPER",
+                "asset": e.get("asset", "BTC"),
+                "side": "BUY" if "buy" in e.get("side", "") else "SELL",
+                "size": e["size"],
+                "price": e.get("entry_price") or 0,
+                "edge_bps": e.get("target_edge_bps", 0),
+                "timestamp": e.get("filled_at") or e["submitted_at"],
+            })
+
+    items.sort(key=lambda x: x["timestamp"], reverse=True)
+    return items[:limit]
+
+
 # ---- Analytics ----
 
 @api_router.get("/analytics/pnl-history")
