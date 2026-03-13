@@ -132,11 +132,25 @@ expired          → Expired on CLOB
 - Empty states validated across all tabs
 - `/app/test_reports/iteration_16.json`
 
+### Phase 10A — Paper-Mode Validation (Complete, 2026-03-13)
+- Full report: `/app/memory/PHASE10A_VALIDATION_REPORT.md`
+- Ran against live Polymarket Gamma API + Open-Meteo
+- 135 markets discovered, 15 events classified, 15/15 forecasts fetched
+- 50 tradable signals generated, 10 paper executions, 10 fills (100%)
+- Rejection breakdown: stale_market 84%, edge 13.4%, risk 1.4%, max_buckets 1.1%
+- Zero parser errors, zero Open-Meteo errors, zero crashes
+- **Architecture fix applied:** Adapted to Polymarket's event-based binary market structure
+- **Verdict: READY for cautious shadow-mode testing**
+
 ## Prioritized Backlog
-### P1 — Phase 10 Implementation
-- Weather strategy models, pricing, feeds, trader, server integration, dashboard
+### P0 — Shadow-Mode Testing
+- Enable WeatherTrader in shadow mode with tuned config (higher stale tolerance, tighter edge threshold)
+
+### P1 — Historical Calibration Bootstrap
+- Auto-calibrate sigma values from Open-Meteo archive data per station/season
 
 ### P2 — Future
+- Fix pre-existing `test_phase7_config_persistence.py` failures
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
 - Copy trading skeleton
