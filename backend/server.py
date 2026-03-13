@@ -11,7 +11,7 @@ from typing import Optional, Set
 
 from models import (
     TradingMode, ConfigUpdateRequest, Event, EventType,
-    OrderRecord, OrderSide, utc_now,
+    OrderRecord, OrderSide, utc_now, TradeRecord,
 )
 from engine.state import StateManager
 from engine.events import EventBus
@@ -968,6 +968,72 @@ async def websocket_endpoint(websocket: WebSocket):
         pass
     finally:
         ws_clients.discard(websocket)
+
+
+# ---- Test endpoints (synthetic trade injection for analytics testing) ----
+
+@api_router.post("/test/inject-trades")
+async def inject_test_trades():
+    """Inject synthetic trades for analytics testing. Paper-mode only."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    import random
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    strategies = ["arb_scanner", "crypto_sniper"]
+    count = 0
+    for day_offset in range(10):
+        dt = now - timedelta(days=9 - day_offset)
+        for _ in range(random.randint(3, 8)):
+            strat = random.choice(strategies)
+            side = random.choice(["buy", "sell"])
+            price = round(random.uniform(0.3, 0.8), 4)
+            size = round(random.uniform(1, 10), 2)
+            pnl = round(random.uniform(-2, 3), 4)
+            fees = round(price * size * 0.002, 4)
+            trade = TradeRecord(
+                order_id=f"test_{count}",
+                token_id=f"token_{random.randint(1,5)}",
+                market_question=f"Test Market {random.randint(1,5)}?",
+                outcome="Yes" if random.random() > 0.5 else "No",
+                side=OrderSide(side),
+                price=price,
+                size=size,
+                fees=fees,
+                pnl=pnl,
+                strategy_id=strat,
+                signal_reason="test_signal",
+                timestamp=dt.isoformat(),
+            )
+            state.trades.append(trade)
+            count += 1
+    # Also inject some orders for execution quality testing
+    from models import OrderStatus
+    for i in range(count):
+        status = random.choice([OrderStatus.FILLED, OrderStatus.FILLED, OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELLED])
+        order = OrderRecord(
+            id=f"test_order_{i}",
+            token_id=f"token_{random.randint(1,5)}",
+            side=OrderSide(random.choice(["buy", "sell"])),
+            price=round(random.uniform(0.3, 0.8), 4),
+            size=round(random.uniform(1, 10), 2),
+            status=status,
+            strategy_id=random.choice(strategies),
+            latency_ms=round(random.uniform(5, 100), 2) if status == OrderStatus.FILLED else None,
+        )
+        state.orders[order.id] = order
+    return {"status": "ok", "count": count}
+
+
+@api_router.post("/test/clear-trades")
+async def clear_test_trades():
+    """Clear injected test trades."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    state.trades = [t for t in state.trades if not t.order_id.startswith("test_")]
+    state.orders = {k: v for k, v in state.orders.items() if not k.startswith("test_order_")}
+    return {"status": "cleared"}
+
 
 
 # ---- Wire up ----

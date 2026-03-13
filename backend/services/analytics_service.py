@@ -213,7 +213,7 @@ def compute_execution_quality(orders, live_orders) -> Dict[str, Any]:
 def compute_timeseries(trades) -> Dict[str, Any]:
     """Compute time-based metrics: daily PnL, rolling metrics, trade frequency."""
     if not trades:
-        return {"daily_pnl": [], "equity_curve": [], "trade_frequency": [], "rolling_7d": None, "rolling_30d": None}
+        return {"daily_pnl": [], "equity_curve": [], "drawdown_curve": [], "trade_frequency": [], "rolling_7d_pnl": None, "rolling_30d_pnl": None, "executions_by_strategy": {}}
 
     # Daily PnL
     daily: Dict[str, float] = defaultdict(float)
