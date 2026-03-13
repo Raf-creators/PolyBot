@@ -142,6 +142,18 @@ expired          → Expired on CLOB
 - **Architecture fix applied:** Adapted to Polymarket's event-based binary market structure
 - **Verdict: READY for cautious shadow-mode testing**
 
+### Demo Mode (Complete, 2026-03-13)
+- Safe, isolated demo data system for dashboard preview
+- Backend: `DemoDataService` generates realistic 7-day trading history in-memory (no MongoDB)
+- Frontend: Toggle on Settings page, localStorage persistence, DEMO MODE badge in TopBar
+- Generates: ~200 trades, ~13 positions, equity curve $4K->$14.7K with drawdowns
+- All 3 strategies populated (ArbScanner, CryptoSniper, WeatherTrader)
+- Separate `/api/demo/*` endpoints — zero modification to real trading logic
+- Engine controls disabled in demo mode
+- Regenerate button for new randomized data
+- Testing: 23/23 backend + all frontend tests passed (100%)
+- `/app/test_reports/iteration_17.json`
+
 ## Prioritized Backlog
 ### P0 — Shadow-Mode Testing
 - Enable WeatherTrader in shadow mode with tuned config (higher stale tolerance, tighter edge threshold)
