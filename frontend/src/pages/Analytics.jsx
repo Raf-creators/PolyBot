@@ -16,6 +16,7 @@ import {
 
 export default function Analytics() {
   const pnlHistory = useDashboardStore((s) => s.pnlHistory);
+  const demoMode = useDashboardStore((s) => s.demoMode);
   const { fetchPnlHistory } = useApi();
   const [summary, setSummary] = useState(null);
   const [strategies, setStrategies] = useState({});
@@ -23,20 +24,22 @@ export default function Analytics() {
   const [timeseries, setTimeseries] = useState(null);
   const [tab, setTab] = useState('overview');
 
+  const prefix = demoMode ? '/demo' : '';
+
   const fetchAll = useCallback(async () => {
     try {
       const [s, st, eq, ts] = await Promise.all([
-        axios.get(`${API_BASE}/analytics/summary`),
-        axios.get(`${API_BASE}/analytics/strategies`),
-        axios.get(`${API_BASE}/analytics/execution-quality`),
-        axios.get(`${API_BASE}/analytics/timeseries`),
+        axios.get(`${API_BASE}${prefix}/analytics/summary`),
+        axios.get(`${API_BASE}${prefix}/analytics/strategies`),
+        axios.get(`${API_BASE}${prefix}/analytics/execution-quality`),
+        axios.get(`${API_BASE}${prefix}/analytics/timeseries`),
       ]);
       setSummary(s.data);
       setStrategies(st.data);
       setExecQuality(eq.data);
       setTimeseries(ts.data);
     } catch {}
-  }, []);
+  }, [prefix]);
 
   useEffect(() => {
     fetchPnlHistory();

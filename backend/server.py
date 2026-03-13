@@ -1173,6 +1173,187 @@ async def clear_test_trades():
 
 
 
+# ---- Demo Mode ----
+
+from services.demo_data_service import DemoDataService
+
+_demo_service = DemoDataService()
+_demo_enabled = False
+
+
+@api_router.get("/demo/status")
+async def get_demo_status():
+    return {"enabled": _demo_enabled, "seed": _demo_service._seed, "generated_at": _demo_service.get("generated_at")}
+
+
+@api_router.post("/demo/enable")
+async def enable_demo():
+    global _demo_enabled
+    _demo_enabled = True
+    return {"enabled": True, "seed": _demo_service._seed}
+
+
+@api_router.post("/demo/disable")
+async def disable_demo():
+    global _demo_enabled
+    _demo_enabled = False
+    return {"enabled": False}
+
+
+@api_router.post("/demo/regenerate")
+async def regenerate_demo():
+    _demo_service.generate()
+    return {"status": "regenerated", "seed": _demo_service._seed, "generated_at": _demo_service.get("generated_at")}
+
+
+# Demo data endpoints — mirror real endpoints but return generated data
+@api_router.get("/demo/positions")
+async def demo_positions():
+    return _demo_service.get("positions", [])
+
+
+@api_router.get("/demo/trades")
+async def demo_trades():
+    return _demo_service.get("trades", [])
+
+
+@api_router.get("/demo/orders")
+async def demo_orders():
+    return _demo_service.get("orders", [])
+
+
+@api_router.get("/demo/markets")
+async def demo_markets():
+    return _demo_service.get("markets", [])
+
+
+@api_router.get("/demo/ticker/feed")
+async def demo_ticker():
+    return _demo_service.get("ticker", [])
+
+
+@api_router.get("/demo/analytics/summary")
+async def demo_analytics_summary():
+    return _demo_service.get("analytics_summary", {})
+
+
+@api_router.get("/demo/analytics/strategies")
+async def demo_analytics_strategies():
+    return _demo_service.get("analytics_strategies", {})
+
+
+@api_router.get("/demo/analytics/execution-quality")
+async def demo_analytics_execution():
+    return _demo_service.get("analytics_execution", {})
+
+
+@api_router.get("/demo/analytics/timeseries")
+async def demo_analytics_timeseries():
+    return _demo_service.get("analytics_timeseries", {})
+
+
+@api_router.get("/demo/analytics/pnl-history")
+async def demo_pnl_history():
+    return _demo_service.get("pnl_history", {})
+
+
+@api_router.get("/demo/strategies/arb/opportunities")
+async def demo_arb_opportunities():
+    return _demo_service.get("arb", {}).get("opportunities", {})
+
+
+@api_router.get("/demo/strategies/arb/executions")
+async def demo_arb_executions():
+    return _demo_service.get("arb", {}).get("executions", {})
+
+
+@api_router.get("/demo/strategies/arb/health")
+async def demo_arb_health():
+    return _demo_service.get("arb", {}).get("health", {})
+
+
+@api_router.get("/demo/strategies/sniper/signals")
+async def demo_sniper_signals():
+    return _demo_service.get("sniper", {}).get("signals", {})
+
+
+@api_router.get("/demo/strategies/sniper/executions")
+async def demo_sniper_executions():
+    return _demo_service.get("sniper", {}).get("executions", {})
+
+
+@api_router.get("/demo/strategies/sniper/health")
+async def demo_sniper_health():
+    return _demo_service.get("sniper", {}).get("health", {})
+
+
+@api_router.get("/demo/strategies/weather/signals")
+async def demo_weather_signals():
+    return _demo_service.get("weather", {}).get("signals", {})
+
+
+@api_router.get("/demo/strategies/weather/executions")
+async def demo_weather_executions():
+    return _demo_service.get("weather", {}).get("executions", {})
+
+
+@api_router.get("/demo/strategies/weather/health")
+async def demo_weather_health():
+    return _demo_service.get("weather", {}).get("health", {})
+
+
+@api_router.get("/demo/strategies/weather/forecasts")
+async def demo_weather_forecasts():
+    return _demo_service.get("weather", {}).get("forecasts", {})
+
+
+@api_router.get("/demo/strategies/weather/stations")
+async def demo_weather_stations():
+    return _demo_service.get("weather", {}).get("stations", [])
+
+
+@api_router.get("/demo/strategies/weather/config")
+async def demo_weather_config():
+    return _demo_service.get("weather", {}).get("health", {}).get("config", {})
+
+
+@api_router.get("/demo/config")
+async def demo_config():
+    return _demo_service.get("config", {})
+
+
+@api_router.get("/demo/config/strategies")
+async def demo_config_strategies():
+    cfg = _demo_service.get("config", {})
+    return cfg.get("strategy_configs", {})
+
+
+@api_router.get("/demo/health")
+async def demo_health():
+    return {"status": "healthy", "engine": "running", "mode": "paper"}
+
+
+@api_router.get("/demo/health/feeds")
+async def demo_feed_health():
+    return _demo_service.get("feed_health", {})
+
+
+@api_router.get("/demo/status-snapshot")
+async def demo_status_snapshot():
+    return _demo_service.get("status", {})
+
+
+@api_router.get("/demo/execution/wallet")
+async def demo_wallet():
+    return _demo_service.get("wallet", {})
+
+
+@api_router.get("/demo/execution/orders")
+async def demo_execution_orders(limit: int = 50):
+    orders = _demo_service.get("orders", [])
+    return orders[:limit]
+
+
 # ---- Wire up ----
 
 app.include_router(api_router)

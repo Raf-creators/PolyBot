@@ -46,17 +46,28 @@ export const useDashboardStore = create((set, get) => ({
   wsConnected: false,
   lastWsUpdate: null,
 
+  // Demo mode — hydrated from localStorage on init
+  demoMode: localStorage.getItem('edgeos_demo_mode') === 'true',
+  setDemoMode: (enabled) => {
+    localStorage.setItem('edgeos_demo_mode', enabled ? 'true' : 'false');
+    set({ demoMode: enabled });
+  },
+
   // Actions
-  setWsSnapshot: (snapshot) => set({
-    status: snapshot.status,
-    mode: snapshot.mode,
-    uptime: snapshot.uptime_seconds,
-    components: snapshot.components || [],
-    strategies: snapshot.strategies || [],
-    risk: snapshot.risk || {},
-    stats: snapshot.stats || get().stats,
-    lastWsUpdate: Date.now(),
-  }),
+  setWsSnapshot: (snapshot) => {
+    // Don't overwrite state when in demo mode
+    if (get().demoMode) return;
+    set({
+      status: snapshot.status,
+      mode: snapshot.mode,
+      uptime: snapshot.uptime_seconds,
+      components: snapshot.components || [],
+      strategies: snapshot.strategies || [],
+      risk: snapshot.risk || {},
+      stats: snapshot.stats || get().stats,
+      lastWsUpdate: Date.now(),
+    });
+  },
 
   setWsConnected: (connected) => set({ wsConnected: connected }),
 
@@ -79,4 +90,15 @@ export const useDashboardStore = create((set, get) => ({
   setPnlHistory: (data) => set({ pnlHistory: data }),
   setTickerFeed: (data) => set({ tickerFeed: data }),
   setWalletStatus: (data) => set({ walletStatus: data }),
+
+  // Apply a full demo snapshot to all state slices
+  applyDemoSnapshot: (demoStatus) => set({
+    status: demoStatus.status || 'running',
+    mode: demoStatus.mode || 'paper',
+    uptime: demoStatus.uptime_seconds || 0,
+    components: demoStatus.components || [],
+    strategies: demoStatus.strategies || [],
+    risk: demoStatus.risk || {},
+    stats: demoStatus.stats || {},
+  }),
 }));

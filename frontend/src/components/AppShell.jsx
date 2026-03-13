@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
@@ -12,15 +12,68 @@ export function AppShell() {
   useWebSocket();
   const totalTrades = useDashboardStore((s) => s.stats.total_trades);
   const mode = useDashboardStore((s) => s.mode);
-  const { fetchTickerFeed, fetchWalletStatus } = useApi();
+  const demoMode = useDashboardStore((s) => s.demoMode);
+  const {
+    fetchTickerFeed, fetchWalletStatus, loadDemoSnapshot,
+    fetchPositions, fetchTrades, fetchPnlHistory,
+    fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
+    fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts,
+    fetchConfig, fetchFeedHealth, fetchMarkets,
+  } = useApi();
   const prevTrades = useRef(totalTrades);
   const prevMode = useRef(mode);
 
-  // Fetch ticker on mount and when WebSocket reports new trades
+  // Full data refresh (used when switching to demo mode)
+  const refreshAllData = useCallback(() => {
+    fetchTickerFeed();
+    fetchWalletStatus();
+    fetchPositions();
+    fetchTrades();
+    fetchPnlHistory();
+    fetchArbOpportunities();
+    fetchArbExecutions();
+    fetchArbHealth();
+    fetchSniperSignals();
+    fetchSniperExecutions();
+    fetchSniperHealth();
+    fetchWeatherSignals();
+    fetchWeatherExecutions();
+    fetchWeatherHealth();
+    fetchWeatherForecasts();
+    fetchConfig();
+    fetchFeedHealth();
+    fetchMarkets();
+  }, [
+    fetchTickerFeed, fetchWalletStatus, fetchPositions, fetchTrades, fetchPnlHistory,
+    fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
+    fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts,
+    fetchConfig, fetchFeedHealth, fetchMarkets,
+  ]);
+
+  // On mount
   useEffect(() => {
     fetchTickerFeed();
     fetchWalletStatus();
+    // If demo mode was active before refresh, reload demo data
+    if (demoMode) {
+      loadDemoSnapshot();
+      setTimeout(() => refreshAllData(), 50);
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When demo mode toggles, reload ALL data from the new source
+  const prevDemo = useRef(demoMode);
+  useEffect(() => {
+    if (demoMode !== prevDemo.current) {
+      prevDemo.current = demoMode;
+      if (demoMode) {
+        loadDemoSnapshot();
+      }
+      setTimeout(() => refreshAllData(), 50);
+    }
+  }, [demoMode, loadDemoSnapshot, refreshAllData]);
 
   useEffect(() => {
     if (totalTrades !== prevTrades.current) {

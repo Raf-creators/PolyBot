@@ -36,10 +36,14 @@ export default function Overview() {
   const health = stats.health || {};
   const spotPrices = stats.spot_prices || {};
 
+  const wallet = useDashboardStore((s) => s.walletStatus);
+  const demoMode = useDashboardStore((s) => s.demoMode);
+
   const paperBalance = useMemo(() => {
+    if (demoMode && wallet.balance_usdc) return wallet.balance_usdc;
     const totalCost = positions.reduce((sum, p) => sum + p.size * p.avg_cost, 0);
     return 1000 - totalCost + stats.daily_pnl;
-  }, [positions, stats.daily_pnl]);
+  }, [positions, stats.daily_pnl, demoMode, wallet.balance_usdc]);
 
   const recentTrades = useMemo(() => trades.slice(-5).reverse(), [trades]);
 

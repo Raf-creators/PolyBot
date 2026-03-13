@@ -5,7 +5,14 @@ import { useDashboardStore } from '../state/dashboardStore';
 
 const api = axios.create({ baseURL: API_BASE });
 
+/** Returns the correct endpoint prefix based on demo mode state. */
+function usePrefix() {
+  return useDashboardStore((s) => s.demoMode) ? '/demo' : '';
+}
+
 export function useApi() {
+  const prefix = usePrefix();
+
   // Extract ONLY setter functions via selectors — these are stable refs
   // that never change, so useCallback deps stay stable across WS updates.
   const setPositions = useDashboardStore((s) => s.setPositions);
@@ -27,139 +34,148 @@ export function useApi() {
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
   const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
+  const applyDemoSnapshot = useDashboardStore((s) => s.applyDemoSnapshot);
 
   const fetchPositions = useCallback(async () => {
     try {
-      const { data } = await api.get('/positions');
+      const { data } = await api.get(`${prefix}/positions`);
       setPositions(data);
     } catch {}
-  }, [setPositions]);
+  }, [prefix, setPositions]);
 
   const fetchTrades = useCallback(async () => {
     try {
-      const { data } = await api.get('/trades');
+      const { data } = await api.get(`${prefix}/trades`);
       setTrades(data);
     } catch {}
-  }, [setTrades]);
+  }, [prefix, setTrades]);
 
   const fetchOrders = useCallback(async () => {
     try {
-      const { data } = await api.get('/orders');
+      const { data } = await api.get(`${prefix}/orders`);
       setOrders(data);
     } catch {}
-  }, [setOrders]);
+  }, [prefix, setOrders]);
 
   const fetchMarkets = useCallback(async () => {
     try {
-      const { data } = await api.get('/markets');
+      const { data } = await api.get(`${prefix}/markets`);
       setMarkets(data);
     } catch {}
-  }, [setMarkets]);
+  }, [prefix, setMarkets]);
 
   const fetchArbOpportunities = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/arb/opportunities');
+      const { data } = await api.get(`${prefix}/strategies/arb/opportunities`);
       setArbOpportunities(data);
     } catch {}
-  }, [setArbOpportunities]);
+  }, [prefix, setArbOpportunities]);
 
   const fetchArbExecutions = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/arb/executions');
+      const { data } = await api.get(`${prefix}/strategies/arb/executions`);
       setArbExecutions(data);
     } catch {}
-  }, [setArbExecutions]);
+  }, [prefix, setArbExecutions]);
 
   const fetchArbHealth = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/arb/health');
+      const { data } = await api.get(`${prefix}/strategies/arb/health`);
       setArbHealth(data);
     } catch {}
-  }, [setArbHealth]);
+  }, [prefix, setArbHealth]);
 
   const fetchFeedHealth = useCallback(async () => {
     try {
-      const { data } = await api.get('/health/feeds');
+      const { data } = await api.get(`${prefix}/health/feeds`);
       setFeedHealth(data);
     } catch {}
-  }, [setFeedHealth]);
+  }, [prefix, setFeedHealth]);
 
   const fetchConfig = useCallback(async () => {
     try {
-      const { data } = await api.get('/config');
+      const { data } = await api.get(`${prefix}/config`);
       setConfig(data);
     } catch {}
-  }, [setConfig]);
+  }, [prefix, setConfig]);
 
   const fetchSniperSignals = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/sniper/signals');
+      const { data } = await api.get(`${prefix}/strategies/sniper/signals`);
       setSniperSignals(data);
     } catch {}
-  }, [setSniperSignals]);
+  }, [prefix, setSniperSignals]);
 
   const fetchSniperExecutions = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/sniper/executions');
+      const { data } = await api.get(`${prefix}/strategies/sniper/executions`);
       setSniperExecutions(data);
     } catch {}
-  }, [setSniperExecutions]);
+  }, [prefix, setSniperExecutions]);
 
   const fetchSniperHealth = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/sniper/health');
+      const { data } = await api.get(`${prefix}/strategies/sniper/health`);
       setSniperHealth(data);
     } catch {}
-  }, [setSniperHealth]);
+  }, [prefix, setSniperHealth]);
 
   const fetchWeatherSignals = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/weather/signals');
+      const { data } = await api.get(`${prefix}/strategies/weather/signals`);
       setWeatherSignals(data);
     } catch {}
-  }, [setWeatherSignals]);
+  }, [prefix, setWeatherSignals]);
 
   const fetchWeatherExecutions = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/weather/executions');
+      const { data } = await api.get(`${prefix}/strategies/weather/executions`);
       setWeatherExecutions(data);
     } catch {}
-  }, [setWeatherExecutions]);
+  }, [prefix, setWeatherExecutions]);
 
   const fetchWeatherHealth = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/weather/health');
+      const { data } = await api.get(`${prefix}/strategies/weather/health`);
       setWeatherHealth(data);
     } catch {}
-  }, [setWeatherHealth]);
+  }, [prefix, setWeatherHealth]);
 
   const fetchWeatherForecasts = useCallback(async () => {
     try {
-      const { data } = await api.get('/strategies/weather/forecasts');
+      const { data } = await api.get(`${prefix}/strategies/weather/forecasts`);
       setWeatherForecasts(data);
     } catch {}
-  }, [setWeatherForecasts]);
+  }, [prefix, setWeatherForecasts]);
 
   const fetchPnlHistory = useCallback(async () => {
     try {
-      const { data } = await api.get('/analytics/pnl-history');
+      const { data } = await api.get(`${prefix}/analytics/pnl-history`);
       setPnlHistory(data);
     } catch {}
-  }, [setPnlHistory]);
+  }, [prefix, setPnlHistory]);
 
   const fetchTickerFeed = useCallback(async () => {
     try {
-      const { data } = await api.get('/ticker/feed');
+      const { data } = await api.get(`${prefix}/ticker/feed`);
       setTickerFeed(data);
     } catch {}
-  }, [setTickerFeed]);
+  }, [prefix, setTickerFeed]);
 
   const fetchWalletStatus = useCallback(async () => {
     try {
-      const { data } = await api.get('/execution/wallet');
+      const { data } = await api.get(`${prefix}/execution/wallet`);
       setWalletStatus(data);
     } catch {}
-  }, [setWalletStatus]);
+  }, [prefix, setWalletStatus]);
+
+  // Load the demo status snapshot (overrides WS-driven top-level state)
+  const loadDemoSnapshot = useCallback(async () => {
+    try {
+      const { data } = await api.get('/demo/status-snapshot');
+      applyDemoSnapshot(data);
+    } catch {}
+  }, [applyDemoSnapshot]);
 
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');
@@ -193,6 +209,7 @@ export function useApi() {
     fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
     fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts,
     fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
+    loadDemoSnapshot,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,

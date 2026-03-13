@@ -18,17 +18,22 @@ export default function Positions() {
   const trades = useDashboardStore((s) => s.trades);
   const orders = useDashboardStore((s) => s.orders);
   const mode = useDashboardStore((s) => s.mode);
+  const demoMode = useDashboardStore((s) => s.demoMode);
   const { fetchPositions, fetchTrades, fetchOrders } = useApi();
   const [tab, setTab] = useState('positions');
   const [liveOrders, setLiveOrders] = useState([]);
   const [cancelling, setCancelling] = useState(null);
 
+  const prefix = demoMode ? '/demo' : '';
+
   const fetchLiveOrders = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${API_BASE}/execution/orders?limit=50`);
+      const { data } = await axios.get(`${API_BASE}${prefix}/execution/orders?limit=50`);
       setLiveOrders(data);
-    } catch {}
-  }, []);
+    } catch {
+      if (demoMode) setLiveOrders([]);
+    }
+  }, [prefix, demoMode]);
 
   useEffect(() => {
     fetchPositions();

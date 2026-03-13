@@ -7,7 +7,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { toast } from 'sonner';
-import { Save, RefreshCw, Send } from 'lucide-react';
+import { Save, RefreshCw, Send, FlaskConical, RotateCcw, Power, PowerOff } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../utils/constants';
 
@@ -16,6 +16,7 @@ export default function Settings() {
   const risk = useDashboardStore((s) => s.risk);
   const mode = useDashboardStore((s) => s.mode);
   const strategies = useDashboardStore((s) => s.strategies);
+  const demoMode = useDashboardStore((s) => s.demoMode);
   const { fetchConfig, updateConfig } = useApi();
 
   const [riskForm, setRiskForm] = useState({});
@@ -113,6 +114,9 @@ export default function Settings() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Demo Mode */}
+        <DemoModeSection demoMode={demoMode} />
+
         {/* Trading Mode */}
         <SectionCard title="Execution Mode" testId="section-trading-mode">
           <div className="space-y-3">
@@ -309,6 +313,104 @@ function TelegramSection({ config, updateConfig, fetchConfig }) {
     </div>
   );
 }
+
+
+function DemoModeSection({ demoMode }) {
+  const setDemoMode = useDashboardStore((s) => s.setDemoMode);
+  const [loading, setLoading] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+
+  const handleToggle = async () => {
+    setLoading(true);
+    try {
+      if (demoMode) {
+        await axios.post(`${API_BASE}/demo/disable`);
+        setDemoMode(false);
+        toast.success('Demo mode disabled — viewing real data');
+      } else {
+        await axios.post(`${API_BASE}/demo/enable`);
+        setDemoMode(true);
+        toast.success('Demo mode enabled — viewing simulated data');
+      }
+    } catch (e) {
+      toast.error('Failed to toggle demo mode');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    setRegenerating(true);
+    try {
+      await axios.post(`${API_BASE}/demo/regenerate`);
+      if (demoMode) {
+        // Force a quick disable/enable cycle to reload data
+        setDemoMode(false);
+        setTimeout(() => setDemoMode(true), 100);
+      }
+      toast.success('Demo data regenerated with new seed');
+    } catch (e) {
+      toast.error('Failed to regenerate demo data');
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  return (
+    <SectionCard title="Demo Mode" testId="section-demo-mode">
+      <div className="space-y-3 text-xs">
+        <p className="text-zinc-500">
+          Preview the dashboard with realistic simulated data. No real trades or analytics are affected.
+        </p>
+        <div className="flex items-center justify-between">
+          <span className="text-zinc-400 flex items-center gap-1.5">
+            <FlaskConical size={12} className="text-amber-400" /> Status
+          </span>
+          <Badge
+            data-testid="demo-mode-status-badge"
+            variant={demoMode ? 'default' : 'secondary'}
+            className={`text-xs ${demoMode ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : ''}`}
+          >
+            {demoMode ? 'ACTIVE' : 'OFF'}
+          </Badge>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <Button
+            data-testid="demo-toggle-btn"
+            size="sm"
+            variant={demoMode ? 'destructive' : 'outline'}
+            onClick={handleToggle}
+            disabled={loading}
+            className={`h-8 text-xs px-4 flex-1 ${!demoMode ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10' : ''}`}
+          >
+            {demoMode ? (
+              <><PowerOff size={12} className="mr-1.5" /> Exit Demo</>
+            ) : (
+              <><Power size={12} className="mr-1.5" /> Enter Demo Mode</>
+            )}
+          </Button>
+          <Button
+            data-testid="demo-regenerate-btn"
+            size="sm"
+            variant="outline"
+            onClick={handleRegenerate}
+            disabled={regenerating}
+            className="h-8 text-xs px-3 border-zinc-700"
+            title="Generate new random demo data"
+          >
+            <RotateCcw size={12} className={regenerating ? 'animate-spin' : ''} />
+          </Button>
+        </div>
+        {demoMode && (
+          <p className="text-amber-400/70 text-[10px] pt-1">
+            All dashboard data is simulated. Engine controls are disabled.
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
 
 
 function StrategyConfigSection({ config, fetchConfig }) {
