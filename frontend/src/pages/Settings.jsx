@@ -83,7 +83,14 @@ export default function Settings() {
   return (
     <div data-testid="settings-page" className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
+          {config.persisted && (
+            <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-500 font-mono">
+              Saved {config.last_saved ? new Date(config.last_saved).toLocaleTimeString() : ''}
+            </Badge>
+          )}
+        </div>
         <Button
           data-testid="refresh-config-btn"
           size="sm"
@@ -174,32 +181,7 @@ export default function Settings() {
 
         {/* Strategy Config */}
         <SectionCard title="Strategy Configuration" testId="section-strategy-config">
-          <div className="space-y-4">
-            {strategies.length === 0 ? (
-              <p className="text-xs text-zinc-600">No strategies registered</p>
-            ) : (
-              strategies.map((s) => (
-                <div key={s.strategy_id} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-zinc-300">{s.name}</span>
-                    <Badge variant={s.enabled ? 'default' : 'secondary'} className="text-xs">
-                      {s.enabled ? 'Enabled' : 'Disabled'}
-                    </Badge>
-                  </div>
-                  {s.parameters && Object.keys(s.parameters).length > 0 && (
-                    <div className="bg-zinc-950 rounded p-3 space-y-1.5">
-                      {Object.entries(s.parameters).map(([k, v]) => (
-                        <div key={k} className="flex justify-between text-xs">
-                          <span className="text-zinc-500">{k.replace(/_/g, ' ')}</span>
-                          <span className="text-zinc-400 font-mono">{typeof v === 'number' ? v : String(v)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
+          <StrategyConfigSection config={config} fetchConfig={fetchConfig} />
         </SectionCard>
 
         {/* Telegram Alerts */}
@@ -294,6 +276,105 @@ function TelegramSection({ config, updateConfig, fetchConfig }) {
           <p className="text-zinc-600 mt-2">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in backend .env</p>
         )}
       </div>
+    </div>
+  );
+}
+
+
+function StrategyConfigSection({ config, fetchConfig }) {
+  const strategyConfigs = config.strategy_configs || {};
+  const [editing, setEditing] = useState(null); // { stratId, key, value }
+  const [saving, setSaving] = useState(false);
+
+  const LABELS = {
+    min_net_edge_bps: 'Min Net Edge (bps)',
+    max_position_size: 'Max Position Size',
+    max_concurrent_arbs: 'Max Concurrent Arbs',
+    scan_interval_seconds: 'Scan Interval (s)',
+    cooldown_seconds: 'Cooldown (s)',
+    min_edge_bps: 'Min Edge (bps)',
+    min_confidence: 'Min Confidence',
+    max_concurrent_signals: 'Max Concurrent Signals',
+    signal_cooldown_seconds: 'Signal Cooldown (s)',
+  };
+
+  const handleSave = async (stratId, key, rawValue) => {
+    setSaving(true);
+    try {
+      const value = isNaN(Number(rawValue)) ? rawValue : Number(rawValue);
+      await axios.post(`${API_BASE}/config/update`, {
+        strategies: { [stratId]: { [key]: value } },
+      });
+      toast.success(`${LABELS[key] || key} updated`);
+      setEditing(null);
+      fetchConfig();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to update');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!Object.keys(strategyConfigs).length) {
+    return <p className="text-xs text-zinc-600">No strategy configs available</p>;
+  }
+
+  const STRAT_NAMES = { arb_scanner: 'Arb Scanner', crypto_sniper: 'Crypto Sniper' };
+
+  return (
+    <div className="space-y-4">
+      {Object.entries(strategyConfigs).map(([stratId, params]) => (
+        <div key={stratId} className="space-y-2">
+          <span className="text-sm text-zinc-300 font-medium">{STRAT_NAMES[stratId] || stratId}</span>
+          <div className="bg-zinc-950 rounded p-3 space-y-1.5">
+            {Object.entries(params).map(([k, v]) => {
+              const isEditing = editing?.stratId === stratId && editing?.key === k;
+              const isNumeric = typeof v === 'number';
+              return (
+                <div key={k} className="flex items-center justify-between text-xs min-h-[28px]">
+                  <span className="text-zinc-500">{LABELS[k] || k.replace(/_/g, ' ')}</span>
+                  {isEditing ? (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        data-testid={`edit-${stratId}-${k}`}
+                        type="number"
+                        step="any"
+                        defaultValue={editing.value}
+                        className="h-6 w-24 text-xs bg-zinc-900 border-zinc-700 px-2"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSave(stratId, k, e.target.value);
+                          if (e.key === 'Escape') setEditing(null);
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        className="h-6 text-xs px-2"
+                        disabled={saving}
+                        onClick={(e) => {
+                          const input = e.target.closest('div').querySelector('input');
+                          handleSave(stratId, k, input?.value ?? editing.value);
+                        }}
+                      >
+                        <Save size={10} />
+                      </Button>
+                    </div>
+                  ) : (
+                    <span
+                      data-testid={`param-${stratId}-${k}`}
+                      className={`font-mono ${isNumeric ? 'text-zinc-400 cursor-pointer hover:text-zinc-200' : 'text-zinc-500'}`}
+                      onClick={() => isNumeric && setEditing({ stratId, key: k, value: v })}
+                      title={isNumeric ? 'Click to edit' : ''}
+                    >
+                      {typeof v === 'number' ? v : String(v)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

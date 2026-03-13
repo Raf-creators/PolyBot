@@ -22,6 +22,7 @@ from engine.strategies.arb_scanner import ArbScanner
 from engine.strategies.crypto_sniper import CryptoSniper
 from services.persistence import PersistenceService
 from services.telegram_notifier import TelegramNotifier
+from services.config_service import ConfigService
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -45,6 +46,7 @@ engine: Optional[TradingEngine] = None
 arb_scanner_ref: Optional[ArbScanner] = None
 crypto_sniper_ref: Optional[CryptoSniper] = None
 telegram_notifier: Optional[TelegramNotifier] = None
+config_service: Optional[ConfigService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -71,7 +73,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, config_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -99,10 +101,23 @@ async def lifespan(app: FastAPI):
     telegram_notifier.configure(enabled=False, signals_enabled=False)
     await telegram_notifier.start(state, bus)
 
-    # Trading mode from env
+    # Phase 7: Config persistence — load from MongoDB and apply
+    config_service = ConfigService(db)
+    persisted = await config_service.load()
+    if persisted:
+        config_service.apply_to_engine(persisted, state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        logger.info("Persisted configuration applied")
+    else:
+        # Save defaults on first boot
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        await config_service.save(snapshot)
+        logger.info("Default configuration persisted")
+
+    # Trading mode from env (override persisted if env is explicitly set)
     mode_str = os.environ.get("TRADING_MODE", "paper")
     valid_modes = [m.value for m in TradingMode]
-    state.trading_mode = TradingMode(mode_str) if mode_str in valid_modes else TradingMode.PAPER
+    if not persisted or not persisted.get("trading_mode"):
+        state.trading_mode = TradingMode(mode_str) if mode_str in valid_modes else TradingMode.PAPER
 
     # Force paper if no credentials
     if not os.environ.get("POLYMARKET_PRIVATE_KEY"):
@@ -116,7 +131,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
+    # Shutdown — persist config before stopping
+    if config_service and state:
+        try:
+            snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+            await config_service.save(snapshot)
+        except Exception as e:
+            logger.error(f"Config persist on shutdown error: {e}")
     if telegram_notifier:
         await telegram_notifier.stop()
     if ws_broadcast_task:
@@ -189,12 +210,37 @@ async def get_config():
         "trading_mode": state.trading_mode.value,
         "risk": state.risk_config.model_dump(),
         "strategies": {k: v.model_dump() for k, v in state.strategies.items()},
+        "strategy_configs": {
+            "arb_scanner": arb_scanner_ref.config.model_dump() if arb_scanner_ref else {},
+            "crypto_sniper": crypto_sniper_ref.config.model_dump() if crypto_sniper_ref else {},
+        },
         "credentials_present": {
             "polymarket": bool(os.environ.get("POLYMARKET_PRIVATE_KEY")),
             "telegram": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
         },
         "telegram": telegram_notifier.stats if telegram_notifier else {},
+        "persisted": bool(config_service and config_service.cached),
+        "last_saved": config_service.cached.get("updated_at") if config_service else None,
     }
+
+
+@api_router.get("/config/strategies")
+async def get_strategy_configs():
+    """Get detailed strategy configuration parameters."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    result = {}
+    if arb_scanner_ref:
+        result["arb_scanner"] = {
+            "enabled": state.strategies.get("arb_scanner") and state.strategies["arb_scanner"].enabled,
+            **arb_scanner_ref.config.model_dump(),
+        }
+    if crypto_sniper_ref:
+        result["crypto_sniper"] = {
+            "enabled": state.strategies.get("crypto_sniper") and state.strategies["crypto_sniper"].enabled,
+            **crypto_sniper_ref.config.model_dump(),
+        }
+    return result
 
 
 @api_router.put("/config")
@@ -208,11 +254,92 @@ async def update_config(body: ConfigUpdateRequest):
     if body.risk is not None:
         state.risk_config = body.risk
     if telegram_notifier and (body.telegram_enabled is not None or body.telegram_signals_enabled is not None):
-        # Use internal _enabled/_signals_enabled values to preserve state when only updating one toggle
         new_enabled = body.telegram_enabled if body.telegram_enabled is not None else telegram_notifier._enabled
         new_signals = body.telegram_signals_enabled if body.telegram_signals_enabled is not None else telegram_notifier._signals_enabled
         telegram_notifier.configure(enabled=new_enabled, signals_enabled=new_signals)
-    return {"status": "updated"}
+
+    # Persist to MongoDB
+    if config_service:
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        await config_service.save(snapshot)
+
+    return {"status": "updated", "persisted": True}
+
+
+@api_router.post("/config/update")
+async def update_config_granular(body: dict):
+    """Granular config update — accepts partial strategy/risk/telegram changes."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    changes = {}
+
+    # Risk config
+    if "risk" in body and isinstance(body["risk"], dict):
+        try:
+            from models import RiskConfig
+            merged = {**state.risk_config.model_dump(), **body["risk"]}
+            state.risk_config = RiskConfig(**merged)
+            changes["risk"] = "updated"
+        except Exception as e:
+            raise HTTPException(400, f"Invalid risk config: {e}")
+
+    # Telegram toggles
+    if "telegram_enabled" in body and telegram_notifier:
+        telegram_notifier.configure(
+            enabled=bool(body["telegram_enabled"]),
+            signals_enabled=telegram_notifier._signals_enabled,
+        )
+        changes["telegram_enabled"] = body["telegram_enabled"]
+    if "telegram_signals_enabled" in body and telegram_notifier:
+        telegram_notifier.configure(
+            enabled=telegram_notifier._enabled,
+            signals_enabled=bool(body["telegram_signals_enabled"]),
+        )
+        changes["telegram_signals_enabled"] = body["telegram_signals_enabled"]
+
+    # Strategy configs
+    if "strategies" in body and isinstance(body["strategies"], dict):
+        for strat_id, params in body["strategies"].items():
+            if not isinstance(params, dict):
+                continue
+
+            if strat_id == "arb_scanner" and arb_scanner_ref:
+                enabled = params.pop("enabled", None)
+                if enabled is not None and "arb_scanner" in state.strategies:
+                    state.strategies["arb_scanner"].enabled = bool(enabled)
+                if params:
+                    try:
+                        from engine.strategies.arb_models import ArbConfig
+                        known = set(ArbConfig.model_fields.keys())
+                        filtered = {k: v for k, v in params.items() if k in known}
+                        merged = {**arb_scanner_ref.config.model_dump(), **filtered}
+                        arb_scanner_ref.config = ArbConfig(**merged)
+                    except Exception as e:
+                        raise HTTPException(400, f"Invalid arb config: {e}")
+                changes["arb_scanner"] = "updated"
+
+            elif strat_id == "crypto_sniper" and crypto_sniper_ref:
+                enabled = params.pop("enabled", None)
+                if enabled is not None and "crypto_sniper" in state.strategies:
+                    state.strategies["crypto_sniper"].enabled = bool(enabled)
+                if params:
+                    try:
+                        from engine.strategies.sniper_models import SniperConfig
+                        known = set(SniperConfig.model_fields.keys())
+                        filtered = {k: v for k, v in params.items() if k in known}
+                        merged = {**crypto_sniper_ref.config.model_dump(), **filtered}
+                        crypto_sniper_ref.config = SniperConfig(**merged)
+                    except Exception as e:
+                        raise HTTPException(400, f"Invalid sniper config: {e}")
+                changes["crypto_sniper"] = "updated"
+
+    # Persist
+    if config_service:
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        await config_service.save(snapshot)
+
+    return {"status": "updated", "changes": changes, "persisted": True}
 
 
 # ---- Risk Controls ----
