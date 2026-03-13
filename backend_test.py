@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 class PolymarketEdgeOSApiTester:
-    def __init__(self, base_url: str = "https://arbitrage-scanner-9.preview.emergentagent.com"):
+    def __init__(self, base_url: str = "https://edge-trading-hub-1.preview.emergentagent.com"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
@@ -354,7 +354,7 @@ def main():
     import os
     
     # Use environment URL if available, fallback to default
-    base_url = os.getenv('BACKEND_URL', 'https://arbitrage-scanner-9.preview.emergentagent.com')
+    base_url = os.getenv('BACKEND_URL', 'https://edge-trading-hub-1.preview.emergentagent.com')
     
     tester = PolymarketEdgeOSApiTester(base_url)
     return tester.run_all_tests()

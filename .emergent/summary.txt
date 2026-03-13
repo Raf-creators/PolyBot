@@ -1,58 +1,132 @@
 Project: Polymarket Edge OS
 
-Current state: Phase 1–3 complete.
+Current state:
+Phases 1–9 complete. This is now a full v1 prediction-market trading platform.
 
-Polymarket Edge OS is a modular automated trading engine designed to detect structural arbitrage opportunities in Polymarket markets.
-
-Architecture:
-- Async Python event-driven backend
-- In-memory hot path with StateManager
-- EventBus for decoupled internal communication
-- MongoDB persistence via async write-behind
-- Paper trading execution with realistic fill simulation
-- Risk engine with kill switch and exposure limits
-
-Core components:
-- StateManager: central in-memory state store
-- EventBus: async event pipeline for signals/orders
-- TradingEngine: lifecycle orchestrator
-- RiskEngine: mandatory execution gate
-- ExecutionEngine: order lifecycle handler
-- PaperAdapter: simulated execution for testing
-
-Phase 2 added:
-- Polymarket market discovery and midpoint pricing
-- Binance WebSocket feeds for BTC/ETH spot
+Completed phases:
+1. Core trading engine
+- TradingEngine
+- StateManager
+- EventBus
+- RiskEngine
+- ExecutionEngine
+- PaperAdapter
 - MongoDB persistence
-- API endpoints for markets, positions, trades
-- WebSocket state streaming
-- health and latency observability
+- FastAPI backend
 
-Phase 3 added:
-- ArbScanner strategy detecting complement arbitrage
-- Pricing models for fees, slippage, execution penalty
-- Confidence scoring for opportunities
-- Paired trade execution lifecycle
-- APIs for arb opportunities, executions, and strategy health
-- persistence of opportunities and results
+2. Market data layer
+- Polymarket Gamma API integration
+- Polymarket CLOB midpoint pricing
+- Binance WebSocket BTC/ETH feeds
+
+3. Arbitrage strategy
+- ArbScanner
+- complement arbitrage detection
+- pricing / rejection logic
+- paper execution support
+
+4. Dashboard
+- React trading dashboard
+- single global WebSocket
+- Zustand state store
+- Overview, Arbitrage, Positions, Risk, Markets, Settings
+
+5A. Crypto sniper strategy
+- BTC/ETH 5m and 15m markets
+- market classification
+- realized volatility ring buffer
+- fair probability model
+- momentum-adjusted pricing
+- 14-step filter chain
+- scan loop ~0.87ms
+
+5B. Crypto sniper dashboard integration
+- signals
+- executions
+- volatility
+- health metrics
+
+6. Telegram alerts
+- async Telegram notifier
+- trade, signal, risk, engine alerts
+- settings toggles + test endpoint
+
+7. Config persistence
+- config stored in MongoDB
+- strategy parameters persist across restarts
+- editable from dashboard
+
+8. Live execution adapter
+- paper / shadow / live modes
+- py-clob-client integration
+- live mode safety checks
+- execution mode endpoints
+- dashboard mode visibility
+
+8A. Live execution hardening
+- open / partial / filled / cancelled / expired lifecycle
+- wallet visibility
+- live order persistence
+- execution health reporting
+
+8B. Final live safeguards
+- cancel order endpoint
+- slippage protection
+- live orders dashboard tab
+- incremental fill tracking
+- polling-based fill updates every 5s
+- architecture ready for future CLOB websocket fills
+
+9. Rich analytics dashboard
+- analytics summary
+- strategy comparison
+- execution quality metrics
+- timeseries metrics
+- equity curve
+- drawdown curve
+- rolling pnl metrics
+- analytics page validated
+
+Additional dashboard features:
+- PnL equity curve chart
+- Trade ticker strip
+- live wallet / execution mode visibility
 
 Current capabilities:
-- scans 100+ binary markets every 10 seconds
-- identifies arbitrage where YES + NO < 1 after costs
-- simulates paired trades in paper mode
-- risk engine blocks invalid trades
-- results persisted to MongoDB
-- health metrics exposed via API
+- paper / shadow / live execution modes
+- arbitrage + crypto sniper strategies
+- dashboard + alerts + analytics
+- persisted config
+- live order lifecycle tracking
+- risk controls and slippage protection
 
-Known limitations:
-- midpoint pricing instead of full order book
-- approximate fee model
-- simulated fills instead of live execution
-- no frontend dashboard yet
+Current known remaining gaps before cautious real-money launch:
+- CLOB websocket fill notifications (currently polling every 5s)
+- rate-limit awareness for high-frequency CLOB calls
+- manual order entry is not implemented
+- weather strategy not implemented yet
 
-Next phases:
-Phase 4: frontend dashboard
-Phase 5: crypto sniper strategy
-Phase 6: alerts and analytics polish
+Next task:
+Proceed with Phase 10: Weather Strategy (backend first).
 
-Goal: evolve this engine into a reliable automated arbitrage trading system for Polymarket markets.
+Goal:
+Add a production-structured weather trading strategy as a new alpha module.
+
+Requirements for Phase 10:
+- paper mode first
+- no simplistic “forecast temp = outcome” logic
+- proper station / market resolution mapping
+- bucket probability model, not point-forecast-only logic
+- integrate cleanly with StateManager, EventBus, RiskEngine, ExecutionEngine
+- separate weather ingestion / modeling from execution logic
+- design for future forecast updates, observations, calibration, and expected value by bucket
+
+Do not write code yet.
+First provide:
+- full architecture
+- data sources
+- market mapping approach
+- probability model
+- signal generation logic
+- risk / filter logic
+- implementation plan
