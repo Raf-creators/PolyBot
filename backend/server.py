@@ -11,7 +11,7 @@ from typing import Optional, Set
 
 from models import (
     TradingMode, ConfigUpdateRequest, Event, EventType,
-    OrderRecord, OrderSide,
+    OrderRecord, OrderSide, utc_now,
 )
 from engine.state import StateManager
 from engine.events import EventBus
@@ -436,7 +436,7 @@ async def set_execution_mode(body: dict):
 
 @api_router.get("/execution/status")
 async def get_execution_status():
-    """Get detailed execution adapter status."""
+    """Get detailed execution adapter status including slippage config."""
     if not state:
         raise HTTPException(500, "Engine not initialized")
     live_status = engine.execution_engine.live_adapter_status if engine else {}
@@ -445,6 +445,10 @@ async def get_execution_status():
         "paper_adapter": "always_available",
         "live_adapter": live_status,
         "risk_config": state.risk_config.model_dump(),
+        "slippage_protection": {
+            "max_live_slippage_bps": state.risk_config.max_live_slippage_bps,
+            "allow_aggressive_live": state.risk_config.allow_aggressive_live,
+        },
         "engine_running": engine.is_running if engine else False,
     }
 
@@ -488,6 +492,43 @@ async def get_live_orders(limit: int = 50):
     if not live_order_service:
         return []
     return await live_order_service.get_recent(limit=limit)
+
+
+@api_router.post("/execution/orders/{order_id}/cancel")
+async def cancel_live_order(order_id: str):
+    """Cancel an open/partial live order."""
+    # Try via live adapter if available
+    if engine and engine.execution_engine._live_adapter:
+        result = await engine.execution_engine._live_adapter.cancel_order(order_id)
+    elif live_order_service:
+        # Fallback: cancel directly in DB if engine not running
+        rec = live_order_service.active_orders.get(order_id)
+        if not rec:
+            doc = await live_order_service.get_by_id(order_id)
+            if doc and doc.get("status") in ("filled", "cancelled", "rejected", "expired"):
+                raise HTTPException(400, f"order already in terminal state: {doc['status']}")
+            raise HTTPException(404, "order not found")
+        await live_order_service.update_status(
+            order_id, status="cancelled", cancelled_at=utc_now(), cancel_reason="manual_cancel_engine_stopped",
+        )
+        result = {"success": True, "method": "local_db", "filled_size": rec.filled_size, "remaining_size": rec.remaining_size}
+    else:
+        raise HTTPException(500, "No order service available")
+
+    if result.get("success"):
+        return {
+            "status": "cancelled",
+            "order_id": order_id,
+            "method": result.get("method"),
+            "filled_size": result.get("filled_size", 0),
+            "remaining_size": result.get("remaining_size", 0),
+        }
+    else:
+        reason = result.get("reason", "cancel failed")
+        # Return 404 for not found, 400 for other errors
+        if "not found" in reason.lower():
+            raise HTTPException(404, reason)
+        raise HTTPException(400, reason)
 
 
 # ---- Positions / Orders / Trades ----

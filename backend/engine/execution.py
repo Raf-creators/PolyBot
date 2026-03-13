@@ -14,6 +14,7 @@ class ExecutionEngine:
         self._running = False
         self._paper_adapter = None
         self._live_adapter = None
+        self._pending_order_service = None  # Store until adapter ready
 
     async def start(self, state, bus):
         self._state = state
@@ -26,6 +27,10 @@ class ExecutionEngine:
         from engine.live_adapter import LiveAdapter
         self._live_adapter = LiveAdapter(state, bus)
 
+        # Wire pending order service if set before start
+        if self._pending_order_service:
+            self._live_adapter.set_order_service(self._pending_order_service)
+
         # Try to initialize live adapter (non-blocking, fails gracefully)
         try:
             await self._live_adapter.initialize()
@@ -37,6 +42,7 @@ class ExecutionEngine:
 
     def set_live_order_service(self, service):
         """Wire the live order persistence service after init."""
+        self._pending_order_service = service  # Store for when adapter starts
         if self._live_adapter:
             self._live_adapter.set_order_service(service)
 
@@ -92,7 +98,9 @@ class ExecutionEngine:
             "authenticated": False,
             "credentials": LiveAdapter.credentials_present(),
             "total_submitted": 0, "total_filled": 0, "total_partial_fills": 0,
-            "total_failed": 0, "open_orders": 0, "partial_orders": 0,
+            "total_failed": 0, "total_cancelled": 0, "total_slippage_rejected": 0,
+            "open_orders": 0, "partial_orders": 0,
             "last_api_call": None, "last_status_refresh": None,
             "last_error": "engine not started", "recent_errors": [],
+            "fill_update_method": "polling", "poll_interval_seconds": 5,
         }

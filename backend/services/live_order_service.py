@@ -77,6 +77,11 @@ class LiveOrderService:
             {"exchange_order_id": exchange_order_id}, {"_id": 0}
         )
 
+    async def get_by_id(self, record_id: str) -> Optional[dict]:
+        return await self._collection.find_one(
+            {"id": record_id}, {"_id": 0}
+        )
+
     @property
     def active_orders(self) -> Dict[str, LiveOrderRecord]:
         return self._active

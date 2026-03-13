@@ -134,6 +134,8 @@ class RiskConfig(BaseModel):
     max_concurrent_positions: int = 10
     max_order_size: float = 10.0
     kill_switch_active: bool = False
+    max_live_slippage_bps: float = 100.0    # Max acceptable slippage for live orders
+    allow_aggressive_live: bool = False      # If False, reject live orders with no reference price
 
 
 class StrategyConfig(BaseModel):
@@ -196,21 +198,25 @@ class HealthMetrics(BaseModel):
 class LiveOrderRecord(BaseModel):
     """Persistent record for live CLOB orders with fill tracking."""
     id: str = Field(default_factory=new_id)
-    order_id: str              # internal OrderRecord.id
+    order_id: str
     exchange_order_id: str = ""
     strategy_id: str = ""
     token_id: str = ""
     condition_id: str = ""
     market_question: str = ""
     side: str = "buy"
-    price: float = 0.0
+    price: float = 0.0                     # requested price
     requested_size: float = 0.0
     filled_size: float = 0.0
     remaining_size: float = 0.0
     avg_fill_price: float = 0.0
-    status: str = "submitted"   # submitted, open, partially_filled, filled, cancelled, rejected, expired
+    slippage_bps: Optional[float] = None   # (avg_fill - requested) / requested * 10000
+    status: str = "submitted"              # submitted, open, partially_filled, filled, cancelled, rejected, expired
     fees: float = 0.0
+    update_source: str = "poll"            # poll | websocket | manual
     submitted_at: str = Field(default_factory=utc_now)
     last_checked_at: Optional[str] = None
     filled_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    cancel_reason: Optional[str] = None
     error: Optional[str] = None
