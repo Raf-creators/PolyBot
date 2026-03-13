@@ -5,6 +5,7 @@ export const WS_URL = BACKEND_URL.replace(/^http/, 'ws') + '/api/ws';
 export const NAV_ITEMS = [
   { path: '/', label: 'Overview', icon: 'LayoutDashboard' },
   { path: '/arbitrage', label: 'Arbitrage', icon: 'ArrowLeftRight' },
+  { path: '/sniper', label: 'Sniper', icon: 'Crosshair' },
   { path: '/positions', label: 'Positions', icon: 'Layers' },
   { path: '/risk', label: 'Risk', icon: 'ShieldAlert' },
   { path: '/markets', label: 'Markets', icon: 'BarChart3' },

@@ -31,6 +31,9 @@ export const useDashboardStore = create((set, get) => ({
   arbHealth: {},
   feedHealth: {},
   config: {},
+  sniperSignals: { tradable: [], rejected: [], total_tradable: 0, total_rejected: 0 },
+  sniperExecutions: { active: [], completed: [] },
+  sniperHealth: {},
 
   // Connection state
   wsConnected: false,
@@ -59,4 +62,7 @@ export const useDashboardStore = create((set, get) => ({
   setArbHealth: (data) => set({ arbHealth: data }),
   setFeedHealth: (data) => set({ feedHealth: data }),
   setConfig: (data) => set({ config: data }),
+  setSniperSignals: (data) => set({ sniperSignals: data }),
+  setSniperExecutions: (data) => set({ sniperExecutions: data }),
+  setSniperHealth: (data) => set({ sniperHealth: data }),
 }));

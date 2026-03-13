@@ -17,6 +17,9 @@ export function useApi() {
   const setArbHealth = useDashboardStore((s) => s.setArbHealth);
   const setFeedHealth = useDashboardStore((s) => s.setFeedHealth);
   const setConfig = useDashboardStore((s) => s.setConfig);
+  const setSniperSignals = useDashboardStore((s) => s.setSniperSignals);
+  const setSniperExecutions = useDashboardStore((s) => s.setSniperExecutions);
+  const setSniperHealth = useDashboardStore((s) => s.setSniperHealth);
 
   const fetchPositions = useCallback(async () => {
     try {
@@ -81,6 +84,27 @@ export function useApi() {
     } catch {}
   }, [setConfig]);
 
+  const fetchSniperSignals = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/sniper/signals');
+      setSniperSignals(data);
+    } catch {}
+  }, [setSniperSignals]);
+
+  const fetchSniperExecutions = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/sniper/executions');
+      setSniperExecutions(data);
+    } catch {}
+  }, [setSniperExecutions]);
+
+  const fetchSniperHealth = useCallback(async () => {
+    try {
+      const { data } = await api.get('/strategies/sniper/health');
+      setSniperHealth(data);
+    } catch {}
+  }, [setSniperHealth]);
+
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');
     return data;
@@ -110,6 +134,7 @@ export function useApi() {
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,

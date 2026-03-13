@@ -3,10 +3,10 @@ import { useDashboardStore } from '../state/dashboardStore';
 import { NAV_ITEMS, ENGINE_STATUS_COLORS } from '../utils/constants';
 import {
   LayoutDashboard, ArrowLeftRight, Layers,
-  ShieldAlert, BarChart3, Settings, Wifi, WifiOff
+  ShieldAlert, BarChart3, Settings, Crosshair, Wifi, WifiOff
 } from 'lucide-react';
 
-const ICONS = { LayoutDashboard, ArrowLeftRight, Layers, ShieldAlert, BarChart3, Settings };
+const ICONS = { LayoutDashboard, ArrowLeftRight, Layers, ShieldAlert, BarChart3, Settings, Crosshair };
 
 export function Sidebar() {
   const location = useLocation();

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import Overview from "./pages/Overview";
 import Arbitrage from "./pages/Arbitrage";
+import Sniper from "./pages/Sniper";
 import Positions from "./pages/Positions";
 import Risk from "./pages/Risk";
 import Markets from "./pages/Markets";
@@ -16,6 +17,7 @@ function App() {
           <Route element={<AppShell />}>
             <Route path="/" element={<Overview />} />
             <Route path="/arbitrage" element={<Arbitrage />} />
+            <Route path="/sniper" element={<Sniper />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/risk" element={<Risk />} />
             <Route path="/markets" element={<Markets />} />
