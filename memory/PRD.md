@@ -19,14 +19,19 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 ### Phase 7 — Config Persistence (MongoDB)
 ### Phase 8 — Live Polymarket Execution Adapter
 ### Phase 8A — Order Lifecycle, Partial Fills, Wallet Visibility
-
 ### Phase 8B — Final Live Trading Safeguards (2026-03-13)
-- **Cancel orders**: POST /api/execution/orders/{id}/cancel — cancels open/partial CLOB orders via API or locally when offline. Persists cancelled_at and cancel_reason.
-- **Slippage protection**: Pre-flight check compares order price against market mid_price. Rejects if deviation > max_live_slippage_bps (default 100bps). Configurable via allow_aggressive_live override.
-- **Enhanced LiveOrderRecord**: slippage_bps, cancelled_at, cancel_reason, update_source (poll/websocket/manual) fields.
-- **Live Orders tab**: New tab in Positions page showing all live order records with cancel buttons, slippage display, status badges, fill tracking columns.
-- **Fill updates**: Currently polling every 5s. Architecture structured for future CLOB WebSocket integration.
-- Testing: **37/37 (100%)**
+
+### Phase 9 — Rich Analytics & Strategy Performance Dashboard (2026-03-13)
+- **Backend analytics service** (`/app/backend/services/analytics_service.py`): Pure computation layer computing portfolio summary, per-strategy metrics, execution quality, and time-series analytics from in-memory trade state.
+- **4 API endpoints**:
+  - `GET /api/analytics/summary` — Total PnL, realized/unrealized, drawdown, win rate, profit factor, Sharpe, expectancy, streaks, fees, volume
+  - `GET /api/analytics/strategies` — Per-strategy (arb_scanner, crypto_sniper) breakdown with same metrics + avg edge in bps
+  - `GET /api/analytics/execution-quality` — Fill ratio, slippage, rejection reasons, latency, partial fills
+  - `GET /api/analytics/timeseries` — Daily PnL, equity curve, drawdown curve, trade frequency, rolling 7D/30D PnL, executions by strategy
+- **Frontend Analytics page** (`/analytics`): 4-tab dashboard (Overview, Strategies, Execution, Charts) with recharts visualizations
+- **Bug fixed**: `compute_timeseries` empty-state return had mismatched keys (`rolling_7d` vs `rolling_7d_pnl`) and missing `drawdown_curve`/`executions_by_strategy`
+- **Test endpoints**: `POST /api/test/inject-trades` and `POST /api/test/clear-trades` for populating synthetic data
+- Testing: **17/17 backend (100%), all frontend UI tests passed**
 
 ## Order Lifecycle States
 ```
@@ -58,8 +63,8 @@ expired          → Expired on CLOB
 - Manual order entry (for ad-hoc trades)
 
 ## Prioritized Backlog
-### P1 — Rich Analytics
-- Historical performance, Sharpe ratio, strategy comparison, market heatmap
-
 ### P2 — Future
-- Copy trading skeleton, CLOB WebSocket fills, manual order entry
+- Volume/liquidity heatmap on Markets page
+- CLOB WebSocket for real-time fill updates
+- Copy trading skeleton
+- Manual order entry

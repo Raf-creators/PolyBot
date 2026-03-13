@@ -106,10 +106,6 @@ def compute_strategy_metrics(trades, positions) -> Dict[str, Dict]:
     for t in trades:
         by_strat[t.strategy_id or "unknown"].append(t)
 
-    # Per-strategy position P&L
-    pos_pnl: Dict[str, float] = defaultdict(float)
-    # We can't attribute positions to strategies easily, skip unrealized for now
-
     result = {}
     for strat_id, strat_trades in by_strat.items():
         closing = [t for t in strat_trades if t.pnl != 0]
