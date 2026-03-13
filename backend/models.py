@@ -175,6 +175,8 @@ class EngineStateResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     trading_mode: Optional[TradingMode] = None
     risk: Optional[RiskConfig] = None
+    telegram_enabled: Optional[bool] = None
+    telegram_signals_enabled: Optional[bool] = None
 
 
 class HealthMetrics(BaseModel):

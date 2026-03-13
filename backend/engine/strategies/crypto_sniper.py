@@ -651,6 +651,18 @@ class CryptoSniper(BaseStrategy):
         self._m["signals_executed"] += 1
         self._m["active_executions"] = len(self._active_executions)
 
+        # Emit signal event for notification system (non-blocking)
+        await self._bus.emit(Event(
+            type=EventType.SIGNAL,
+            source=self.strategy_id,
+            data={
+                "strategy": "SNIPER", "asset": signal.asset,
+                "strike": signal.strike, "fair_price": signal.fair_price,
+                "market_price": signal.market_price, "edge_bps": signal.edge_bps,
+                "side": signal.side,
+            },
+        ))
+
         logger.info(
             f"[SNIPER] Executing: {signal.asset} {signal.side} "
             f"price={signal.market_price:.4f} size={signal.recommended_size} "

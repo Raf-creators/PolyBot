@@ -321,6 +321,18 @@ class ArbScanner(BaseStrategy):
         self._m["executed_count"] += 1
         self._cooldown[opp.condition_id] = time.time()
 
+        # Emit signal event for notification system (non-blocking)
+        await self._bus.emit(Event(
+            type=EventType.SIGNAL,
+            source=self.strategy_id,
+            data={
+                "strategy": "ARB", "asset": opp.question[:50],
+                "strike": "", "fair_price": 1 - opp.yes_price - opp.no_price,
+                "market_price": opp.yes_price + opp.no_price,
+                "edge_bps": opp.net_edge_bps, "side": "BUY YES+NO",
+            },
+        ))
+
         logger.info(
             f"[ARB] Submitting pair: {opp.question[:50]}... "
             f"YES={opp.yes_price:.4f} NO={opp.no_price:.4f} "

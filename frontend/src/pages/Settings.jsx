@@ -7,7 +7,9 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { toast } from 'sonner';
-import { Save, RefreshCw } from 'lucide-react';
+import { Save, RefreshCw, Send } from 'lucide-react';
+import axios from 'axios';
+import { API_BASE } from '../utils/constants';
 
 export default function Settings() {
   const config = useDashboardStore((s) => s.config);
@@ -199,6 +201,98 @@ export default function Settings() {
             )}
           </div>
         </SectionCard>
+
+        {/* Telegram Alerts */}
+        <SectionCard title="Telegram Alerts" testId="section-telegram-alerts">
+          <TelegramSection config={config} updateConfig={updateConfig} fetchConfig={fetchConfig} />
+        </SectionCard>
+      </div>
+    </div>
+  );
+}
+
+function TelegramSection({ config, updateConfig, fetchConfig }) {
+  const tg = config.telegram || {};
+  const [sending, setSending] = useState(false);
+
+  const handleToggle = async (key, value) => {
+    try {
+      await updateConfig({ [key]: value });
+      toast.success(`${key.replace(/_/g, ' ')} ${value ? 'enabled' : 'disabled'}`);
+      fetchConfig();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to update');
+    }
+  };
+
+  const handleTestAlert = async () => {
+    setSending(true);
+    try {
+      const { data } = await axios.get(`${API_BASE}/alerts/test`);
+      if (data.status === 'sent') {
+        toast.success('Test alert sent to Telegram');
+      } else if (data.status === 'skipped') {
+        toast.info(data.reason);
+      } else {
+        toast.error('Failed to send test alert');
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to send test alert');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="flex items-center justify-between">
+        <span className="text-zinc-500">Bot Configured</span>
+        <Badge variant={tg.configured ? 'default' : 'secondary'} className="text-xs">
+          {tg.configured ? 'Yes' : 'No'}
+        </Badge>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-zinc-500">Trade Alerts</span>
+        <Button
+          data-testid="toggle-telegram-btn"
+          size="sm"
+          variant={tg.enabled ? 'default' : 'outline'}
+          onClick={() => handleToggle('telegram_enabled', !tg.enabled)}
+          className={`h-7 text-xs px-3 ${tg.enabled ? '' : 'border-zinc-700 text-zinc-400'}`}
+        >
+          {tg.enabled ? 'ON' : 'OFF'}
+        </Button>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-zinc-500">Signal Alerts</span>
+        <Button
+          data-testid="toggle-signals-btn"
+          size="sm"
+          variant={tg.signals_enabled ? 'default' : 'outline'}
+          onClick={() => handleToggle('telegram_signals_enabled', !tg.signals_enabled)}
+          className={`h-7 text-xs px-3 ${tg.signals_enabled ? '' : 'border-zinc-700 text-zinc-400'}`}
+        >
+          {tg.signals_enabled ? 'ON' : 'OFF'}
+        </Button>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-zinc-500">Messages Sent</span>
+        <span className="text-zinc-400 font-mono">{tg.total_sent || 0}</span>
+      </div>
+      <div className="pt-2 border-t border-zinc-800">
+        <Button
+          data-testid="test-alert-btn"
+          size="sm"
+          variant="outline"
+          onClick={handleTestAlert}
+          disabled={sending || !tg.configured}
+          className="h-7 text-xs px-3 border-zinc-700 w-full"
+        >
+          <Send size={12} className="mr-1" /> {sending ? 'Sending...' : 'Send Test Alert'}
+        </Button>
+        {!tg.configured && (
+          <p className="text-zinc-600 mt-2">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in backend .env</p>
+        )}
       </div>
     </div>
   );

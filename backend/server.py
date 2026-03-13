@@ -21,6 +21,7 @@ from engine.price_feeds import PriceFeedManager
 from engine.strategies.arb_scanner import ArbScanner
 from engine.strategies.crypto_sniper import CryptoSniper
 from services.persistence import PersistenceService
+from services.telegram_notifier import TelegramNotifier
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -43,6 +44,7 @@ bus: Optional[EventBus] = None
 engine: Optional[TradingEngine] = None
 arb_scanner_ref: Optional[ArbScanner] = None
 crypto_sniper_ref: Optional[CryptoSniper] = None
+telegram_notifier: Optional[TelegramNotifier] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -69,7 +71,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -92,6 +94,11 @@ async def lifespan(app: FastAPI):
     state.strategies["crypto_sniper"].enabled = True
     crypto_sniper_ref = sniper
 
+    # Phase 6: Telegram notifier (non-blocking, fails gracefully)
+    telegram_notifier = TelegramNotifier()
+    telegram_notifier.configure(enabled=False, signals_enabled=False)
+    await telegram_notifier.start(state, bus)
+
     # Trading mode from env
     mode_str = os.environ.get("TRADING_MODE", "paper")
     valid_modes = [m.value for m in TradingMode]
@@ -110,6 +117,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if telegram_notifier:
+        await telegram_notifier.stop()
     if ws_broadcast_task:
         ws_broadcast_task.cancel()
         try:
@@ -184,6 +193,7 @@ async def get_config():
             "polymarket": bool(os.environ.get("POLYMARKET_PRIVATE_KEY")),
             "telegram": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
         },
+        "telegram": telegram_notifier.stats if telegram_notifier else {},
     }
 
 
@@ -197,6 +207,11 @@ async def update_config(body: ConfigUpdateRequest):
         state.trading_mode = body.trading_mode
     if body.risk is not None:
         state.risk_config = body.risk
+    if telegram_notifier and (body.telegram_enabled is not None or body.telegram_signals_enabled is not None):
+        # Use internal _enabled/_signals_enabled values to preserve state when only updating one toggle
+        new_enabled = body.telegram_enabled if body.telegram_enabled is not None else telegram_notifier._enabled
+        new_signals = body.telegram_signals_enabled if body.telegram_signals_enabled is not None else telegram_notifier._signals_enabled
+        telegram_notifier.configure(enabled=new_enabled, signals_enabled=new_signals)
     return {"status": "updated"}
 
 
@@ -401,6 +416,37 @@ async def test_inject_crypto_market():
         "expiry": expiry.isoformat(),
         "note": "Sniper will detect on next classification refresh (~30s) then evaluate on next scan (~5s)",
     }
+
+
+# ---- Alerts ----
+
+@api_router.get("/alerts/test")
+async def test_telegram_alert():
+    """Send a test Telegram message to verify alert configuration."""
+    if not telegram_notifier:
+        raise HTTPException(500, "Telegram notifier not initialized")
+    if not telegram_notifier.configured:
+        return {
+            "status": "skipped",
+            "reason": "Telegram credentials not configured (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)",
+        }
+
+    ok = await telegram_notifier.send_message(
+        "<b>[TEST]</b>\nPolymarket Edge OS alert system operational."
+    )
+    return {
+        "status": "sent" if ok else "failed",
+        "configured": telegram_notifier.configured,
+        "stats": telegram_notifier.stats,
+    }
+
+
+@api_router.get("/alerts/status")
+async def get_alerts_status():
+    """Get current Telegram alert configuration and stats."""
+    if not telegram_notifier:
+        raise HTTPException(500, "Telegram notifier not initialized")
+    return telegram_notifier.stats
 
 
 # ---- Ticker Feed ----

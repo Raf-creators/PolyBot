@@ -1,0 +1,80 @@
+{
+  "summary": "Phase 6 Telegram Alerts Integration - All tests passed. Backend: 15/15 tests (100%). Frontend: 7/7 UI tests (100%). Fixed minor bug in config update logic for preserving toggle state.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "PUT /api/config",
+        "issue": "When updating telegram_signals_enabled only, it was resetting telegram_enabled to false due to using .enabled property instead of ._enabled internal value. Fixed by testing agent.",
+        "priority": "FIXED"
+      }
+    ]
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/alerts/test returns 200 with status='skipped' when no credentials",
+      "GET /api/alerts/status returns correct structure (configured, enabled, signals_enabled, total_sent, total_failed)",
+      "GET /api/config includes telegram section with all required fields",
+      "PUT /api/config with telegram_enabled=true updates notifier state",
+      "PUT /api/config with telegram_enabled=false reverts notifier state",
+      "PUT /api/config with telegram_signals_enabled=true works",
+      "Toggle one setting preserves the other (after fix)",
+      "Notifier reports configured=false when no credentials set",
+      "Test alert endpoint skips gracefully without error",
+      "Regression: GET /api/health returns healthy",
+      "Regression: GET /api/ticker/feed returns array",
+      "Regression: GET /api/analytics/pnl-history returns correct structure",
+      "Regression: GET /api/status returns expected structure",
+      "Regression: GET /api/strategies/arb/health works",
+      "Regression: GET /api/strategies/sniper/health works"
+    ],
+    "frontend_ui_tests": [
+      "Settings page loads with data-testid='settings-page'",
+      "Telegram Alerts section present with data-testid='section-telegram-alerts'",
+      "Test Alert button present with data-testid='test-alert-btn' and correctly disabled",
+      "Trade Alerts toggle present with data-testid='toggle-telegram-btn'",
+      "Signal Alerts toggle present with data-testid='toggle-signals-btn'",
+      "Bot Configured shows 'No' badge when no credentials",
+      "Toggle buttons functional (ON → OFF on click, shows toast)"
+    ],
+    "regression_tests": [
+      "All 7 nav items present in sidebar",
+      "Trade Ticker visible globally on Settings and Overview pages",
+      "P&L Chart section present on Overview page"
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_phase6_telegram_alerts.py",
+    "/app/test_reports/pytest/pytest_results_phase6.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_phase6_telegram_alerts.py",
+    "/app/backend/server.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (15/15 tests passed)",
+    "frontend": "100% (7/7 UI tests passed)"
+  },
+  
+  "seed_data_creation": "None - testing uses graceful no-credentials mode",
+  
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Phase 6 Telegram Alerts complete. TelegramNotifier at /app/backend/services/telegram_notifier.py subscribes to EventBus events (ORDER_UPDATE, RISK_ALERT, SYSTEM_EVENT, SIGNAL). Without credentials (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID), notifier gracefully reports configured=false and skips sends. Settings page has Telegram Alerts section with toggle buttons for trade/signal alerts and a test button (disabled when not configured). PUT /api/config accepts telegram_enabled and telegram_signals_enabled boolean fields. Fixed bug where toggling one setting incorrectly reset the other - now uses ._enabled internal value instead of .enabled property. Regression tests pass: health, ticker feed, pnl-history, all 7 nav items, trade ticker strip."
+}
