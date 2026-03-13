@@ -1,0 +1,743 @@
+"""Crypto Sniper Strategy — directional pricing on BTC/ETH 5m/15m markets.
+
+Uses Binance spot price + simplified option model to compute fair probability,
+then trades when Polymarket price diverges beyond a configurable threshold.
+
+Architecture:
+  - Classification (slow, every 30s): regex-parse market titles → cache
+  - Price sampling (fast, every scan): append spot to ring buffer
+  - Evaluation (fast, every scan): compute fair prob → edge → filter
+  - Execution (async): submit through RiskEngine + ExecutionEngine
+"""
+
+import asyncio
+import logging
+import math
+import re
+import time
+from collections import deque
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Tuple
+
+from models import (
+    Event, EventType, OrderRecord, OrderSide,
+    StrategyConfig, StrategyStatusEnum, utc_now,
+)
+from engine.strategies.base import BaseStrategy
+from engine.strategies.sniper_models import (
+    SniperConfig, CryptoMarketClassification, SniperSignal,
+    SniperExecution, SniperSignalStatus,
+)
+from engine.strategies.sniper_pricing import (
+    compute_fair_probability, compute_realized_volatility,
+    compute_momentum, compute_signal_confidence, compute_edge_bps,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ---- Market Classification Patterns ----
+# Compiled once at module load. Checked in order; first match wins.
+
+_ASSET_NORM = {
+    "btc": "BTC", "bitcoin": "BTC",
+    "eth": "ETH", "ethereum": "ETH",
+}
+_DIR_NORM = {
+    "above": "above", "over": "above", "higher than": "above",
+    "≥": "above", ">=": "above", ">": "above",
+    "below": "below", "under": "below", "lower than": "below",
+    "≤": "below", "<=": "below", "<": "below",
+}
+
+_PATTERNS = [
+    # "Will BTC be above $97,000 at 12:15 UTC?"
+    re.compile(
+        r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r".*?(?P<dir>above|below|over|under|higher than|lower than)"
+        r"\s+\$?(?P<strike>[\d,]+(?:\.\d+)?)"
+        r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
+        re.IGNORECASE,
+    ),
+    # "Bitcoin above $97,000?" (no explicit time — uses endDate from market)
+    re.compile(
+        r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r".*?(?P<dir>above|below|over|under|higher than|lower than)"
+        r"\s+\$?(?P<strike>[\d,]+(?:\.\d+)?)",
+        re.IGNORECASE,
+    ),
+    # "BTC price ≥ $97000 at 4:00 PM ET"
+    re.compile(
+        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r".*?(?:price\s*)?(?P<dir>[>≥<≤])\s*\$?(?P<strike>[\d,]+(?:\.\d+)?)"
+        r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _parse_asset(raw: str) -> Optional[str]:
+    return _ASSET_NORM.get(raw.lower())
+
+
+def _parse_direction(raw: str) -> Optional[str]:
+    return _DIR_NORM.get(raw.lower())
+
+
+def _parse_strike(raw: str) -> Optional[float]:
+    try:
+        return float(raw.replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_expiry(time_str: Optional[str], end_date_str: Optional[str]) -> Optional[datetime]:
+    """Parse expiry datetime from either explicit time in question or endDate field."""
+    now = datetime.now(timezone.utc)
+
+    if time_str:
+        try:
+            parts = time_str.split(":")
+            hour, minute = int(parts[0]), int(parts[1])
+            # Assume UTC, today. If past, try tomorrow.
+            dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if dt <= now:
+                dt += timedelta(days=1)
+            return dt
+        except (ValueError, IndexError):
+            pass
+
+    if end_date_str:
+        try:
+            dt = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            pass
+
+    return None
+
+
+def classify_market_question(
+    question: str,
+    condition_id: str,
+    yes_token_id: str,
+    no_token_id: str,
+    end_date: Optional[str] = None,
+) -> Tuple[Optional[CryptoMarketClassification], Optional[str]]:
+    """Try to parse a market question into a crypto classification.
+
+    Returns (classification, None) on success or (None, rejection_reason) on failure.
+    Pure function — no side effects.
+    """
+    for pattern in _PATTERNS:
+        m = pattern.search(question)
+        if not m:
+            continue
+
+        groups = m.groupdict()
+
+        asset = _parse_asset(groups.get("asset", ""))
+        if not asset:
+            return None, "unknown_asset"
+
+        direction = _parse_direction(groups.get("dir", ""))
+        if not direction:
+            return None, "unknown_direction"
+
+        strike = _parse_strike(groups.get("strike", ""))
+        if strike is None or strike <= 0:
+            return None, "invalid_strike"
+
+        expiry = _parse_expiry(groups.get("time"), end_date)
+        if expiry is None:
+            return None, "invalid_expiry"
+
+        # Check expiry is in the future
+        if expiry <= datetime.now(timezone.utc):
+            return None, "expired"
+
+        return CryptoMarketClassification(
+            condition_id=condition_id,
+            asset=asset,
+            direction=direction,
+            strike=strike,
+            expiry_utc=expiry.isoformat(),
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
+            question=question,
+        ), None
+
+    return None, "no_regex_match"
+
+
+# ---- Strategy Class ----
+
+
+class CryptoSniper(BaseStrategy):
+    """Directional crypto sniper for BTC/ETH 5m/15m Polymarket markets.
+
+    Uses Binance spot price and a simplified digital option model to compute
+    fair probability. Trades when market probability diverges from model.
+    """
+
+    def __init__(self, config: Optional[SniperConfig] = None):
+        super().__init__(strategy_id="crypto_sniper", name="Crypto Sniper")
+        self.config = config or SniperConfig()
+        self._risk_engine = None
+        self._execution_engine = None
+        self._scan_task: Optional[asyncio.Task] = None
+
+        # Classification cache (refreshed every classification_refresh_interval)
+        self._classified_cache: Dict[str, CryptoMarketClassification] = {}
+        self._last_classification_time: float = 0.0
+        self._last_market_count: int = 0
+
+        # Price history ring buffers
+        max_samples = int(self.config.vol_lookback_minutes * 60 / self.config.vol_sample_interval)
+        self._price_history: Dict[str, deque] = {
+            "BTC": deque(maxlen=max_samples),
+            "ETH": deque(maxlen=max_samples),
+        }
+        self._last_sample_time: float = 0.0
+
+        # Signal + execution tracking
+        self._signals: List[SniperSignal] = []
+        self._active_executions: Dict[str, SniperExecution] = {}
+        self._completed_executions: List[SniperExecution] = []
+        self._order_to_execution: Dict[str, str] = {}
+        self._cooldown: Dict[str, float] = {}
+
+        # Metrics — lightweight, primitive writes only
+        self._m = {
+            "total_scans": 0,
+            "last_scan_time": None,
+            "last_scan_duration_ms": 0.0,
+            "markets_classified": 0,
+            "classification_failures": 0,
+            "classification_failure_reasons": {},
+            "markets_evaluated": 0,
+            "signals_generated": 0,
+            "signals_rejected": 0,
+            "signals_executed": 0,
+            "signals_filled": 0,
+            "rejection_reasons": {},
+            "stale_feed_skips": 0,
+            "btc_vol_samples": 0,
+            "eth_vol_samples": 0,
+            "btc_realized_vol": None,
+            "eth_realized_vol": None,
+            "active_executions": 0,
+            "completed_executions": 0,
+            "last_execution_time": None,
+        }
+
+    # ---- Lifecycle ----
+
+    def set_execution_context(self, risk_engine, execution_engine):
+        self._risk_engine = risk_engine
+        self._execution_engine = execution_engine
+
+    async def start(self, state, bus):
+        await super().start(state, bus)
+        self._bus.on(EventType.ORDER_UPDATE, self._on_order_update)
+        self._scan_task = asyncio.create_task(self._scan_loop())
+        logger.info(
+            f"CryptoSniper started "
+            f"(interval={self.config.scan_interval}s, "
+            f"min_edge={self.config.min_edge_bps}bps)"
+        )
+
+    async def stop(self):
+        if self._scan_task:
+            self._scan_task.cancel()
+            try:
+                await self._scan_task
+            except asyncio.CancelledError:
+                pass
+        if self._bus:
+            self._bus.off(EventType.ORDER_UPDATE, self._on_order_update)
+        await super().stop()
+        logger.info("CryptoSniper stopped")
+
+    async def on_market_update(self, event):
+        pass  # Uses own scan loop
+
+    # ---- Scan Loop (5 stages) ----
+
+    async def _scan_loop(self):
+        await asyncio.sleep(5)  # let feeds settle
+        while self._running:
+            t0 = time.monotonic()
+            try:
+                # Stage 1: Sample prices
+                self._sample_prices()
+
+                # Stage 2: Refresh classifications if stale
+                self._maybe_refresh_classifications()
+
+                # Stage 3+4: Evaluate and filter signals
+                signals = self._evaluate_all()
+
+                # Stage 5: Execute eligible signals
+                eligible = [s for s in signals if s.is_tradable]
+                for sig in eligible:
+                    if len(self._active_executions) >= self.config.max_concurrent_signals:
+                        break
+                    await self._execute_signal(sig)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Sniper scan error: {e}", exc_info=True)
+
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            self._m["total_scans"] += 1
+            self._m["last_scan_time"] = utc_now()
+            self._m["last_scan_duration_ms"] = round(elapsed_ms, 2)
+
+            await asyncio.sleep(self.config.scan_interval)
+
+    # ---- Stage 1: Price Sampling ----
+
+    def _sample_prices(self):
+        now = time.time()
+        if now - self._last_sample_time < self.config.vol_sample_interval:
+            return
+        self._last_sample_time = now
+
+        for asset in ("BTC", "ETH"):
+            # StateManager stores as "BTC" key from PriceFeedManager
+            price = self._state.spot_prices.get(asset)
+            if price and price > 0:
+                self._price_history[asset].append((now, price))
+
+        self._m["btc_vol_samples"] = len(self._price_history["BTC"])
+        self._m["eth_vol_samples"] = len(self._price_history["ETH"])
+
+    # ---- Stage 2: Classification Cache ----
+
+    def _maybe_refresh_classifications(self):
+        now = time.monotonic()
+        market_count = len(self._state.markets)
+        needs_refresh = (
+            now - self._last_classification_time >= self.config.classification_refresh_interval
+            or market_count != self._last_market_count
+        )
+        if not needs_refresh:
+            return
+
+        self._classified_cache = self._classify_markets()
+        self._last_classification_time = now
+        self._last_market_count = market_count
+        self._m["markets_classified"] = len(self._classified_cache)
+
+    def _classify_markets(self) -> Dict[str, CryptoMarketClassification]:
+        """Scan all markets, find binary crypto pairs, parse question text."""
+        # First, group by condition_id into binary pairs (same as ArbScanner)
+        by_condition: Dict[str, Dict] = {}
+        for snap in self._state.markets.values():
+            cid = snap.condition_id
+            if not cid:
+                continue
+            if cid not in by_condition:
+                by_condition[cid] = {}
+            out = (snap.outcome or "").upper()
+            if "YES" in out:
+                by_condition[cid]["yes"] = snap
+            elif "NO" in out:
+                by_condition[cid]["no"] = snap
+
+        results = {}
+        fail_reasons = {}
+
+        for cid, pair in by_condition.items():
+            if "yes" not in pair or "no" not in pair:
+                continue
+
+            yes_snap = pair["yes"]
+            no_snap = pair["no"]
+
+            classification, reason = classify_market_question(
+                question=yes_snap.question,
+                condition_id=cid,
+                yes_token_id=yes_snap.token_id,
+                no_token_id=no_snap.token_id,
+                end_date=None,  # endDate not stored in MarketSnapshot currently
+            )
+
+            if classification:
+                results[cid] = classification
+            elif reason:
+                fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+
+        self._m["classification_failures"] = sum(fail_reasons.values())
+        self._m["classification_failure_reasons"] = fail_reasons
+        return results
+
+    # ---- Stage 3+4: Evaluate + Filter ----
+
+    def _evaluate_all(self) -> List[SniperSignal]:
+        results = []
+        evaluated = 0
+
+        # Pre-compute volatility and momentum once per scan (not per market)
+        vol_cache = {}
+        mom_cache = {}
+        for asset in ("BTC", "ETH"):
+            buf = self._price_history[asset]
+            vol = compute_realized_volatility(buf, self.config.vol_min_samples)
+            vol_cache[asset] = vol
+            mom_cache[asset] = compute_momentum(buf, self.config.momentum_lookback_seconds)
+
+            # Update metrics
+            self._m[f"{asset.lower()}_realized_vol"] = vol
+
+        # Expire old cooldowns
+        now = time.time()
+        self._cooldown = {
+            cid: ts for cid, ts in self._cooldown.items()
+            if now - ts < self.config.cooldown_seconds
+        }
+
+        for cid, cm in self._classified_cache.items():
+            sig = self._evaluate_signal(cm, vol_cache, mom_cache, now)
+            if sig:
+                results.append(sig)
+            evaluated += 1
+
+        self._m["markets_evaluated"] = evaluated
+
+        # Prepend new signals, keep last 300
+        self._signals = results + self._signals
+        if len(self._signals) > 300:
+            self._signals = self._signals[:300]
+
+        return results
+
+    def _evaluate_signal(
+        self,
+        cm: CryptoMarketClassification,
+        vol_cache: Dict[str, Optional[float]],
+        mom_cache: Dict[str, float],
+        now: float,
+    ) -> Optional[SniperSignal]:
+        """Evaluate a single classified market. Returns SniperSignal or None."""
+
+        # Get spot price
+        spot = self._state.spot_prices.get(cm.asset)
+        if not spot or spot <= 0:
+            self._m["stale_feed_skips"] += 1
+            return None
+
+        # Check spot freshness
+        stale_key = f"spot_{cm.asset.lower()}_stale"
+        if self._state.health.get(stale_key, True):
+            self._m["stale_feed_skips"] += 1
+            return None
+
+        # Time to expiry
+        try:
+            expiry_dt = datetime.fromisoformat(cm.expiry_utc)
+            if expiry_dt.tzinfo is None:
+                expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
+            tte = (expiry_dt - datetime.now(timezone.utc)).total_seconds()
+        except (ValueError, TypeError):
+            return None
+
+        if tte < self.config.min_tte_seconds:
+            return self._reject_signal(cm, spot, tte, 0, 0, 0, 0, 0,
+                                       f"tte {tte:.0f}s < min {self.config.min_tte_seconds}s")
+        if tte > self.config.max_tte_seconds:
+            return self._reject_signal(cm, spot, tte, 0, 0, 0, 0, 0,
+                                       f"tte {tte:.0f}s > max {self.config.max_tte_seconds}s")
+
+        # Volatility
+        vol = vol_cache.get(cm.asset)
+        if vol is None:
+            return self._reject_signal(cm, spot, tte, 0, 0, 0, 0, 0,
+                                       "insufficient_vol_data")
+
+        # Momentum
+        momentum = mom_cache.get(cm.asset, 0.0)
+
+        # Market prices
+        yes_snap = self._state.get_market(cm.yes_token_id)
+        no_snap = self._state.get_market(cm.no_token_id)
+        if not yes_snap or not no_snap:
+            return None
+
+        yes_price = yes_snap.mid_price or 0
+        no_price = no_snap.mid_price or 0
+        if yes_price <= 0 or no_price <= 0:
+            return None
+
+        # Market freshness
+        from engine.strategies.arb_pricing import compute_data_age
+        data_age = max(compute_data_age(yes_snap.updated_at), compute_data_age(no_snap.updated_at))
+        if data_age > self.config.max_stale_age_seconds:
+            return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, 0,
+                                       f"stale_data {data_age:.0f}s")
+
+        # Spread check
+        spread = abs(1.0 - (yes_price + no_price))
+        if spread > self.config.max_spread:
+            return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, spread,
+                                       f"spread {spread:.3f} > max {self.config.max_spread}")
+
+        # Liquidity
+        liquidity = min(yes_snap.liquidity, no_snap.liquidity)
+        if liquidity < self.config.min_liquidity:
+            return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, spread,
+                                       f"liquidity {liquidity:.0f} < min {self.config.min_liquidity}")
+
+        # Cooldown
+        if cm.condition_id in self._cooldown:
+            return None
+
+        # ---- Fair probability ----
+        fair = compute_fair_probability(
+            spot=spot,
+            strike=cm.strike,
+            vol=vol,
+            tte_seconds=tte,
+            direction=cm.direction,
+            momentum=momentum,
+            momentum_weight=self.config.momentum_weight,
+            vol_floor=self.config.vol_floor,
+        )
+
+        # Edge calculation: check both sides
+        edge_yes = compute_edge_bps(fair, yes_price)           # buy Yes if positive
+        edge_no = compute_edge_bps(1.0 - fair, no_price)       # buy No if positive
+
+        # Pick the better side
+        if edge_yes >= edge_no and edge_yes > 0:
+            side, token_id, edge_bps, market_price = "buy_yes", cm.yes_token_id, edge_yes, yes_price
+        elif edge_no > 0:
+            side, token_id, edge_bps, market_price = "buy_no", cm.no_token_id, edge_no, no_price
+        else:
+            # No positive edge
+            return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, spread,
+                                       f"no_edge yes={edge_yes:.0f}bps no={edge_no:.0f}bps")
+
+        # Edge threshold
+        if edge_bps < self.config.min_edge_bps:
+            return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
+                                       f"edge {edge_bps:.0f}bps < min {self.config.min_edge_bps}bps")
+
+        # Confidence
+        vol_quality = len(self._price_history[cm.asset]) / self.config.vol_min_samples
+        confidence = compute_signal_confidence(
+            liquidity=liquidity,
+            data_age_seconds=data_age,
+            spread=spread,
+            vol_quality=vol_quality,
+            tte_seconds=tte,
+            min_tte=self.config.min_tte_seconds,
+            max_tte=self.config.max_tte_seconds,
+        )
+
+        if confidence < self.config.min_confidence:
+            return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
+                                       f"confidence {confidence:.3f} < min {self.config.min_confidence}")
+
+        # Kill switch
+        if self._state.risk_config.kill_switch_active:
+            return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
+                                       "kill_switch_active")
+
+        # Concurrency check
+        if len(self._active_executions) >= self.config.max_concurrent_signals:
+            return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
+                                       "max_concurrent_signals")
+
+        # ---- Signal is tradable ----
+        size = min(self.config.default_size, self.config.max_signal_size)
+
+        signal = SniperSignal(
+            condition_id=cm.condition_id,
+            asset=cm.asset,
+            direction=cm.direction,
+            strike=cm.strike,
+            expiry_utc=cm.expiry_utc,
+            spot_price=round(spot, 2),
+            market_price=round(market_price, 6),
+            fair_price=round(fair, 6),
+            edge_bps=edge_bps,
+            volatility=round(vol, 6),
+            time_to_expiry_seconds=round(tte, 1),
+            momentum=round(momentum, 6),
+            confidence=confidence,
+            side=side,
+            token_id=token_id,
+            recommended_size=size,
+            is_tradable=True,
+        )
+
+        self._m["signals_generated"] += 1
+        logger.info(
+            f"[SNIPER] Signal: {cm.asset} {cm.direction} ${cm.strike} "
+            f"spot=${spot:.2f} fair={fair:.4f} mkt={market_price:.4f} "
+            f"edge={edge_bps:.0f}bps conf={confidence:.3f} side={side}"
+        )
+        return signal
+
+    def _reject_signal(self, cm, spot, tte, vol, momentum, mkt_price, data_age, spread, reason):
+        """Create a rejected signal for the log and update metrics."""
+        self._m["signals_rejected"] += 1
+        bucket = reason.split(" ")[0] if reason else "unknown"
+        self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+
+        return SniperSignal(
+            condition_id=cm.condition_id,
+            asset=cm.asset,
+            direction=cm.direction,
+            strike=cm.strike,
+            expiry_utc=cm.expiry_utc,
+            spot_price=round(spot, 2) if spot else 0,
+            market_price=round(mkt_price, 6) if mkt_price else 0,
+            fair_price=0,
+            edge_bps=0,
+            volatility=round(vol, 6) if vol else 0,
+            time_to_expiry_seconds=round(tte, 1) if tte else 0,
+            momentum=round(momentum, 6) if momentum else 0,
+            confidence=0,
+            side="none",
+            token_id="",
+            recommended_size=0,
+            is_tradable=False,
+            rejection_reason=reason,
+        )
+
+    # ---- Stage 5: Execution ----
+
+    async def _execute_signal(self, signal: SniperSignal):
+        if not self._risk_engine or not self._execution_engine:
+            logger.warning("No execution context; skipping signal")
+            return
+
+        order = OrderRecord(
+            token_id=signal.token_id,
+            side=OrderSide.BUY,
+            price=signal.market_price,
+            size=signal.recommended_size,
+            strategy_id=self.strategy_id,
+        )
+
+        ok, reason = self._risk_engine.check_order(order)
+        if not ok:
+            signal.is_tradable = False
+            signal.rejection_reason = f"risk: {reason}"
+            self._m["signals_rejected"] += 1
+            self._m["rejection_reasons"]["risk"] = self._m["rejection_reasons"].get("risk", 0) + 1
+            return
+
+        execution = SniperExecution(
+            signal_id=signal.id,
+            condition_id=signal.condition_id,
+            question=signal.asset + " " + signal.direction + " $" + str(signal.strike),
+            asset=signal.asset,
+            side=signal.side,
+            order_id=order.id,
+            target_edge_bps=signal.edge_bps,
+            size=signal.recommended_size,
+        )
+
+        self._active_executions[execution.id] = execution
+        self._order_to_execution[order.id] = execution.id
+        self._cooldown[signal.condition_id] = time.time()
+        self._m["signals_executed"] += 1
+        self._m["active_executions"] = len(self._active_executions)
+
+        logger.info(
+            f"[SNIPER] Executing: {signal.asset} {signal.side} "
+            f"price={signal.market_price:.4f} size={signal.recommended_size} "
+            f"edge={signal.edge_bps:.0f}bps"
+        )
+
+        try:
+            await self._execution_engine.submit_order(order)
+        except Exception as e:
+            logger.error(f"Sniper execution error: {e}")
+            execution.status = SniperSignalStatus.REJECTED
+            self._finalize_execution(execution)
+
+    # ---- Fill Tracking ----
+
+    async def _on_order_update(self, event: Event):
+        if event.source != "paper_adapter":
+            return
+
+        order_id = event.data.get("order_id")
+        if not order_id:
+            return
+
+        exec_id = self._order_to_execution.get(order_id)
+        if not exec_id:
+            return
+
+        execution = self._active_executions.get(exec_id)
+        if not execution:
+            return
+
+        status = event.data.get("status")
+        fill_price = event.data.get("fill_price")
+
+        if status == "filled":
+            execution.status = SniperSignalStatus.FILLED
+            execution.entry_price = fill_price
+            execution.filled_at = utc_now()
+            self._m["signals_filled"] += 1
+            self._m["last_execution_time"] = utc_now()
+            logger.info(
+                f"[SNIPER] FILLED: {execution.asset} {execution.side} "
+                f"fill={fill_price:.4f} target_edge={execution.target_edge_bps:.0f}bps"
+            )
+            self._finalize_execution(execution)
+
+        elif status in ("rejected", "cancelled"):
+            execution.status = SniperSignalStatus.REJECTED
+            logger.warning(f"[SNIPER] Order {order_id[:8]} {status}")
+            self._finalize_execution(execution)
+
+    def _finalize_execution(self, execution: SniperExecution):
+        self._active_executions.pop(execution.id, None)
+        self._completed_executions.append(execution)
+        if len(self._completed_executions) > 200:
+            self._completed_executions = self._completed_executions[-200:]
+        self._order_to_execution.pop(execution.order_id, None)
+        self._m["active_executions"] = len(self._active_executions)
+        self._m["completed_executions"] = len(self._completed_executions)
+
+    # ---- API Data Accessors ----
+
+    def get_signals(self, limit: int = 50) -> List[dict]:
+        return [s.model_dump() for s in self._signals[:limit]]
+
+    def get_active_executions(self) -> List[dict]:
+        return [e.model_dump() for e in self._active_executions.values()]
+
+    def get_completed_executions(self, limit: int = 50) -> List[dict]:
+        return [e.model_dump() for e in self._completed_executions[-limit:]]
+
+    def get_health(self) -> dict:
+        return {
+            **self._m,
+            "config": self.config.model_dump(),
+            "running": self._running,
+            "price_buffer_sizes": {
+                "BTC": len(self._price_history["BTC"]),
+                "ETH": len(self._price_history["ETH"]),
+            },
+        }
+
+    def get_config(self) -> StrategyConfig:
+        return StrategyConfig(
+            strategy_id=self.strategy_id,
+            name=self.name,
+            enabled=self._running,
+            status=StrategyStatusEnum.ACTIVE if self._running else StrategyStatusEnum.STOPPED,
+            parameters=self.config.model_dump(),
+        )

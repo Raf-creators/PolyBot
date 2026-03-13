@@ -19,6 +19,7 @@ from engine.core import TradingEngine
 from engine.market_data import MarketDataFeed
 from engine.price_feeds import PriceFeedManager
 from engine.strategies.arb_scanner import ArbScanner
+from engine.strategies.crypto_sniper import CryptoSniper
 from services.persistence import PersistenceService
 
 ROOT_DIR = Path(__file__).parent
@@ -41,6 +42,7 @@ state: Optional[StateManager] = None
 bus: Optional[EventBus] = None
 engine: Optional[TradingEngine] = None
 arb_scanner_ref: Optional[ArbScanner] = None
+crypto_sniper_ref: Optional[CryptoSniper] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -67,7 +69,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -83,6 +85,12 @@ async def lifespan(app: FastAPI):
     engine.register_strategy(arb)
     state.strategies["arb_scanner"].enabled = True
     arb_scanner_ref = arb
+
+    # Phase 5: register crypto sniper strategy (enabled by default)
+    sniper = CryptoSniper()
+    engine.register_strategy(sniper)
+    state.strategies["crypto_sniper"].enabled = True
+    crypto_sniper_ref = sniper
 
     # Trading mode from env
     mode_str = os.environ.get("TRADING_MODE", "paper")
@@ -297,6 +305,102 @@ async def get_arb_health():
     if not arb_scanner_ref:
         raise HTTPException(500, "Arb scanner not initialized")
     return arb_scanner_ref.get_health()
+
+
+# ---- Crypto Sniper Strategy ----
+
+@api_router.get("/strategies/sniper/signals")
+async def get_sniper_signals(limit: int = 50):
+    if not crypto_sniper_ref:
+        raise HTTPException(500, "Crypto sniper not initialized")
+    sigs = crypto_sniper_ref.get_signals(limit=limit)
+    tradable = [s for s in sigs if s.get("is_tradable")]
+    rejected = [s for s in sigs if not s.get("is_tradable")]
+    return {
+        "tradable": tradable,
+        "rejected": rejected[:limit],
+        "total_tradable": len(tradable),
+        "total_rejected": len(rejected),
+    }
+
+
+@api_router.get("/strategies/sniper/executions")
+async def get_sniper_executions():
+    if not crypto_sniper_ref:
+        raise HTTPException(500, "Crypto sniper not initialized")
+    return {
+        "active": crypto_sniper_ref.get_active_executions(),
+        "completed": crypto_sniper_ref.get_completed_executions(limit=50),
+    }
+
+
+@api_router.get("/strategies/sniper/health")
+async def get_sniper_health():
+    if not crypto_sniper_ref:
+        raise HTTPException(500, "Crypto sniper not initialized")
+    return crypto_sniper_ref.get_health()
+
+
+@api_router.post("/test/inject-crypto-market")
+async def test_inject_crypto_market():
+    """Inject a synthetic BTC crypto market pair for testing the sniper pipeline."""
+    if not engine or not engine.is_running:
+        raise HTTPException(400, "Engine must be running")
+
+    from models import MarketSnapshot
+    from datetime import datetime, timezone, timedelta
+    import uuid
+
+    uid = uuid.uuid4().hex[:8]
+    condition_id = f"test-sniper-{uid}"
+    yes_tid = f"test-sniper-yes-{uid}"
+    no_tid = f"test-sniper-no-{uid}"
+
+    # Current BTC spot price (if available)
+    btc_spot = state.spot_prices.get("BTC", 97000)
+    # Set strike slightly below spot so model predicts >50% for Yes
+    strike = round(btc_spot * 0.998, 0)
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
+    time_str = expiry.strftime("%H:%M")
+
+    question = f"Will BTC be above ${strike:,.0f} at {time_str} UTC?"
+
+    state.update_market(yes_tid, MarketSnapshot(
+        token_id=yes_tid,
+        condition_id=condition_id,
+        question=question,
+        outcome="Yes",
+        complement_token_id=no_tid,
+        mid_price=0.45,
+        last_price=0.45,
+        volume_24h=30000,
+        liquidity=3000,
+    ))
+    state.update_market(no_tid, MarketSnapshot(
+        token_id=no_tid,
+        condition_id=condition_id,
+        question=question,
+        outcome="No",
+        complement_token_id=yes_tid,
+        mid_price=0.55,
+        last_price=0.55,
+        volume_24h=30000,
+        liquidity=3000,
+    ))
+
+    return {
+        "status": "injected",
+        "condition_id": condition_id,
+        "question": question,
+        "yes_token_id": yes_tid,
+        "no_token_id": no_tid,
+        "yes_price": 0.45,
+        "no_price": 0.55,
+        "btc_spot": btc_spot,
+        "strike": strike,
+        "expiry": expiry.isoformat(),
+        "note": "Sniper will detect on next classification refresh (~30s) then evaluate on next scan (~5s)",
+    }
 
 
 # ---- Test endpoint (paper order through full pipeline) ----
