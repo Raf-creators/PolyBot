@@ -798,6 +798,45 @@ async def get_ticker_feed(limit: int = 50):
 
 # ---- Analytics ----
 
+from services.analytics_service import (
+    compute_portfolio_summary, compute_strategy_metrics,
+    compute_execution_quality, compute_timeseries,
+)
+
+
+@api_router.get("/analytics/summary")
+async def get_analytics_summary():
+    """Portfolio-level analytics: PnL, drawdown, win rate, Sharpe, etc."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    return compute_portfolio_summary(state.trades, state.positions)
+
+
+@api_router.get("/analytics/strategies")
+async def get_analytics_strategies():
+    """Per-strategy performance breakdown."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    return compute_strategy_metrics(state.trades, state.positions)
+
+
+@api_router.get("/analytics/execution-quality")
+async def get_analytics_execution_quality():
+    """Execution quality: fill ratio, slippage, rejections."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    live_ords = await live_order_service.get_recent(limit=200) if live_order_service else []
+    return compute_execution_quality(state.orders, live_ords)
+
+
+@api_router.get("/analytics/timeseries")
+async def get_analytics_timeseries():
+    """Time-based metrics: daily PnL, equity curve, drawdown, trade frequency."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    return compute_timeseries(state.trades)
+
+
 @api_router.get("/analytics/pnl-history")
 async def get_pnl_history():
     """Return cumulative P&L time series from trade history."""
