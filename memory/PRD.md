@@ -1,80 +1,78 @@
 # Polymarket Edge OS — PRD
 
 ## Problem Statement
-Build a production-grade 24/7 automated trading platform for Polymarket markets. Priorities: structural arbitrage, fast crypto markets (BTC/ETH 5m/15m), research modules. Latency-sensitive architecture with professional dashboard.
+Build a production-grade 24/7 automated trading platform for Polymarket markets.
 
 ## Architecture
-- **Frontend**: React SPA (dark-mode trading dashboard, zustand state, single global WebSocket)
-- **Backend**: FastAPI (async Python)
-- **Database**: MongoDB (via Motor async driver)
-- **Trading Engine**: Single-process async Python with StateManager + EventBus
-- **Execution**: Dual-adapter system (PaperAdapter + LiveAdapter via py-clob-client)
+- **Frontend**: React SPA, zustand, single global WebSocket, dark-mode terminal
+- **Backend**: FastAPI async Python, MongoDB
+- **Execution**: Dual adapter — PaperAdapter (default) + LiveAdapter (py-clob-client)
 
-## What's Been Implemented
+## Implemented Phases
 
-### Phase 1-3 — Backend Foundation
-- Engine skeleton, market data feeds, arbitrage strategy. Testing: 96%+
-
-### Phase 4 — Frontend Dashboard (AUDITED)
-- 7-page dark-mode trading terminal. Testing: 49/49 (100%)
-
+### Phase 1-3 — Engine, Feeds, Arb Strategy
+### Phase 4 — Dashboard (AUDITED)
 ### Phase 5A — Crypto Sniper Strategy (AUDITED)
-- Simplified Black-Scholes pricing, 5-stage scan loop. Testing: 41/42 (97.6%)
-
-### Phase 5B — Crypto Sniper Dashboard
-- Sniper page: 6 stat cards, 4 tabs. Testing: 38/38 (100%)
-
-### P&L Equity Curve + Trade Ticker
-- GET /api/analytics/pnl-history, recharts AreaChart, horizontal scrolling trade tape. Testing: 46/46 (100%)
-
+### Phase 5B — Sniper Dashboard
+### P&L Curve + Trade Ticker
 ### Phase 6 — Telegram Alerts
-- Async fire-and-forget notifications via EventBus. Testing: 22/22 (100%)
+### Phase 7 — Config Persistence (MongoDB)
 
-### Phase 7 — Configuration Persistence
-- MongoDB configs collection, single-document upsert, survives restarts. Testing: 32/32 (100%)
+### Phase 8 — Live Polymarket Execution Adapter
+- py-clob-client v0.34.6, asyncio.to_thread wrapper
+- 5 safety layers, conservative LIVE_DEFAULTS
 
-### Phase 8 — Live Polymarket Execution Adapter (2026-03-13)
-- **File**: `engine/live_adapter.py` — wraps `py-clob-client` v0.34.6
-- **Authentication**: Private key + optional API creds (derive from key if not set)
-- **Execution**: `asyncio.to_thread` for non-blocking CLOB calls
-- **Modes**: paper (default), shadow (paper + live logging), live (real money)
-- **Safety**:
-  - Live mode requires POLYMARKET_PRIVATE_KEY set
-  - Kill switch blocks live mode switch
-  - Preflight checks: mode verification, auth check, kill switch, order size cap
-  - Conservative LIVE_DEFAULTS auto-applied on live switch: max_order=2, max_position=5, max_exposure=20, max_positions=3, max_daily_loss=10
-  - Falls back to paper if live adapter not authenticated
-- **API**: GET /api/execution/mode, POST /api/execution/mode, GET /api/execution/status
-- **Frontend**: Execution Mode section with mode buttons, Credentials & Adapters status
-- Testing: **41/41 (100%)**
+### Phase 8A — Live Execution Hardening (2026-03-13)
+- **Order Lifecycle**: submitted → open → partially_filled → filled / cancelled / expired
+- **Partial Fill Handling**: Tracks filled_size vs requested_size. Positions/PnL update on actual fill delta only. Never treats partial as complete.
+- **Persistence**: `live_orders` MongoDB collection stores LiveOrderRecord docs (order_id, exchange_order_id, strategy_id, token_id, side, requested_size, filled_size, remaining_size, avg_fill_price, status, timestamps)
+- **Background Polling**: 5s interval checks open/partial orders via CLOB get_order()
+- **Wallet Endpoint**: GET /api/execution/wallet — balance, auth status, warnings
+- **Live Orders Endpoint**: GET /api/execution/orders — recent live order records
+- **Health**: open_orders, partial_orders, last_api_call, last_status_refresh, recent_errors
+- **TopBar**: Mode color coding (paper=zinc, shadow=amber, live=red+pulse), wallet widget
+- Testing: **47/47 (100%)**
 
-## Environment Variables
+## Live Order Lifecycle States
 ```
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=test_database
-POLYMARKET_PRIVATE_KEY=      # Required for live trading
-POLYMARKET_API_KEY=           # Optional (derived from key if empty)
-POLYMARKET_API_SECRET=        # Optional
-POLYMARKET_PASSPHRASE=        # Optional
-POLYMARKET_FUNDER_ADDRESS=    # Optional (for proxy/email accounts)
-TELEGRAM_BOT_TOKEN=           # For alerts
-TELEGRAM_CHAT_ID=             # For alerts
-TRADING_MODE=paper
+submitted  → Order sent to CLOB, awaiting match
+open       → Order live on book, not yet matched
+partially_filled → Some shares matched, order still active
+filled     → All shares matched, order complete
+cancelled  → Order cancelled (by user or system)
+rejected   → Order rejected (preflight/risk/CLOB error)
+expired    → Order expired on CLOB
 ```
 
-## Safety Checklist Before Real Money
+## Safety Protections for Live Trading
+1. POLYMARKET_PRIVATE_KEY must be set (hard requirement)
+2. Kill switch blocks mode switch to live
+3. Preflight checks on every order: auth, mode, kill switch, size cap
+4. Conservative LIVE_DEFAULTS: max_order=2, max_position=5, max_exposure=20
+5. Risk engine gates ALL orders (never bypassed)
+6. Partial fills tracked — never silently treated as complete
+7. Paper fallback if live adapter loses authentication
+8. Recent errors tracked and surfaced in health
+
+## Pre-Launch Checklist
 1. Set POLYMARKET_PRIVATE_KEY in backend .env
-2. Fund the wallet with USDC on Polygon
-3. Verify live adapter authenticates: GET /api/execution/status → authenticated=true
-4. Start with SHADOW mode first to validate signal quality
-5. Switch to LIVE only after verifying shadow logs look correct
-6. Keep kill switch accessible — activate at first sign of issues
-7. Monitor Telegram alerts for trade confirmations
-8. Start with minimum sizes (LIVE_DEFAULTS enforced automatically)
+2. Fund wallet with USDC on Polygon
+3. Verify GET /api/execution/status → authenticated=true
+4. Verify GET /api/execution/wallet → balance_usdc > 0
+5. Run in SHADOW mode first (validate signals)
+6. Switch to LIVE only after shadow validation
+7. Monitor Telegram + dashboard for fills
+8. Keep kill switch accessible
+
+## Still Missing Before Real Money
+- Full CLOB WebSocket fill notifications (currently polling)
+- Cancel order endpoint (manual intervention)
+- Slippage protection (market vs limit)
+- Multi-wallet support
 
 ## Prioritized Backlog
 ### P1 — Rich Analytics
 - Historical performance, Sharpe ratio, strategy comparison, market heatmap
 
 ### P2 — Future
-- Copy trading skeleton, multi-user support, order fill tracking (partial fills)
+- Copy trading skeleton, cancel order endpoint, CLOB WebSocket fills
