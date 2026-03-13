@@ -98,6 +98,23 @@ expired          → Expired on CLOB
 - Bulk fetch with rate limiting (5 req/sec)
 - **27/27 tests passed**: `/app/backend/tests/test_phase10_weather_feeds.py`
 
+### Step 5 — Weather Trader Strategy (Complete, 2026-03-13)
+- `weather_trader.py`: WeatherTrader(BaseStrategy) with 5-stage scan loop
+- Classification from StateManager markets (multi-outcome weather detection)
+- Forecast ingestion via WeatherFeedManager (Stage 2)
+- Bucket probability modeling via pricing engine (Stage 3)
+- EV evaluation + multi-filter pipeline (Stage 4): edge, liquidity, confidence, lead time, sigma, freshness, cooldown, kill switch, concurrency
+- Execution via RiskEngine → ExecutionEngine → fill tracking via EventBus
+- Full metrics tracking: scans, classifications, forecasts, rejections by reason, executions, fills
+- **21/21 tests passed**: `/app/backend/tests/test_phase10_weather_trader.py`
+
+### Step 6 — Server Integration (Complete, 2026-03-13)
+- Strategy registration in engine startup (`server.py`)
+- Config persistence: `build_snapshot` / `apply_to_engine` in ConfigService
+- Granular config update via `PUT /api/config` for `weather_trader`
+- 7 API endpoints: signals, executions, health, config, forecasts, stations, inject-test
+- **7/7 API tests passed**: `/app/backend/tests/test_phase10_weather_api.py`
+
 ## Prioritized Backlog
 ### P1 — Phase 10 Implementation
 - Weather strategy models, pricing, feeds, trader, server integration, dashboard

@@ -20,6 +20,7 @@ from engine.market_data import MarketDataFeed
 from engine.price_feeds import PriceFeedManager
 from engine.strategies.arb_scanner import ArbScanner
 from engine.strategies.crypto_sniper import CryptoSniper
+from engine.strategies.weather_trader import WeatherTrader
 from services.persistence import PersistenceService
 from services.telegram_notifier import TelegramNotifier
 from services.config_service import ConfigService
@@ -46,6 +47,7 @@ bus: Optional[EventBus] = None
 engine: Optional[TradingEngine] = None
 arb_scanner_ref: Optional[ArbScanner] = None
 crypto_sniper_ref: Optional[CryptoSniper] = None
+weather_trader_ref: Optional[WeatherTrader] = None
 telegram_notifier: Optional[TelegramNotifier] = None
 config_service: Optional[ConfigService] = None
 live_order_service: Optional[LiveOrderService] = None
@@ -75,7 +77,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, config_service, live_order_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -98,6 +100,12 @@ async def lifespan(app: FastAPI):
     state.strategies["crypto_sniper"].enabled = True
     crypto_sniper_ref = sniper
 
+    # Phase 10: register weather trader strategy (enabled by default)
+    weather = WeatherTrader()
+    engine.register_strategy(weather)
+    state.strategies["weather_trader"].enabled = True
+    weather_trader_ref = weather
+
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
     telegram_notifier.configure(enabled=False, signals_enabled=False)
@@ -107,11 +115,11 @@ async def lifespan(app: FastAPI):
     config_service = ConfigService(db)
     persisted = await config_service.load()
     if persisted:
-        config_service.apply_to_engine(persisted, state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        config_service.apply_to_engine(persisted, state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
         logger.info("Persisted configuration applied")
     else:
         # Save defaults on first boot
-        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
         await config_service.save(snapshot)
         logger.info("Default configuration persisted")
 
@@ -143,7 +151,7 @@ async def lifespan(app: FastAPI):
     # Shutdown — persist config before stopping
     if config_service and state:
         try:
-            snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+            snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
             await config_service.save(snapshot)
         except Exception as e:
             logger.error(f"Config persist on shutdown error: {e}")
@@ -222,6 +230,7 @@ async def get_config():
         "strategy_configs": {
             "arb_scanner": arb_scanner_ref.config.model_dump() if arb_scanner_ref else {},
             "crypto_sniper": crypto_sniper_ref.config.model_dump() if crypto_sniper_ref else {},
+            "weather_trader": weather_trader_ref.config.model_dump() if weather_trader_ref else {},
         },
         "credentials_present": {
             "polymarket": bool(os.environ.get("POLYMARKET_PRIVATE_KEY")),
@@ -249,6 +258,11 @@ async def get_strategy_configs():
             "enabled": state.strategies.get("crypto_sniper") and state.strategies["crypto_sniper"].enabled,
             **crypto_sniper_ref.config.model_dump(),
         }
+    if weather_trader_ref:
+        result["weather_trader"] = {
+            "enabled": state.strategies.get("weather_trader") and state.strategies["weather_trader"].enabled,
+            **weather_trader_ref.config.model_dump(),
+        }
     return result
 
 
@@ -269,7 +283,7 @@ async def update_config(body: ConfigUpdateRequest):
 
     # Persist to MongoDB
     if config_service:
-        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
         await config_service.save(snapshot)
 
     return {"status": "updated", "persisted": True}
@@ -343,9 +357,24 @@ async def update_config_granular(body: dict):
                         raise HTTPException(400, f"Invalid sniper config: {e}")
                 changes["crypto_sniper"] = "updated"
 
+            elif strat_id == "weather_trader" and weather_trader_ref:
+                enabled = params.pop("enabled", None)
+                if enabled is not None and "weather_trader" in state.strategies:
+                    state.strategies["weather_trader"].enabled = bool(enabled)
+                if params:
+                    try:
+                        from engine.strategies.weather_models import WeatherConfig
+                        known = set(WeatherConfig.model_fields.keys())
+                        filtered = {k: v for k, v in params.items() if k in known}
+                        merged = {**weather_trader_ref.config.model_dump(), **filtered}
+                        weather_trader_ref.config = WeatherConfig(**merged)
+                    except Exception as e:
+                        raise HTTPException(400, f"Invalid weather config: {e}")
+                changes["weather_trader"] = "updated"
+
     # Persist
     if config_service:
-        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
         await config_service.save(snapshot)
 
     return {"status": "updated", "changes": changes, "persisted": True}
@@ -423,7 +452,7 @@ async def set_execution_mode(body: dict):
 
     # Persist
     if config_service:
-        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref)
+        snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
         await config_service.save(snapshot)
 
     return {
@@ -652,6 +681,114 @@ async def get_sniper_health():
     if not crypto_sniper_ref:
         raise HTTPException(500, "Crypto sniper not initialized")
     return crypto_sniper_ref.get_health()
+
+
+# ---- Phase 10: Weather Strategy Endpoints ----
+
+@api_router.get("/strategies/weather/signals")
+async def get_weather_signals(limit: int = 50):
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    sigs = weather_trader_ref.get_signals(limit=limit)
+    tradable = [s for s in sigs if s.get("is_tradable")]
+    rejected = [s for s in sigs if not s.get("is_tradable")]
+    return {
+        "tradable": tradable,
+        "rejected": rejected[:limit],
+        "total_tradable": len(tradable),
+        "total_rejected": len(rejected),
+    }
+
+
+@api_router.get("/strategies/weather/executions")
+async def get_weather_executions():
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    return {
+        "active": weather_trader_ref.get_active_executions(),
+        "completed": weather_trader_ref.get_completed_executions(limit=50),
+    }
+
+
+@api_router.get("/strategies/weather/health")
+async def get_weather_health():
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    return weather_trader_ref.get_health()
+
+
+@api_router.get("/strategies/weather/config")
+async def get_weather_config():
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    return {
+        "enabled": state.strategies.get("weather_trader") and state.strategies["weather_trader"].enabled,
+        **weather_trader_ref.config.model_dump(),
+    }
+
+
+@api_router.get("/strategies/weather/forecasts")
+async def get_weather_forecasts():
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    return weather_trader_ref.get_forecasts()
+
+
+@api_router.get("/strategies/weather/stations")
+async def get_weather_stations():
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    return weather_trader_ref.get_stations()
+
+
+@api_router.post("/test/inject-weather-market")
+async def test_inject_weather_market():
+    """Inject a synthetic NYC weather market for testing the weather pipeline."""
+    if not engine or not engine.is_running:
+        raise HTTPException(400, "Engine must be running")
+
+    from models import MarketSnapshot
+    from datetime import datetime, timezone, timedelta
+    import uuid
+
+    uid = uuid.uuid4().hex[:8]
+    condition_id = f"test-weather-{uid}"
+
+    # Build a 5-bucket NYC market for tomorrow
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%B %d, %Y")
+    question = f"Highest temperature in NYC on {tomorrow}?"
+
+    bucket_defs = [
+        ("40F or below", 0.05),
+        ("41-42F", 0.12),
+        ("43-44F", 0.30),
+        ("45-46F", 0.33),
+        ("47F or higher", 0.20),
+    ]
+
+    token_ids = []
+    for i, (label, price) in enumerate(bucket_defs):
+        tid = f"test-weather-{uid}-{i}"
+        token_ids.append(tid)
+        state.update_market(tid, MarketSnapshot(
+            token_id=tid,
+            condition_id=condition_id,
+            question=question,
+            outcome=label,
+            mid_price=price,
+            last_price=price,
+            volume_24h=5000,
+            liquidity=500,
+        ))
+
+    return {
+        "status": "injected",
+        "condition_id": condition_id,
+        "question": question,
+        "buckets": [{"token_id": tid, "label": bd[0], "price": bd[1]}
+                    for tid, bd in zip(token_ids, bucket_defs)],
+        "note": "Weather trader will detect on next classification refresh (~5min) then evaluate. Use GET /api/strategies/weather/health to monitor.",
+    }
 
 
 @api_router.post("/test/inject-crypto-market")

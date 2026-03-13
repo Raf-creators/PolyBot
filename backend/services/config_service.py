@@ -60,7 +60,7 @@ class ConfigService:
     def cached(self) -> Dict[str, Any]:
         return self._cache
 
-    def build_snapshot(self, state, telegram_notifier, arb_ref, sniper_ref) -> Dict[str, Any]:
+    def build_snapshot(self, state, telegram_notifier, arb_ref, sniper_ref, weather_ref=None) -> Dict[str, Any]:
         """Build a full config snapshot from current in-memory state."""
         snapshot = {
             "trading_mode": state.trading_mode.value,
@@ -80,10 +80,15 @@ class ConfigService:
                 "enabled": state.strategies.get("crypto_sniper", None) and state.strategies["crypto_sniper"].enabled,
                 **sniper_ref.config.model_dump(),
             }
+        if weather_ref:
+            snapshot["strategies"]["weather_trader"] = {
+                "enabled": state.strategies.get("weather_trader", None) and state.strategies["weather_trader"].enabled,
+                **weather_ref.config.model_dump(),
+            }
 
         return snapshot
 
-    def apply_to_engine(self, config, state, telegram_notifier, arb_ref, sniper_ref):
+    def apply_to_engine(self, config, state, telegram_notifier, arb_ref, sniper_ref, weather_ref=None):
         """Apply a loaded config dict to the live engine state."""
         from models import TradingMode, RiskConfig
 
@@ -123,7 +128,6 @@ class ConfigService:
                 state.strategies["arb_scanner"].enabled = enabled
             try:
                 from engine.strategies.arb_models import ArbConfig
-                # Only pass known fields
                 known = set(ArbConfig.model_fields.keys())
                 filtered = {k: v for k, v in arb_data.items() if k in known}
                 arb_ref.config = ArbConfig(**{**arb_ref.config.model_dump(), **filtered})
@@ -142,5 +146,18 @@ class ConfigService:
                 sniper_ref.config = SniperConfig(**{**sniper_ref.config.model_dump(), **filtered})
             except Exception as e:
                 logger.warning(f"Failed to apply sniper config: {e}")
+
+        if weather_ref and "weather_trader" in strats:
+            weather_data = strats["weather_trader"]
+            enabled = weather_data.pop("enabled", None)
+            if enabled is not None and "weather_trader" in state.strategies:
+                state.strategies["weather_trader"].enabled = enabled
+            try:
+                from engine.strategies.weather_models import WeatherConfig
+                known = set(WeatherConfig.model_fields.keys())
+                filtered = {k: v for k, v in weather_data.items() if k in known}
+                weather_ref.config = WeatherConfig(**{**weather_ref.config.model_dump(), **filtered})
+            except Exception as e:
+                logger.warning(f"Failed to apply weather config: {e}")
 
         logger.info("Configuration applied to engine")
