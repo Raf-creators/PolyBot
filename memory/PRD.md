@@ -62,7 +62,14 @@ expired          → Expired on CLOB
 - Rate limit awareness for CLOB API
 - Manual order entry (for ad-hoc trades)
 
+## Phase 10 — Weather Trading Strategy (Architecture Complete, 2026-03-13)
+- Full architecture designed: `/app/memory/PHASE10_WEATHER_ARCHITECTURE.md`
+- Implementation pending user approval
+
 ## Prioritized Backlog
+### P1 — Phase 10 Implementation
+- Weather strategy models, pricing, feeds, trader, server integration, dashboard
+
 ### P2 — Future
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
