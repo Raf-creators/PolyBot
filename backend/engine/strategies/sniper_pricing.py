@@ -48,7 +48,10 @@ def compute_fair_probability(
         # Near-zero denominator: if S > K → ~1.0, else ~0.0
         p = 1.0 if spot > strike else 0.0
     else:
-        drift = momentum_weight * momentum * tau
+        # Momentum is a fractional return (same scale as ln(S/K)),
+        # so it's added directly to the numerator — NOT scaled by tau,
+        # which would make it negligible at short horizons.
+        drift = momentum_weight * momentum
         d2 = (math.log(spot / strike) + drift) / sigma_sqrt_tau
         p = normal_cdf(d2)
 

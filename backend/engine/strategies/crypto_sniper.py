@@ -32,6 +32,7 @@ from engine.strategies.sniper_pricing import (
     compute_fair_probability, compute_realized_volatility,
     compute_momentum, compute_signal_confidence, compute_edge_bps,
 )
+from engine.strategies.arb_pricing import compute_data_age
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +475,6 @@ class CryptoSniper(BaseStrategy):
             return None
 
         # Market freshness
-        from engine.strategies.arb_pricing import compute_data_age
         data_age = max(compute_data_age(yes_snap.updated_at), compute_data_age(no_snap.updated_at))
         if data_age > self.config.max_stale_age_seconds:
             return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, 0,

@@ -34,7 +34,7 @@ class SniperConfig(BaseModel):
 
     # Momentum
     momentum_lookback_seconds: float = 300.0
-    momentum_weight: float = 0.3
+    momentum_weight: float = 0.05
 
     # Sizing
     default_size: float = 3.0
