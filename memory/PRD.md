@@ -35,10 +35,17 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - **Audit fixes**: (1) Momentum drift formula (critical), (2) Hot-path import moved to module level
 - **Testing**: 41/42 (97.6%, 1 skipped = warm-up time). Full pipeline manually verified.
 
-## Prioritized Backlog
-
-### P1 — Phase 5B
+### Phase 5B — Crypto Sniper Dashboard (2026-03-13) ✅ TESTED
 - Dashboard page/tab for Crypto Sniper (signals, executions, vol display, health metrics)
+- 6 stat cards, 4 tabs (Signals, Rejected, Executions, Health). Testing: 38/38 (100%)
+
+### P&L Equity Curve (2026-03-13) ✅ TESTED
+- **Backend**: `GET /api/analytics/pnl-history` — cumulative P&L time series from trade history with peak/trough/drawdown metrics
+- **Frontend**: `PnlChart.jsx` — recharts AreaChart with gradient fill, custom dark tooltip, reference line at y=0
+- Empty state shows guidance message; populated state shows green/red equity curve with header metrics (Peak, Trough, DD, Current P&L)
+- Testing: 25/25 (100%)
+
+## Prioritized Backlog
 
 ### P2 — Phase 6
 - Telegram alerts, rich analytics, config persistence, copy trading skeleton
