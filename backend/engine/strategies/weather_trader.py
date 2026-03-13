@@ -29,7 +29,7 @@ from engine.strategies.weather_models import (
     SigmaCalibration, StationType,
 )
 from engine.strategies.weather_parser import (
-    STATION_REGISTRY, classify_weather_market,
+    STATION_REGISTRY, classify_weather_market, classify_binary_weather_markets,
 )
 from engine.strategies.weather_pricing import (
     calibrate_sigma, compute_all_bucket_probabilities,
@@ -37,6 +37,9 @@ from engine.strategies.weather_pricing import (
     kelly_size, get_season,
 )
 from engine.strategies.weather_feeds import WeatherFeedManager
+
+# Import at module level to avoid repeated import in hot loop
+from engine.strategies.arb_pricing import compute_data_age
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +139,7 @@ class WeatherTrader(BaseStrategy):
             t0 = time.monotonic()
             try:
                 # Stage 1: Refresh classifications if stale
-                self._maybe_refresh_classifications()
+                await self._maybe_refresh_classifications()
 
                 # Stage 2: Fetch forecasts for classified stations
                 await self._refresh_forecasts()
@@ -165,24 +168,30 @@ class WeatherTrader(BaseStrategy):
 
     # ---- Stage 1: Classification ----
 
-    def _maybe_refresh_classifications(self):
+    async def _maybe_refresh_classifications(self):
         now = time.monotonic()
-        market_count = len(self._state.markets)
         needs_refresh = (
             now - self._last_classification_time >= self.config.classification_refresh_interval
-            or market_count != self._last_market_count
         )
         if not needs_refresh:
             return
 
-        self._classified = self._classify_markets()
+        self._classified = await self._classify_markets()
         self._last_classification_time = now
-        self._last_market_count = market_count
         self._m["markets_classified"] = len(self._classified)
 
-    def _classify_markets(self) -> Dict[str, WeatherMarketClassification]:
-        """Scan all markets and find multi-outcome weather temperature markets."""
-        # Group all tokens by condition_id
+    async def _classify_markets(self) -> Dict[str, WeatherMarketClassification]:
+        """Discover and classify weather temperature markets.
+
+        Uses two strategies:
+          1. Scan StateManager for multi-outcome weather markets (original path)
+          2. Discover weather events from Gamma API (real Polymarket structure:
+             each bucket is a separate binary Yes/No market grouped by event)
+        """
+        results = {}
+        fail_reasons = {}
+
+        # --- Strategy 1: Scan StateManager (works for injected test markets) ---
         by_condition: Dict[str, List] = {}
         for snap in self._state.markets.values():
             cid = snap.condition_id
@@ -192,33 +201,53 @@ class WeatherTrader(BaseStrategy):
                 by_condition[cid] = []
             by_condition[cid].append(snap)
 
-        results = {}
-        fail_reasons = {}
-
         for cid, snaps in by_condition.items():
-            # Need at least 3 outcomes for a temperature bucket market
             if len(snaps) < 3:
                 continue
-
-            # Extract question from first snap
             question = snaps[0].question
             if not question:
                 continue
-
             outcomes = [s.outcome or "" for s in snaps]
             token_ids = [s.token_id for s in snaps]
-
             classification, reason = classify_weather_market(
-                question=question,
-                condition_id=cid,
-                outcomes=outcomes,
-                token_ids=token_ids,
+                question=question, condition_id=cid,
+                outcomes=outcomes, token_ids=token_ids,
             )
-
             if classification:
                 results[cid] = classification
             elif reason:
                 fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
+
+        # --- Strategy 2: Gamma API event discovery (real Polymarket) ---
+        try:
+            cities = [s.city for s in STATION_REGISTRY.values()]
+            raw_markets = await self._feed.discover_weather_events(cities, days_ahead=5)
+            if raw_markets:
+                # Inject discovered markets into state for pricing
+                from models import MarketSnapshot
+                for m in raw_markets:
+                    if m["yes_token_id"] and m["yes_token_id"] not in self._state.markets:
+                        self._state.update_market(m["yes_token_id"], MarketSnapshot(
+                            token_id=m["yes_token_id"],
+                            condition_id=m["condition_id"],
+                            question=m["question"],
+                            outcome="Yes",
+                            mid_price=m["mid_price"],
+                            last_price=m["mid_price"],
+                            volume_24h=0,
+                            liquidity=m.get("liquidity", 0),
+                        ))
+
+                classifications, cls_errors = classify_binary_weather_markets(raw_markets)
+                for cm in classifications:
+                    if cm.condition_id not in results:
+                        results[cm.condition_id] = cm
+                for err in cls_errors:
+                    fail_reasons[err] = fail_reasons.get(err, 0) + 1
+                self._m["gamma_events_discovered"] = len(raw_markets)
+        except Exception as e:
+            logger.warning(f"Gamma event discovery error: {e}")
+            self._m["gamma_discovery_error"] = str(e)
 
         self._m["classification_failures"] = sum(fail_reasons.values())
         self._m["classification_failure_reasons"] = fail_reasons
@@ -360,7 +389,6 @@ class WeatherTrader(BaseStrategy):
             edge_bps = compute_edge_bps(prob, market_price)
 
             # --- Market freshness ---
-            from engine.strategies.arb_pricing import compute_data_age
             data_age = compute_data_age(snap.updated_at)
             if data_age > self.config.max_stale_market_seconds:
                 signals.append(self._reject_signal(

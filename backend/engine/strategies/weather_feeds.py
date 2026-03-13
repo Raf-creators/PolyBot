@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 NWS_API_BASE = "https://api.weather.gov"
+GAMMA_API_EVENTS = "https://gamma-api.polymarket.com/events"
 
 # ---- Cache Entry ----
 
@@ -195,6 +196,90 @@ class WeatherFeedManager:
             await asyncio.sleep(0.2)  # rate-limit: 5 req/sec
 
         return results
+
+    async def discover_weather_events(self, cities: List[str], days_ahead: int = 5) -> List[dict]:
+        """Discover active Polymarket weather temperature events via Gamma API.
+
+        Searches for events matching "highest-temperature-in-{city}" slugs.
+        Returns raw market dicts ready for classify_binary_weather_markets.
+        """
+        if not self._session:
+            return []
+
+        all_markets = []
+        from datetime import datetime, timezone
+
+        city_slug_map = {
+            "New York City": "nyc",
+            "Chicago": "chicago",
+            "Los Angeles": "los-angeles",
+            "Atlanta": "atlanta",
+            "Dallas": "dallas",
+            "Miami": "miami",
+            "Denver": "denver",
+            "San Francisco": "san-francisco",
+        }
+
+        today = datetime.now(timezone.utc).date()
+
+        for city_name in cities:
+            city_slug = city_slug_map.get(city_name)
+            if not city_slug:
+                continue
+
+            for day_offset in range(0, days_ahead + 1):
+                target = today + timedelta(days=day_offset)
+                month_name = target.strftime("%B").lower()
+                day_num = target.day
+                year = target.year
+                slug = f"highest-temperature-in-{city_slug}-on-{month_name}-{day_num}-{year}"
+
+                try:
+                    async with self._session.get(
+                        GAMMA_API_EVENTS,
+                        params={"slug": slug},
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        events = await resp.json()
+
+                    for event in events:
+                        for m in event.get("markets", []):
+                            clob_ids = m.get("clobTokenIds", "")
+                            if isinstance(clob_ids, str):
+                                import json as _json
+                                try:
+                                    clob_ids = _json.loads(clob_ids)
+                                except (ValueError, TypeError):
+                                    clob_ids = []
+
+                            outcome_prices = m.get("outcomePrices", "")
+                            if isinstance(outcome_prices, str):
+                                import json as _json
+                                try:
+                                    outcome_prices = _json.loads(outcome_prices)
+                                except (ValueError, TypeError):
+                                    outcome_prices = []
+
+                            yes_token = clob_ids[0] if len(clob_ids) > 0 else ""
+                            yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0
+
+                            all_markets.append({
+                                "question": m.get("question", ""),
+                                "condition_id": m.get("conditionId", ""),
+                                "yes_token_id": yes_token,
+                                "mid_price": yes_price,
+                                "liquidity": float(m.get("liquidity", 0)),
+                            })
+
+                except Exception as e:
+                    logger.debug(f"Weather event discovery error for {slug}: {e}")
+                    continue
+
+                await asyncio.sleep(0.15)  # rate limit
+
+        self._health["weather_events_discovered"] = len(all_markets)
+        return all_markets
 
     def get_cached_forecast(self, station_id: str, target_date: str) -> Optional[ForecastSnapshot]:
         """Return cached forecast without any network call. Returns None if not cached or stale."""
