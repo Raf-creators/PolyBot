@@ -10,72 +10,63 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - **Trading Engine**: Single-process async Python with StateManager + EventBus
 - **Hot/Cold Path Separation**: Trading logic in-memory, dashboard reads via snapshots
 
-## User Personas
-- **Quant Trader**: Configures strategies, monitors P&L, manages risk
-- **System Operator**: Monitors health, manages kill switch, reviews logs
-
-## Core Requirements
-- Structural arbitrage on binary Polymarket markets
-- Fast crypto market trading (BTC/ETH 5m/15m)
-- Paper / Shadow / Live trading modes
-- Risk engine with kill switch, position limits, daily loss limits
-- Professional dark-mode dashboard (6 pages)
-- Telegram alerts (credentials-ready)
-- Polymarket CLOB integration via py-clob-client SDK
-- Binance WebSocket for spot price feeds
-
 ## What's Been Implemented
 
-### Phase 1 — Backend Skeleton & Engine Scaffolding (2026-03-10)
-- `models.py`: All Pydantic models (enums, data models, config, events, API models)
-- `engine/state.py`: StateManager — single source of truth, pub/sub, snapshot for dashboard
-- `engine/events.py`: EventBus — asyncio.Queue-backed, typed channels, handler registration
-- `engine/core.py`: TradingEngine — orchestrator, component lifecycle management
-- `engine/risk.py`: RiskEngine — order validation, kill switch, limit enforcement
-- `engine/execution.py`: ExecutionEngine — order routing to paper/live adapters
-- `engine/paper.py`: PaperAdapter — simulated fills for paper mode
-- `engine/strategies/base.py`: BaseStrategy ABC
-- `server.py`: FastAPI with 15+ endpoints
-- **Testing**: 23/23 backend tests passed (100%)
+### Phase 1 — Backend Skeleton (2026-03-10) ✅
+- Pydantic models, StateManager, EventBus, TradingEngine, RiskEngine, ExecutionEngine, PaperAdapter
+- 15+ API endpoints, MongoDB persistence
+- Testing: 23/23 (100%)
 
-### Phase 2 — Market Data & Feeds (2026-03-10)
-- `engine/market_data.py`: Gamma API discovery + CLOB midpoint refresh
-- `engine/price_feeds.py`: Binance WS with auto-reconnect + staleness monitor
-- `services/persistence.py`: 10s flush interval, off the hot path
-- `server.py`: WebSocket hub (2s broadcast), /api/markets/summary, /api/health/feeds
-- **Testing**: 17/17 tests passed (100%)
+### Phase 2 — Market Data & Feeds (2026-03-10) ✅
+- Polymarket Gamma API + CLOB midpoint, Binance WS BTC/ETH, persistence service
+- Testing: 17/17 (100%)
 
-### Phase 3 — Arbitrage Strategy (2026-03-10)
-- `engine/strategies/arb_scanner.py`: Binary complement arb scanner
-- `engine/strategies/arb_models.py`: ArbConfig, ArbOpportunity, ArbExecution
-- `engine/strategies/arb_pricing.py`: Pricing models (fees, slippage, execution penalty, confidence)
-- **Testing**: 31/32 tests passed (96.9%)
+### Phase 3 — Arbitrage Strategy (2026-03-10) ✅
+- ArbScanner with complement arb detection, pricing models, paper execution
+- Testing: 31/32 (96.9%)
 
-### Phase 4 — Frontend Dashboard (2026-03-11) ✅ COMPLETED + AUDITED
-- **Architecture**: Single global WS, zustand store, REST hydration, selector subscriptions
-- **Layout**: AppShell, Sidebar (6 nav links + WS indicator), TopBar (engine controls)
-- **Shared Components**: StatCard, SectionCard, DataTable (sortable), EmptyState, HealthBadge
-- **Pages**: Overview, Arbitrage (4 tabs), Positions (3 tabs), Risk (kill switch + gauges), Markets (search), Settings (config forms)
-- **Design**: Dark terminal theme (Inter + JetBrains Mono), custom scrollbars
-- **Testing**: 23/23 backend + 26/26 frontend (100%)
-- **Audit (2026-03-11)**: All 10 audit points passed. Fixed: useApi store subscription bug (critical), StatCard PnL coloring (important), unused imports (low). Zero backend changes.
+### Phase 4 — Frontend Dashboard (2026-03-11) ✅ AUDITED
+- 6 pages: Overview, Arbitrage, Positions, Risk, Markets, Settings
+- Single global WebSocket, zustand store, shared components
+- Audit: 3 fixes (useApi store subscription, StatCard coloring, unused imports)
+- Testing: 23/23 backend + 26/26 frontend (100%)
 
-## Frontend Structure
-```
-src/
-  state/dashboardStore.js          — zustand central store
-  hooks/useWebSocket.js            — single global WS
-  hooks/useApi.js                  — REST helpers (stable selector refs)
-  utils/formatters.js, constants.js
-  components/AppShell, Sidebar, TopBar, StatCard, SectionCard, DataTable, EmptyState, HealthBadge
-  pages/Overview, Arbitrage, Positions, Risk, Markets, Settings
-```
+### Phase 5A — Crypto Sniper Strategy (2026-03-13) ✅
+- **New files**: sniper_models.py, sniper_pricing.py, crypto_sniper.py
+- **Models**: SniperConfig, CryptoMarketClassification, SniperSignal, SniperExecution
+- **Pricing**: Lightweight Black-Scholes digital option via math.erf (no scipy)
+  - compute_fair_probability, compute_realized_volatility, compute_momentum, compute_signal_confidence
+- **Strategy**: 5-stage scan loop (sample → classify → evaluate → filter → execute)
+  - Classification cache refreshed every 30s, not per scan
+  - Ring buffer price history (deque) for vol estimation
+  - Pre-computed vol + momentum per asset (not per market)
+  - 12-step filter chain with bucketed rejection reasons
+  - Full execution lifecycle: signal → risk check → order → fill tracking
+- **API**: 4 new endpoints (signals, executions, health, test-inject)
+- **Performance**: 0.87ms per scan cycle
+- **Testing**: 41/42 (97.6%), full pipeline manually verified (inject → classify → signal → execute → fill)
+
+## API Endpoints
+### Core
+- GET /api/, /api/health, /api/status, /api/config
+- PUT /api/config
+- POST /api/engine/start, /api/engine/stop
+- POST /api/risk/kill-switch/activate, /api/risk/kill-switch/deactivate
+- GET /api/positions, /api/orders, /api/trades, /api/markets, /api/markets/summary
+- GET /api/health/feeds
+- WS /api/ws
+
+### Arb Scanner
+- GET /api/strategies/arb/opportunities, /api/strategies/arb/executions, /api/strategies/arb/health
+
+### Crypto Sniper (Phase 5A)
+- GET /api/strategies/sniper/signals, /api/strategies/sniper/executions, /api/strategies/sniper/health
+- POST /api/test/inject-crypto-market
 
 ## Prioritized Backlog
 
-### P1 — Phase 5
-- Crypto sniper strategy (BTC/ETH 5m/15m)
-- Fair value calculation from spot feeds
+### P1 — Phase 5B
+- Dashboard page/tab for Crypto Sniper (signals, executions, vol display, health metrics)
 
 ### P2 — Phase 6
 - Telegram alerts
