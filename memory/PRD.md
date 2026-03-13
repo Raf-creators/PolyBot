@@ -29,23 +29,39 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 - **Files**: sniper_models.py, sniper_pricing.py, crypto_sniper.py
 - **Math model**: Simplified Black-Scholes digital via math.erf (no scipy)
 - **Strategy**: 5-stage scan loop (sample→classify→evaluate→filter→execute)
-- **Classification**: Regex with cache refresh every 30s, 6 rejection reason categories
-- **Filters**: 14-step chain (spot/market freshness, TTE, vol, liquidity, spread, edge, confidence, kill switch, concurrency, cooldown)
-- **Performance**: 0.87ms/scan cycle, ring buffer price history, pre-computed vol/momentum per asset
 - **Audit fixes**: (1) Momentum drift formula (critical), (2) Hot-path import moved to module level
-- **Testing**: 41/42 (97.6%, 1 skipped = warm-up time). Full pipeline manually verified.
+- **Testing**: 41/42 (97.6%)
 
 ### Phase 5B — Crypto Sniper Dashboard (2026-03-13) ✅ TESTED
 - Dashboard page/tab for Crypto Sniper (signals, executions, vol display, health metrics)
 - 6 stat cards, 4 tabs (Signals, Rejected, Executions, Health). Testing: 38/38 (100%)
 
 ### P&L Equity Curve (2026-03-13) ✅ TESTED
-- **Backend**: `GET /api/analytics/pnl-history` — cumulative P&L time series from trade history with peak/trough/drawdown metrics
-- **Frontend**: `PnlChart.jsx` — recharts AreaChart with gradient fill, custom dark tooltip, reference line at y=0
-- Empty state shows guidance message; populated state shows green/red equity curve with header metrics (Peak, Trough, DD, Current P&L)
+- **Backend**: `GET /api/analytics/pnl-history` — cumulative P&L time series with peak/trough/drawdown
+- **Frontend**: `PnlChart.jsx` — recharts AreaChart with gradient fill, custom dark tooltip
 - Testing: 25/25 (100%)
+
+### Trade Ticker Strip (2026-03-13) ✅ TESTED
+- **Backend**: `GET /api/ticker/feed` — unified execution feed combining arb + sniper executions
+- **Frontend**: `TradeTicker.jsx` — horizontal scrolling tape, CSS animation, pause on hover
+- Mounted globally in AppShell between TopBar and main content
+- Reactive updates: watches `stats.total_trades` from WebSocket, re-fetches on change (no polling)
+- Format: `[STRATEGY] [ASSET] [SIDE] [SIZE] @ [PRICE] EDGE [bps]`
+- Color coding: BUY=green, SELL=red, positive EDGE=green, negative EDGE=red
+- Testing: 21/21 (100%)
+
+## Key Files
+- `/app/frontend/src/components/TradeTicker.jsx` — Ticker component
+- `/app/frontend/src/components/PnlChart.jsx` — P&L chart component
+- `/app/frontend/src/components/AppShell.jsx` — Layout shell (mounts ticker)
+- `/app/frontend/src/pages/Sniper.jsx` — Sniper dashboard page
+- `/app/backend/engine/strategies/crypto_sniper.py` — Sniper strategy
+- `/app/backend/engine/strategies/sniper_pricing.py` — Pricing math model
 
 ## Prioritized Backlog
 
 ### P2 — Phase 6
-- Telegram alerts, rich analytics, config persistence, copy trading skeleton
+- Telegram alerts for key trading events
+- Rich analytics and historical performance tracking
+- Configuration persistence to database (currently in-memory)
+- Copy trading skeleton
