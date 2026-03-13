@@ -11,12 +11,15 @@ import { Toaster } from './ui/sonner';
 export function AppShell() {
   useWebSocket();
   const totalTrades = useDashboardStore((s) => s.stats.total_trades);
-  const { fetchTickerFeed } = useApi();
+  const mode = useDashboardStore((s) => s.mode);
+  const { fetchTickerFeed, fetchWalletStatus } = useApi();
   const prevTrades = useRef(totalTrades);
+  const prevMode = useRef(mode);
 
   // Fetch ticker on mount and when WebSocket reports new trades
   useEffect(() => {
     fetchTickerFeed();
+    fetchWalletStatus();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -25,6 +28,14 @@ export function AppShell() {
       fetchTickerFeed();
     }
   }, [totalTrades, fetchTickerFeed]);
+
+  // Refetch wallet when mode changes
+  useEffect(() => {
+    if (mode !== prevMode.current) {
+      prevMode.current = mode;
+      fetchWalletStatus();
+    }
+  }, [mode, fetchWalletStatus]);
 
   return (
     <div className="dark flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">

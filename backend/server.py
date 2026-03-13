@@ -23,6 +23,7 @@ from engine.strategies.crypto_sniper import CryptoSniper
 from services.persistence import PersistenceService
 from services.telegram_notifier import TelegramNotifier
 from services.config_service import ConfigService
+from services.live_order_service import LiveOrderService
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -47,6 +48,7 @@ arb_scanner_ref: Optional[ArbScanner] = None
 crypto_sniper_ref: Optional[CryptoSniper] = None
 telegram_notifier: Optional[TelegramNotifier] = None
 config_service: Optional[ConfigService] = None
+live_order_service: Optional[LiveOrderService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -73,7 +75,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, config_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, telegram_notifier, config_service, live_order_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -126,6 +128,13 @@ async def lifespan(app: FastAPI):
 
     # Start WebSocket broadcast
     ws_broadcast_task = asyncio.create_task(_ws_broadcast_loop())
+
+    # Phase 8A: Live order persistence & polling
+    live_order_service = LiveOrderService(db)
+    await live_order_service.load_active()
+    engine.execution_engine.set_live_order_service(live_order_service)
+    if engine.execution_engine._live_adapter and engine.execution_engine._live_adapter._authenticated:
+        await engine.execution_engine.start_live_polling()
 
     logger.info(f"Polymarket Edge OS initialized [{state.trading_mode.value}]")
 
@@ -438,6 +447,47 @@ async def get_execution_status():
         "risk_config": state.risk_config.model_dump(),
         "engine_running": engine.is_running if engine else False,
     }
+
+
+@api_router.get("/execution/wallet")
+async def get_wallet_status():
+    """Get live wallet balance and readiness."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    live_adapter = engine.execution_engine._live_adapter if engine else None
+    authenticated = live_adapter._authenticated if live_adapter else False
+    balance = None
+
+    if authenticated:
+        balance = await live_adapter.get_balance()
+
+    return {
+        "mode": state.trading_mode.value,
+        "authenticated": authenticated,
+        "balance_usdc": balance,
+        "live_ready": authenticated and balance is not None and balance > 0,
+        "warnings": _wallet_warnings(authenticated, balance, state),
+    }
+
+
+def _wallet_warnings(authenticated, balance, state) -> list:
+    warnings = []
+    if state.trading_mode.value == "live" and not authenticated:
+        warnings.append("LIVE mode enabled but adapter not authenticated")
+    if state.trading_mode.value == "live" and authenticated and (balance is None or balance <= 0):
+        warnings.append("LIVE mode enabled but wallet has no balance")
+    if state.risk_config.kill_switch_active:
+        warnings.append("Kill switch is active — no orders will be sent")
+    return warnings
+
+
+@api_router.get("/execution/orders")
+async def get_live_orders(limit: int = 50):
+    """Get recent live order records with fill tracking."""
+    if not live_order_service:
+        return []
+    return await live_order_service.get_recent(limit=limit)
 
 
 # ---- Positions / Orders / Trades ----

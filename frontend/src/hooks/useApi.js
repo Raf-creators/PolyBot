@@ -22,6 +22,7 @@ export function useApi() {
   const setSniperHealth = useDashboardStore((s) => s.setSniperHealth);
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
+  const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
 
   const fetchPositions = useCallback(async () => {
     try {
@@ -121,6 +122,13 @@ export function useApi() {
     } catch {}
   }, [setTickerFeed]);
 
+  const fetchWalletStatus = useCallback(async () => {
+    try {
+      const { data } = await api.get('/execution/wallet');
+      setWalletStatus(data);
+    } catch {}
+  }, [setWalletStatus]);
+
   const startEngine = useCallback(async () => {
     const { data } = await api.post('/engine/start');
     return data;
@@ -150,7 +158,7 @@ export function useApi() {
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
-    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory, fetchTickerFeed,
+    fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,
     updateConfig,

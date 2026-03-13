@@ -189,3 +189,28 @@ class HealthMetrics(BaseModel):
     last_order_latency_ms: Optional[float] = None
     binance_connected: bool = False
     polymarket_connected: bool = False
+
+
+# ---- Live Order Tracking ----
+
+class LiveOrderRecord(BaseModel):
+    """Persistent record for live CLOB orders with fill tracking."""
+    id: str = Field(default_factory=new_id)
+    order_id: str              # internal OrderRecord.id
+    exchange_order_id: str = ""
+    strategy_id: str = ""
+    token_id: str = ""
+    condition_id: str = ""
+    market_question: str = ""
+    side: str = "buy"
+    price: float = 0.0
+    requested_size: float = 0.0
+    filled_size: float = 0.0
+    remaining_size: float = 0.0
+    avg_fill_price: float = 0.0
+    status: str = "submitted"   # submitted, open, partially_filled, filled, cancelled, rejected, expired
+    fees: float = 0.0
+    submitted_at: str = Field(default_factory=utc_now)
+    last_checked_at: Optional[str] = None
+    filled_at: Optional[str] = None
+    error: Optional[str] = None

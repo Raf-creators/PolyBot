@@ -35,8 +35,20 @@ class ExecutionEngine:
         self._bus.on(EventType.ORDER_UPDATE, self._on_risk_approved)
         logger.info("Execution engine started")
 
+    def set_live_order_service(self, service):
+        """Wire the live order persistence service after init."""
+        if self._live_adapter:
+            self._live_adapter.set_order_service(service)
+
+    async def start_live_polling(self):
+        """Start background polling for live order statuses."""
+        if self._live_adapter and self._live_adapter._authenticated:
+            await self._live_adapter.start_polling()
+
     async def stop(self):
         self._running = False
+        if self._live_adapter:
+            await self._live_adapter.stop_polling()
         if self._bus:
             self._bus.off(EventType.ORDER_UPDATE, self._on_risk_approved)
         logger.info("Execution engine stopped")
@@ -56,19 +68,16 @@ class ExecutionEngine:
                 logger.warning(f"Live mode but adapter not authenticated. Falling back to paper for order {order.id}")
                 await self._paper_adapter.execute(order)
         elif mode == "shadow":
-            # Shadow mode: execute on paper but log what live would do
             logger.info(f"[SHADOW] Would submit live: {order.side.value} {order.size}@{order.price} token={order.token_id[:12]}...")
             await self._paper_adapter.execute(order)
         else:
             await self._paper_adapter.execute(order)
 
     async def _on_risk_approved(self, event: Event):
-        """Only process events from risk_engine with approval flag."""
         if event.source != "risk_engine":
             return
         if not event.data.get("_risk_approved"):
             return
-
         data = {k: v for k, v in event.data.items() if not k.startswith("_")}
         order = OrderRecord(**data)
         await self.submit_order(order)
@@ -77,4 +86,13 @@ class ExecutionEngine:
     def live_adapter_status(self) -> dict:
         if self._live_adapter:
             return self._live_adapter.status
-        return {"adapter": "live", "authenticated": False, "credentials": {}, "last_error": "not initialized"}
+        from engine.live_adapter import LiveAdapter
+        return {
+            "adapter": "live",
+            "authenticated": False,
+            "credentials": LiveAdapter.credentials_present(),
+            "total_submitted": 0, "total_filled": 0, "total_partial_fills": 0,
+            "total_failed": 0, "open_orders": 0, "partial_orders": 0,
+            "last_api_call": None, "last_status_refresh": None,
+            "last_error": "engine not started", "recent_errors": [],
+        }
