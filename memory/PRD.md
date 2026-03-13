@@ -76,7 +76,27 @@ expired          → Expired on CLOB
 - Regex city/date extraction with alias fallback
 - Bucket parsing: "X or below", "X-Y F", "X or higher", degree symbols, en-dashes
 - Clean rejection reasons for all failure paths
-- **83/83 tests passed**: `/app/backend/tests/test_phase10_weather_models_parser.py`
+- Contiguous bucket coverage validation (gap + overlap detection)
+- **85/85 tests passed**: `/app/backend/tests/test_phase10_weather_models_parser.py`
+
+### Step 3 — Pricing Engine (Complete, 2026-03-13)
+- `weather_pricing.py`: normal_cdf, calibrate_sigma, compute_bucket_probability, compute_all_bucket_probabilities, compute_edge_bps, evaluate_all_buckets, kelly_size, compute_weather_confidence, blend_forecasts
+- Distribution-based bucket probabilities with continuity correction (±0.5F)
+- Sigma calibration by lead time (5 brackets), season (4), station type (coastal/inland)
+- Probability normalization enforced (sum = 1.0)
+- Quarter-Kelly sizing with floor/ceiling guards
+- Multi-source forecast blending with inter-model disagreement inflation
+- **63/63 tests passed**: `/app/backend/tests/test_phase10_weather_pricing.py`
+
+### Step 4 — Weather Feeds (Complete, 2026-03-13)
+- `weather_feeds.py`: WeatherFeedManager with Open-Meteo (primary) + NWS METAR (secondary)
+- Forecast caching with configurable TTL, staleness detection, eviction
+- Open-Meteo: hourly temp fetch → daily high extraction → ForecastSnapshot
+- NWS: METAR observation fetch → C→F conversion
+- Graceful failure handling (HTTP errors, network errors, malformed responses)
+- Health/observability dict for monitoring
+- Bulk fetch with rate limiting (5 req/sec)
+- **27/27 tests passed**: `/app/backend/tests/test_phase10_weather_feeds.py`
 
 ## Prioritized Backlog
 ### P1 — Phase 10 Implementation

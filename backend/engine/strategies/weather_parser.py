@@ -281,7 +281,14 @@ def parse_temp_buckets(
 
 
 def validate_buckets(buckets: List[TempBucket]) -> Optional[str]:
-    """Validate that a set of buckets forms a coherent set.
+    """Validate that a set of buckets forms a coherent, contiguous set.
+
+    Checks:
+      1. At least 2 buckets
+      2. One lower-open bucket (e.g. "40F or below")
+      3. One upper-open bucket (e.g. "47F or higher")
+      4. No duplicate token_ids
+      5. Contiguous coverage: each bucket's upper_bound + 1 == next bucket's lower_bound
 
     Returns None if valid, or an error string describing the problem.
     """
@@ -299,6 +306,30 @@ def validate_buckets(buckets: List[TempBucket]) -> Optional[str]:
     tids = [b.token_id for b in buckets]
     if len(tids) != len(set(tids)):
         return "duplicate_token_ids"
+
+    # Contiguous coverage check: sort by effective lower bound, verify gaps
+    def sort_key(b: TempBucket) -> float:
+        if b.lower_bound is None:
+            return -1e9
+        return b.lower_bound
+
+    sorted_b = sorted(buckets, key=sort_key)
+    for i in range(len(sorted_b) - 1):
+        cur = sorted_b[i]
+        nxt = sorted_b[i + 1]
+        # Current bucket must have an upper bound (except it shouldn't be the last)
+        if cur.upper_bound is None:
+            # upper-open bucket should be last after sorting; if it's not, overlap
+            return f"bucket_overlap: upper-open bucket {cur.label!r} is not last"
+        if nxt.lower_bound is None:
+            # lower-open bucket should be first; if it appears later, overlap
+            return f"bucket_overlap: lower-open bucket {nxt.label!r} is not first"
+        # For whole-degree Fahrenheit buckets: upper + 1 == next lower
+        gap = nxt.lower_bound - cur.upper_bound
+        if gap > 1:
+            return f"bucket_gap: {cur.label!r} ends at {cur.upper_bound}, {nxt.label!r} starts at {nxt.lower_bound}"
+        if gap < 1:
+            return f"bucket_overlap: {cur.label!r} upper={cur.upper_bound} overlaps {nxt.label!r} lower={nxt.lower_bound}"
 
     return None
 

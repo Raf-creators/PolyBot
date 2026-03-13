@@ -413,6 +413,8 @@ class TestValidateBuckets:
         buckets = [
             TempBucket(label="40F or below", token_id="t1", upper_bound=40),
             TempBucket(label="41-42F", token_id="t2", lower_bound=41, upper_bound=42),
+            TempBucket(label="43-44F", token_id="t3", lower_bound=43, upper_bound=44),
+            TempBucket(label="45-46F", token_id="t4", lower_bound=45, upper_bound=46),
             TempBucket(label="47F or higher", token_id="t5", lower_bound=47),
         ]
         assert validate_buckets(buckets) is None
