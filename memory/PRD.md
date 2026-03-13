@@ -62,9 +62,21 @@ expired          → Expired on CLOB
 - Rate limit awareness for CLOB API
 - Manual order entry (for ad-hoc trades)
 
-## Phase 10 — Weather Trading Strategy (Architecture Complete, 2026-03-13)
+## Phase 10 — Weather Trading Strategy
+### Architecture (Complete, 2026-03-13)
 - Full architecture designed: `/app/memory/PHASE10_WEATHER_ARCHITECTURE.md`
-- Implementation pending user approval
+
+### Step 1 — Models (Complete, 2026-03-13)
+- `weather_models.py`: WeatherConfig, StationInfo, StationType, Season, TempBucket, WeatherMarketClassification, ForecastSnapshot, SigmaCalibration, BucketProbability, WeatherSignal, WeatherExecution, WeatherSignalStatus
+- All follow existing conventions (Pydantic BaseModel, new_id, utc_now)
+- Multi-outcome bucket support (5-7 buckets per market vs binary)
+
+### Step 2 — Station Registry + Market Parser (Complete, 2026-03-13)
+- `weather_parser.py`: STATION_REGISTRY (8 stations), lookup_station(), classify_weather_market(), parse_temp_buckets(), validate_buckets()
+- Regex city/date extraction with alias fallback
+- Bucket parsing: "X or below", "X-Y F", "X or higher", degree symbols, en-dashes
+- Clean rejection reasons for all failure paths
+- **83/83 tests passed**: `/app/backend/tests/test_phase10_weather_models_parser.py`
 
 ## Prioritized Backlog
 ### P1 — Phase 10 Implementation
