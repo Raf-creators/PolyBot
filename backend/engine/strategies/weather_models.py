@@ -220,3 +220,40 @@ class WeatherExecution(BaseModel):
     size: float
     submitted_at: str = Field(default_factory=utc_now)
     filled_at: Optional[str] = None
+
+
+# ---- Forecast Accuracy Record ----
+
+class ForecastAccuracyRecord(BaseModel):
+    """Resolved forecast outcome for calibration tracking."""
+    id: str = Field(default_factory=new_id)
+    station_id: str
+    city: str
+    target_date: str                           # ISO date
+    forecast_high_f: float                     # model's predicted daily high
+    observed_high_f: Optional[float] = None    # actual observed high (null if not yet resolved)
+    forecast_error_f: Optional[float] = None   # observed - forecast (positive = model underestimated)
+    abs_error_f: Optional[float] = None        # |forecast_error_f|
+    sigma_used: float                          # sigma value at time of signal
+    lead_hours: float                          # forecast lead time
+    calibration_source: str = "default_sigma_table"  # "default_sigma_table" or "historical_calibration"
+    winning_bucket: Optional[str] = None       # bucket label that contained the actual outcome
+    model_bucket_prob: Optional[float] = None  # model probability assigned to winning bucket
+    market_bucket_price: Optional[float] = None  # market price of winning bucket at signal time
+    bucket_count: int = 0                      # total buckets in the event
+    resolved: bool = False
+    recorded_at: str = Field(default_factory=utc_now)
+    resolved_at: Optional[str] = None
+
+
+# ---- Shadow Mode Config Presets ----
+
+SHADOW_CONFIG_OVERRIDES = {
+    "min_edge_bps": 500.0,          # tighter threshold (up from 300)
+    "kelly_scale": 0.15,            # more conservative sizing (down from 0.25)
+    "max_signal_size": 5.0,         # smaller max size (down from 8.0)
+    "max_concurrent_signals": 4,    # fewer concurrent (down from 8)
+    "max_stale_market_seconds": 600.0,  # more tolerant for non-WebSocket markets (up from 120)
+    "cooldown_seconds": 2400.0,     # longer cooldown (up from 1800)
+    "default_size": 2.0,            # smaller base size (down from 3.0)
+}

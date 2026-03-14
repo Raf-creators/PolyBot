@@ -1,0 +1,143 @@
+{
+  "summary": "Weather Shadow-Mode & Forecast Accuracy Testing - All 30 backend API tests passed (100%). All frontend UI tests passed. Shadow-mode enable/reset, forecast accuracy tracking, calibration visibility, and all new API endpoints working correctly.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "WeatherExecModeBadge",
+        "issue": "Badge shows 'UNKNOWN' when engine is stopped - this is because get_health() returns 'unknown' when state.trading_mode cannot be determined",
+        "selector": "[data-testid='weather-exec-mode-badge']",
+        "priority": "LOW",
+        "note": "Not a bug - expected behavior when engine hasn't been started"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/strategies/weather/shadow-summary - returns execution_mode, is_shadow, shadow_overrides_applied, config_snapshot, operational_stats, calibration, running fields",
+      "GET /api/strategies/weather/shadow-summary - config_snapshot has min_edge_bps, kelly_scale, max_signal_size, max_concurrent_signals, max_stale_market_seconds, cooldown_seconds, default_size",
+      "GET /api/strategies/weather/shadow-summary - operational_stats has total_scans, markets_classified, forecasts_fetched, signals_generated, signals_executed, signals_filled",
+      "POST /api/strategies/weather/shadow/enable - returns status='shadow_overrides_applied' and config",
+      "POST /api/strategies/weather/shadow/enable - applies conservative overrides (min_edge_bps=500, kelly_scale=0.15, max_stale_market_seconds=600, cooldown_seconds=2400, max_concurrent_signals=4, max_signal_size=5, default_size=2)",
+      "POST /api/strategies/weather/shadow/enable - reflected in shadow-summary endpoint",
+      "POST /api/strategies/weather/shadow/reset - returns status='config_reset_to_defaults' and config",
+      "POST /api/strategies/weather/shadow/reset - restores defaults (min_edge_bps=300, kelly_scale=0.25, max_stale_market_seconds=120, cooldown_seconds=1800, max_concurrent_signals=8, max_signal_size=8, default_size=3)",
+      "GET /api/strategies/weather/accuracy/history - returns list of ForecastAccuracyRecords from MongoDB",
+      "GET /api/strategies/weather/accuracy/history?limit=5 - respects limit parameter",
+      "GET /api/strategies/weather/accuracy/history?station_id=KLGA - filters by station_id",
+      "GET /api/strategies/weather/accuracy/history - record has station_id, target_date, forecast_high_f, sigma_used, lead_hours, resolved, observed_high_f, forecast_error_f, abs_error_f",
+      "GET /api/strategies/weather/accuracy/calibration - returns total_records, resolved_records, pending_resolution, stations_with_data, stations_calibratable, global_mae_f, global_bias_f, using_defaults, calibration_status, calibration_note, station_summaries",
+      "GET /api/strategies/weather/accuracy/calibration - calibration_status is 'collecting' (valid value from no_data/collecting/partial/ready)",
+      "GET /api/strategies/weather/accuracy/calibration - station_summaries contains KLGA with sample_count=1, mean_abs_error_f=4.3, mean_bias_f=-4.3, calibration_meaningful=false",
+      "GET /api/strategies/weather/accuracy/unresolved - returns list of pending forecasts with resolved=false",
+      "GET /api/strategies/weather/accuracy/unresolved - all returned records have resolved=false",
+      "POST /api/strategies/weather/accuracy/resolve - validates required fields (station_id, target_date, observed_high_f)",
+      "POST /api/strategies/weather/accuracy/resolve - returns 400 when fields missing",
+      "POST /api/strategies/weather/accuracy/resolve - returns 200 with status='resolved' on valid input",
+      "GET /api/strategies/weather/health - returns 200 with config, running fields (regression)",
+      "GET /api/strategies/weather/signals - returns 200 with tradable, rejected, total_tradable, total_rejected (regression)",
+      "GET /api/strategies/weather/executions - returns 200 with active, completed (regression)",
+      "GET /api/strategies/weather/forecasts - returns 200 with dict (regression)",
+      "GET /api/strategies/weather/stations - returns 200 with list of registered stations (regression)",
+      "GET /api/strategies/weather/config - returns 200 with enabled and config params (regression)",
+      "GET /api/demo/strategies/weather/shadow-summary - returns demo shadow summary data",
+      "GET /api/demo/strategies/weather/accuracy/history - returns empty list for demo",
+      "GET /api/demo/strategies/weather/accuracy/calibration - returns demo calibration health",
+      "MongoDB 'forecast_accuracy' collection is used correctly - verified via calibration endpoint returning 25 total records, 1 resolved"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with data-testid='weather-page'",
+      "Weather Trader heading visible with PAPER/SHADOW mode badge (data-testid='weather-exec-mode-badge')",
+      "Scan status visible (data-testid='weather-scan-status')",
+      "Stats grid visible (data-testid='weather-stats-grid')",
+      "All 6 tabs present: Signals(0), Rejected(0), Executions(0), Forecasts(0), Calibration, Health",
+      "Calibration tab - Shadow Summary section (data-testid='section-shadow-summary') renders with Shadow Config and Operational Stats columns",
+      "Calibration tab - Calibration Health section (data-testid='section-calibration-health') shows status, using_defaults, total/resolved/pending records, global MAE/Bias",
+      "Calibration tab - Per-Station Accuracy section (data-testid='section-station-accuracy') shows KLGA with 1 sample, MAE 4.3F, Bias -4.3F",
+      "Calibration tab - Forecast Accuracy Log section (data-testid='section-accuracy-log') shows table with forecast records",
+      "Calibration tab - Shadow mode badge (data-testid='shadow-mode-badge') shows current mode",
+      "Health tab - Calibration section (data-testid='section-weather-calibration') renders",
+      "Health tab - Scanner Metrics section (data-testid='section-weather-metrics') renders",
+      "Health tab - Feed Health section (data-testid='section-weather-feed-health') renders",
+      "Health tab - Rejection Reasons section (data-testid='section-weather-rejections') renders",
+      "Health tab - Strategy Config section (data-testid='section-weather-config') renders",
+      "Health tab - Classified Markets section (data-testid='section-weather-classified') renders",
+      "Signals, Rejected, Executions, Forecasts tabs all clickable and switch content correctly"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_weather_shadow_accuracy.py",
+    "/app/test_reports/pytest/pytest_results_shadow_accuracy.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_weather_shadow_accuracy.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (30/30 tests passed)",
+    "frontend": "100% (all UI flows verified)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "25 ForecastAccuracyRecords were created by engine run (recorded by main agent context). 1 record resolved for KLGA 2026-03-14 (forecast=47.3F, actual=43F, error=-4.3F)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Weather Shadow-Mode & Forecast Accuracy feature fully implemented. KEY FEATURES: (1) Shadow config overrides applied via POST /api/strategies/weather/shadow/enable with conservative values (min_edge=500bps, kelly=0.15, max_stale=600s, cooldown=2400s, max_concurrent=4, max_size=5, default_size=2) (2) Reset to defaults via POST /api/strategies/weather/shadow/reset (3) Forecast accuracy records in MongoDB 'forecast_accuracy' collection - 25 records created, 1 resolved (4) Calibration health endpoint shows status='collecting', using_defaults=true, global_mae=4.3F (5) Weather page has 6 tabs: Signals, Rejected, Executions, Forecasts, Calibration, Health (6) Calibration tab shows: Shadow-Mode Summary, Calibration Health, Per-Station Accuracy, Forecast Accuracy Log (7) Engine currently stopped, mode shows 'unknown' in badges which is expected. All existing weather endpoints work correctly (no regression).",
+
+  "features_tested": {
+    "shadow_summary_endpoint": "PASS - GET /api/strategies/weather/shadow-summary returns all required fields",
+    "shadow_enable_endpoint": "PASS - POST /api/strategies/weather/shadow/enable applies conservative overrides",
+    "shadow_reset_endpoint": "PASS - POST /api/strategies/weather/shadow/reset restores defaults",
+    "accuracy_history_endpoint": "PASS - GET /api/strategies/weather/accuracy/history returns MongoDB records with limit and station filters",
+    "accuracy_calibration_endpoint": "PASS - GET /api/strategies/weather/accuracy/calibration returns health status with global MAE, station summaries",
+    "accuracy_unresolved_endpoint": "PASS - GET /api/strategies/weather/accuracy/unresolved returns pending forecasts",
+    "accuracy_resolve_endpoint": "PASS - POST /api/strategies/weather/accuracy/resolve validates and accepts input",
+    "forecast_accuracy_records_created": "PASS - 25 records in MongoDB from engine scan (verified by calibration endpoint)",
+    "weather_page_calibration_tab": "PASS - Renders Shadow Summary, Calibration Health, Per-Station Accuracy, Accuracy Log sections",
+    "weather_page_mode_badge": "PASS - PAPER/SHADOW badge visible next to Weather Trader heading",
+    "existing_tabs_work": "PASS - Signals, Rejected, Executions, Forecasts tabs still work",
+    "health_tab_all_sections": "PASS - All 6 existing sections render in Health tab",
+    "demo_mode_endpoints": "PASS - Demo shadow-summary and accuracy endpoints return placeholder data",
+    "no_regression": "PASS - All existing weather endpoints (health, signals, executions, forecasts, stations, config) still work",
+    "mongodb_collection_isolation": "PASS - forecast_accuracy collection used correctly"
+  },
+
+  "verified_data": {
+    "resolved_record": {
+      "station_id": "KLGA",
+      "target_date": "2026-03-14",
+      "forecast_high_f": 47.3,
+      "observed_high_f": 43.0,
+      "forecast_error_f": -4.3,
+      "abs_error_f": 4.3,
+      "winning_bucket": "42-43F",
+      "calculation_verified": "error = observed - forecast = 43 - 47.3 = -4.3 (CORRECT)"
+    },
+    "calibration_health": {
+      "total_records": 25,
+      "resolved_records": 1,
+      "pending_resolution": 24,
+      "global_mae_f": 4.3,
+      "global_bias_f": -4.3,
+      "calibration_status": "collecting",
+      "using_defaults": true
+    }
+  }
+}

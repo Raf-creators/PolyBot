@@ -26,7 +26,8 @@ from engine.strategies.base import BaseStrategy
 from engine.strategies.weather_models import (
     WeatherConfig, WeatherMarketClassification, WeatherSignal,
     WeatherExecution, WeatherSignalStatus, BucketProbability,
-    SigmaCalibration, StationType,
+    SigmaCalibration, StationType, ForecastAccuracyRecord,
+    SHADOW_CONFIG_OVERRIDES,
 )
 from engine.strategies.weather_parser import (
     STATION_REGISTRY, classify_weather_market, classify_binary_weather_markets,
@@ -76,6 +77,9 @@ class WeatherTrader(BaseStrategy):
         self._order_to_execution: Dict[str, str] = {}
         self._cooldown: Dict[str, float] = {}  # key: "condition_id:token_id" → timestamp
 
+        # Forecast accuracy service (injected from server.py)
+        self._accuracy_service = None
+
         # Metrics
         self._m: Dict = {
             "total_scans": 0,
@@ -103,6 +107,22 @@ class WeatherTrader(BaseStrategy):
     def set_execution_context(self, risk_engine, execution_engine):
         self._risk_engine = risk_engine
         self._execution_engine = execution_engine
+
+    def set_accuracy_service(self, service):
+        """Inject forecast accuracy tracking service."""
+        self._accuracy_service = service
+
+    def apply_shadow_overrides(self):
+        """Apply conservative shadow-mode config overrides."""
+        for key, val in SHADOW_CONFIG_OVERRIDES.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, val)
+        logger.info(
+            f"WeatherTrader shadow overrides applied: "
+            f"min_edge={self.config.min_edge_bps}bps, "
+            f"kelly={self.config.kelly_scale}, "
+            f"max_stale={self.config.max_stale_market_seconds}s"
+        )
 
     async def start(self, state, bus):
         await super().start(state, bus)
@@ -153,6 +173,9 @@ class WeatherTrader(BaseStrategy):
                     if len(self._active_executions) >= self.config.max_concurrent_signals:
                         break
                     await self._execute_signal(sig)
+
+                # Stage 6: Record forecast accuracy entries for new classifications
+                await self._record_forecast_accuracy(signals)
 
             except asyncio.CancelledError:
                 break
@@ -644,6 +667,49 @@ class WeatherTrader(BaseStrategy):
         self._m["active_executions"] = len(self._active_executions)
         self._m["completed_executions"] = len(self._completed_executions)
 
+    # ---- Forecast Accuracy Recording ----
+
+    async def _record_forecast_accuracy(self, signals: List[WeatherSignal]):
+        """Record forecast entries for accuracy tracking (idempotent per station+date)."""
+        if not self._accuracy_service:
+            return
+
+        recorded = set()
+        for sig in signals:
+            key = f"{sig.station_id}:{sig.target_date}"
+            if key in recorded or sig.forecast_high_f == 0:
+                continue
+            recorded.add(key)
+
+            # Determine calibration source
+            cal_source = (
+                "historical_calibration"
+                if sig.station_id in self._calibrations
+                else "default_sigma_table"
+            )
+
+            record = ForecastAccuracyRecord(
+                station_id=sig.station_id,
+                city=self._get_city(sig.station_id),
+                target_date=sig.target_date,
+                forecast_high_f=sig.forecast_high_f,
+                sigma_used=sig.sigma,
+                lead_hours=sig.lead_hours,
+                calibration_source=cal_source,
+                bucket_count=len(self._classified.get(sig.condition_id, WeatherMarketClassification(
+                    condition_id="", station_id="", city="", target_date="",
+                    resolution_type="", buckets=[], question="",
+                )).buckets),
+            )
+            try:
+                await self._accuracy_service.record_forecast(record)
+            except Exception as e:
+                logger.warning(f"Failed to record forecast accuracy: {e}")
+
+    def _get_city(self, station_id: str) -> str:
+        station = STATION_REGISTRY.get(station_id)
+        return station.city if station else station_id
+
     # ---- API Data Accessors ----
 
     def get_signals(self, limit: int = 50) -> List[dict]:
@@ -656,10 +722,21 @@ class WeatherTrader(BaseStrategy):
         return [e.model_dump() for e in self._completed_executions[-limit:]]
 
     def get_health(self) -> dict:
+        # Determine execution mode from state
+        exec_mode = "unknown"
+        if self._state:
+            exec_mode = self._state.trading_mode.value if hasattr(self._state, 'trading_mode') else "paper"
+
         return {
             **self._m,
             "config": self.config.model_dump(),
             "running": self._running,
+            "execution_mode": exec_mode,
+            "is_shadow": exec_mode == "shadow",
+            "shadow_overrides_applied": any(
+                getattr(self.config, k, None) == v
+                for k, v in SHADOW_CONFIG_OVERRIDES.items()
+            ),
             "feed_health": self._feed.health,
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),

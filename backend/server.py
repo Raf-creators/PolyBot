@@ -41,6 +41,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from services.forecast_accuracy_service import ForecastAccuracyService
+
 # Engine globals
 state: Optional[StateManager] = None
 bus: Optional[EventBus] = None
@@ -51,6 +53,7 @@ weather_trader_ref: Optional[WeatherTrader] = None
 telegram_notifier: Optional[TelegramNotifier] = None
 config_service: Optional[ConfigService] = None
 live_order_service: Optional[LiveOrderService] = None
+forecast_accuracy_service: Optional[ForecastAccuracyService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -77,7 +80,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -105,6 +108,11 @@ async def lifespan(app: FastAPI):
     engine.register_strategy(weather)
     state.strategies["weather_trader"].enabled = True
     weather_trader_ref = weather
+
+    # Forecast accuracy tracking
+    forecast_accuracy_service = ForecastAccuracyService(db)
+    await forecast_accuracy_service.ensure_indexes()
+    weather_trader_ref.set_accuracy_service(forecast_accuracy_service)
 
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
@@ -741,6 +749,129 @@ async def get_weather_stations():
     return weather_trader_ref.get_stations()
 
 
+# ---- Forecast Accuracy & Calibration Endpoints ----
+
+@api_router.get("/strategies/weather/accuracy/history")
+async def get_forecast_accuracy_history(limit: int = 100, station_id: str = None):
+    """Resolved forecast accuracy log."""
+    if not forecast_accuracy_service:
+        raise HTTPException(500, "Accuracy service not initialized")
+    return await forecast_accuracy_service.get_history(limit=limit, station_id=station_id)
+
+
+@api_router.get("/strategies/weather/accuracy/stations")
+async def get_forecast_accuracy_stations():
+    """Per-station forecast error summary."""
+    if not forecast_accuracy_service:
+        raise HTTPException(500, "Accuracy service not initialized")
+    return await forecast_accuracy_service.get_station_summary()
+
+
+@api_router.get("/strategies/weather/accuracy/calibration")
+async def get_calibration_health():
+    """Overall calibration health and readiness status."""
+    if not forecast_accuracy_service:
+        raise HTTPException(500, "Accuracy service not initialized")
+    return await forecast_accuracy_service.get_calibration_health()
+
+
+@api_router.get("/strategies/weather/accuracy/unresolved")
+async def get_unresolved_forecasts(limit: int = 50):
+    """Forecasts pending resolution (awaiting observed temperature)."""
+    if not forecast_accuracy_service:
+        raise HTTPException(500, "Accuracy service not initialized")
+    return await forecast_accuracy_service.get_unresolved(limit=limit)
+
+
+@api_router.post("/strategies/weather/accuracy/resolve")
+async def resolve_forecast(body: dict):
+    """Manually resolve a forecast with observed temperature.
+
+    Body: { "station_id": "KLGA", "target_date": "2026-03-13", "observed_high_f": 42.0, "winning_bucket": "40-41F" }
+    """
+    if not forecast_accuracy_service:
+        raise HTTPException(500, "Accuracy service not initialized")
+    station_id = body.get("station_id")
+    target_date = body.get("target_date")
+    observed_high = body.get("observed_high_f")
+    winning_bucket = body.get("winning_bucket")
+    if not station_id or not target_date or observed_high is None:
+        raise HTTPException(400, "station_id, target_date, and observed_high_f required")
+    await forecast_accuracy_service.resolve_forecast(
+        station_id=station_id, target_date=target_date,
+        observed_high_f=float(observed_high), winning_bucket=winning_bucket,
+    )
+    return {"status": "resolved", "station_id": station_id, "target_date": target_date, "observed_high_f": observed_high}
+
+
+@api_router.get("/strategies/weather/shadow-summary")
+async def get_weather_shadow_summary():
+    """Shadow-mode operational summary for WeatherTrader."""
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+
+    health = weather_trader_ref.get_health()
+    exec_mode = health.get("execution_mode", "paper")
+    is_shadow = exec_mode == "shadow"
+
+    # Gather calibration info
+    cal_health = {}
+    if forecast_accuracy_service:
+        cal_health = await forecast_accuracy_service.get_calibration_health()
+
+    return {
+        "execution_mode": exec_mode,
+        "is_shadow": is_shadow,
+        "shadow_overrides_applied": health.get("shadow_overrides_applied", False),
+        "config_snapshot": {
+            "min_edge_bps": weather_trader_ref.config.min_edge_bps,
+            "kelly_scale": weather_trader_ref.config.kelly_scale,
+            "max_signal_size": weather_trader_ref.config.max_signal_size,
+            "max_concurrent_signals": weather_trader_ref.config.max_concurrent_signals,
+            "max_stale_market_seconds": weather_trader_ref.config.max_stale_market_seconds,
+            "cooldown_seconds": weather_trader_ref.config.cooldown_seconds,
+            "default_size": weather_trader_ref.config.default_size,
+        },
+        "operational_stats": {
+            "total_scans": health.get("total_scans", 0),
+            "markets_classified": health.get("classified_markets", 0),
+            "forecasts_fetched": health.get("forecasts_fetched", 0),
+            "forecasts_missing": health.get("forecasts_missing", 0),
+            "signals_generated": health.get("signals_generated", 0),
+            "signals_executed": health.get("signals_executed", 0),
+            "signals_filled": health.get("signals_filled", 0),
+            "rejection_reasons": health.get("rejection_reasons", {}),
+        },
+        "calibration": cal_health,
+        "running": health.get("running", False),
+    }
+
+
+@api_router.post("/strategies/weather/shadow/enable")
+async def enable_weather_shadow():
+    """Apply shadow-mode config overrides to WeatherTrader."""
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    weather_trader_ref.apply_shadow_overrides()
+    return {
+        "status": "shadow_overrides_applied",
+        "config": weather_trader_ref.config.model_dump(),
+    }
+
+
+@api_router.post("/strategies/weather/shadow/reset")
+async def reset_weather_config():
+    """Reset WeatherTrader to default (paper-mode) config."""
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+    from engine.strategies.weather_models import WeatherConfig
+    weather_trader_ref.config = WeatherConfig()
+    return {
+        "status": "config_reset_to_defaults",
+        "config": weather_trader_ref.config.model_dump(),
+    }
+
+
 @api_router.post("/test/inject-weather-market")
 async def test_inject_weather_market():
     """Inject a synthetic NYC weather market for testing the weather pipeline."""
@@ -1315,6 +1446,56 @@ async def demo_weather_stations():
 @api_router.get("/demo/strategies/weather/config")
 async def demo_weather_config():
     return _demo_service.get("weather", {}).get("health", {}).get("config", {})
+
+
+@api_router.get("/demo/strategies/weather/shadow-summary")
+async def demo_weather_shadow_summary():
+    weather = _demo_service.get("weather", {})
+    h = weather.get("health", {})
+    return {
+        "execution_mode": "shadow",
+        "is_shadow": True,
+        "shadow_overrides_applied": True,
+        "config_snapshot": h.get("config", {}),
+        "operational_stats": {
+            "total_scans": h.get("total_scans", 0),
+            "markets_classified": h.get("markets_classified", 0),
+            "forecasts_fetched": h.get("forecasts_fetched", 0),
+            "signals_generated": h.get("signals_generated", 0),
+            "signals_executed": h.get("signals_executed", 0),
+            "signals_filled": h.get("signals_filled", 0),
+        },
+        "calibration": {
+            "calibration_status": "collecting",
+            "using_defaults": True,
+            "total_records": 15,
+            "resolved_records": 8,
+            "pending_resolution": 7,
+        },
+        "running": True,
+    }
+
+
+@api_router.get("/demo/strategies/weather/accuracy/history")
+async def demo_accuracy_history():
+    return []
+
+
+@api_router.get("/demo/strategies/weather/accuracy/calibration")
+async def demo_accuracy_calibration():
+    return {
+        "total_records": 0,
+        "resolved_records": 0,
+        "pending_resolution": 0,
+        "stations_with_data": 0,
+        "stations_calibratable": 0,
+        "global_mae_f": None,
+        "global_bias_f": None,
+        "using_defaults": True,
+        "calibration_status": "no_data",
+        "calibration_note": "Demo mode — no real accuracy data",
+        "station_summaries": {},
+    }
 
 
 @api_router.get("/demo/config")
