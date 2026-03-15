@@ -46,6 +46,7 @@ from services.forecast_accuracy_service import ForecastAccuracyService
 from services.calibration_service import CalibrationService
 from services.weather_alert_service import WeatherAlertService
 from services.rolling_calibration_service import RollingCalibrationService
+from services.liquidity_service import LiquidityService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -658,6 +659,25 @@ async def get_markets_summary():
             for m in sorted(state.markets.values(), key=lambda x: x.volume_24h, reverse=True)[:10]
         ],
     }
+
+
+@api_router.get("/markets/liquidity-heatmap")
+async def get_liquidity_heatmap():
+    """Return liquidity heatmap tiles for weather markets with per-bucket scores."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    svc = LiquidityService(state)
+    classifications = weather_trader_ref._classified if weather_trader_ref else {}
+    return svc.get_heatmap(weather_classifications=classifications)
+
+
+@api_router.get("/markets/liquidity-scores")
+async def get_liquidity_scores():
+    """Return per-token liquidity scores for all markets."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    svc = LiquidityService(state)
+    return svc.get_token_scores()
 
 
 # ---- Health metrics ----

@@ -80,6 +80,7 @@ class WeatherTrader(BaseStrategy):
         self._completed_executions: List[WeatherExecution] = []
         self._order_to_execution: Dict[str, str] = {}
         self._cooldown: Dict[str, float] = {}  # key: "condition_id:token_id" → timestamp
+        self._liquidity_scores: Dict[str, float] = {}  # token_id → liquidity score (0-100)
 
         # Forecast accuracy service (injected from server.py)
         self._accuracy_service = None
@@ -159,6 +160,17 @@ class WeatherTrader(BaseStrategy):
                 self._calibration_sources[sid] = "rolling_live"
                 upgraded += 1
         return {"status": "reloaded", "rolling_stations": upgraded}
+
+    def refresh_liquidity_scores(self):
+        """Compute and cache liquidity scores for all tracked markets."""
+        from services.liquidity_service import compute_market_liquidity
+        for snap in self._state.markets.values():
+            metrics = compute_market_liquidity(snap)
+            self._liquidity_scores[snap.token_id] = metrics["liquidity_score"]
+
+    def get_liquidity_score(self, token_id: str) -> float:
+        """Get cached liquidity score for a token. 0 if unknown."""
+        return self._liquidity_scores.get(token_id, 0.0)
 
     def apply_shadow_overrides(self):
         """Apply conservative shadow-mode config overrides."""
@@ -262,6 +274,9 @@ class WeatherTrader(BaseStrategy):
 
                 # Stage 2: Fetch forecasts for classified stations
                 await self._refresh_forecasts()
+
+                # Stage 2.5: Refresh liquidity scores
+                self.refresh_liquidity_scores()
 
                 # Stage 3+4: Evaluate all classified markets
                 signals = await self._evaluate_all()
@@ -897,6 +912,7 @@ class WeatherTrader(BaseStrategy):
             "feed_health": self._feed.health,
             "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},
             "alert_stats": self._alert_service.get_stats() if self._alert_service else {"enabled": False},
+            "liquidity_scores_cached": len(self._liquidity_scores),
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),
             "calibration_status": {
