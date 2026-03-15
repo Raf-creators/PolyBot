@@ -1,0 +1,141 @@
+{
+  "summary": "Rolling Calibration System Testing - All 31 backend API tests passed (100%). All frontend UI tests passed. New rolling calibration features working correctly: GET/POST rolling calibration endpoints work, health endpoint includes calibration_status with sources/source_summary/calibration_source fields, config endpoint has all rolling calibration fields, config update persistence works, Weather page Calibration tab shows Rolling Live Calibration section, Settings page shows rolling calibration toggle and fields. No regressions on existing pages.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/strategies/weather/calibration/rolling/status returns 200",
+      "Rolling status has all required fields: enabled, total_stations_calibrated, total_resolved_records, needs_recalculation, min_samples_required, last_run, last_status, etc.",
+      "Rolling status has correct data types",
+      "Rolling status correctly reports insufficient_data when not enough resolved records",
+      "POST /api/strategies/weather/calibration/rolling/run returns 200",
+      "Rolling run returns results with status, stations_processed, stations_calibrated, stations_insufficient, results",
+      "Rolling run correctly reports insufficient data for all stations (only 1 resolved record, min_samples=15)",
+      "POST /api/strategies/weather/calibration/rolling/reload returns 200",
+      "Rolling reload returns status",
+      "GET /api/strategies/weather/health includes calibration_status object",
+      "calibration_status has sources field (dict mapping station_id to source name)",
+      "calibration_status has source_summary field (dict with source counts)",
+      "calibration_status has calibration_source field (historical_bootstrap with engine started)",
+      "calibration_status has note field",
+      "GET /api/strategies/weather/config includes rolling_calibration_enabled field",
+      "GET /api/strategies/weather/config includes rolling_min_samples field",
+      "GET /api/strategies/weather/config includes rolling_recalc_interval_hours field",
+      "GET /api/strategies/weather/config includes rolling_recalc_after_n_records field",
+      "POST /api/config/update with rolling_calibration_enabled=false updates and persists",
+      "POST /api/config/update with rolling_min_samples=25 updates and persists",
+      "Engine start correctly populates calibration_sources in health endpoint",
+      "GET /api/strategies/weather/signals works (regression)",
+      "GET /api/strategies/weather/executions works (regression)",
+      "GET /api/strategies/weather/health works (regression)",
+      "GET /api/strategies/weather/forecasts works (regression)",
+      "GET /api/strategies/weather/alerts works (regression)",
+      "GET /api/positions works (regression)",
+      "GET /api/strategies/arb/opportunities works (regression)",
+      "GET /api/strategies/sniper/signals works (regression)",
+      "GET /api/config works (regression)",
+      "GET /api/config/strategies works (regression)"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with data-testid='weather-page'",
+      "All 7 tabs found: Signals, Alerts, Rejected, Executions, Forecasts, Calibration, Health",
+      "Calibration tab visible with data-testid='tab-calibration'",
+      "Rolling Live Calibration section found with data-testid='section-rolling-calibration'",
+      "'Rolling Live Calibration' title found",
+      "Run Now button found with data-testid='run-rolling-calibration-btn'",
+      "Reload button found with data-testid='reload-rolling-calibration-btn'",
+      "Rolling calibration section shows Enabled: YES stat",
+      "Rolling calibration section shows Resolved Records: 1 stat",
+      "Rolling calibration section shows Stations Calibrated: 0 stat",
+      "Rolling calibration section shows Min Samples: 15 stat",
+      "Rolling calibration section shows Needs Recalc: No stat",
+      "Empty state message 'No rolling calibrations computed yet' shown",
+      "Health tab shows CalibrationStatusCard with data-testid='section-weather-calibration'",
+      "CalibrationStatusCard shows Active Source badge (HISTORICAL)",
+      "CalibrationStatusCard shows 'Calibrated Stations: 8 / 8'",
+      "CalibrationStatusCard shows 'Source Breakdown: HISTORICAL 8 stations'",
+      "Health tab Strategy Config shows 'Rolling Cal Enabled' field",
+      "Health tab Strategy Config shows 'Rolling Min Samples' field",
+      "Health tab Strategy Config shows 'Rolling Recalc Interval' field",
+      "Health tab Strategy Config shows 'Rolling Recalc After' field",
+      "Settings page loads with data-testid='settings-page'",
+      "Settings page Strategy Configuration shows Weather Trader section",
+      "'Rolling Calibration' toggle found in Settings",
+      "'Rolling Min Samples' field found in Settings",
+      "'Rolling Recalc Interval' field found in Settings",
+      "'Rolling Recalc After' field found in Settings",
+      "rolling_calibration_enabled toggle (data-testid='toggle-weather_trader-rolling_calibration_enabled') found showing 'ON'",
+      "Toggle click changes state ON -> OFF -> ON successfully",
+      "Overview page loads (no regression)",
+      "Arbitrage page loads (no regression)",
+      "Sniper page loads (no regression)",
+      "Weather page loads (no regression)",
+      "Positions page loads (no regression)",
+      "Analytics page loads (no regression)",
+      "Settings page loads (no regression)"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_rolling_calibration_feature.py",
+    "/app/backend/tests/test_rolling_calibration.py",
+    "/app/test_reports/pytest/pytest_results_rolling_calibration.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_rolling_calibration_feature.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (31/31 tests passed)",
+    "frontend": "100% (all UI flows verified)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "No new seed data created. Rolling calibration system works but reports insufficient_data (only 1 resolved forecast record exists, min_samples=15 required per station).",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Rolling Calibration System fully implemented and tested. KEY FEATURES: (1) GET /api/strategies/weather/calibration/rolling/status returns correct shape with enabled, total_stations_calibrated, total_resolved_records, needs_recalculation, min_samples_required, last_run, last_status, recalc_interval_hours, recalc_after_n_records, stations (2) POST /api/strategies/weather/calibration/rolling/run executes rolling calibration and returns results with stations_processed, stations_calibrated, stations_insufficient - currently returns insufficient_data for all stations (only 1 resolved record, need 15 per station) (3) POST /api/strategies/weather/calibration/rolling/reload returns reload status (4) GET /api/strategies/weather/health includes calibration_status with sources, source_summary, calibration_source fields - shows 'historical_bootstrap' when engine is started (8 stations using historical calibrations) (5) GET /api/strategies/weather/config includes rolling_calibration_enabled, rolling_min_samples, rolling_recalc_interval_hours, rolling_recalc_after_n_records (6) POST /api/config/update with strategies.weather_trader payload persists changes - tested toggling rolling_calibration_enabled and updating rolling_min_samples (7) Weather page Calibration tab shows 'Rolling Live Calibration' section with data-testid='section-rolling-calibration' showing Enabled, Resolved Records, Stations Calibrated, Min Samples, Needs Recalc stats, plus Run Now and Reload buttons (8) Weather Health tab shows CalibrationStatusCard with data-testid='section-weather-calibration' containing Active Source badge showing HISTORICAL, Calibrated Stations count, Source Breakdown (9) Settings page Weather Trader section shows rolling_calibration_enabled toggle (ON/OFF button) and rolling numeric fields (10) Tri-level priority: rolling > historical > default - currently using historical_bootstrap since no rolling calibrations have sufficient data (11) Engine is STOPPED by default - need to start engine for calibration sources to populate (12) 8 stations have historical bootstrap calibrations: KLGA, KORD, KLAX, KATL, KDFW, KMIA, KDEN, KSFO (13) No mocked APIs",
+
+  "features_tested": {
+    "rolling_status_endpoint": "PASS - GET /api/strategies/weather/calibration/rolling/status returns correct shape",
+    "rolling_run_endpoint": "PASS - POST /api/strategies/weather/calibration/rolling/run executes and returns results",
+    "rolling_reload_endpoint": "PASS - POST /api/strategies/weather/calibration/rolling/reload works",
+    "insufficient_data_reporting": "PASS - Rolling calibration correctly reports insufficient_data (1 record < 15 min_samples)",
+    "health_calibration_status": "PASS - calibration_status has sources, source_summary, calibration_source fields",
+    "health_calibration_source_historical": "PASS - calibration_source shows 'historical_bootstrap' (8 stations calibrated)",
+    "config_rolling_fields": "PASS - rolling_calibration_enabled, rolling_min_samples, rolling_recalc_interval_hours, rolling_recalc_after_n_records all present",
+    "config_update_toggle": "PASS - POST /api/config/update with rolling_calibration_enabled=false persists",
+    "config_update_min_samples": "PASS - POST /api/config/update with rolling_min_samples=25 persists",
+    "frontend_rolling_section": "PASS - Weather page Calibration tab has section-rolling-calibration",
+    "frontend_rolling_stats": "PASS - Section shows Enabled, Resolved Records, Stations Calibrated, Min Samples, Needs Recalc",
+    "frontend_run_button": "PASS - Run Now button with data-testid='run-rolling-calibration-btn' found",
+    "frontend_reload_button": "PASS - Reload button with data-testid='reload-rolling-calibration-btn' found",
+    "frontend_empty_state": "PASS - Shows 'No rolling calibrations computed yet' message",
+    "frontend_calibration_card": "PASS - Health tab shows CalibrationStatusCard with data-testid='section-weather-calibration'",
+    "frontend_active_source_badge": "PASS - Active Source badge showing HISTORICAL",
+    "frontend_health_config": "PASS - Health tab Strategy Config shows Rolling Cal fields",
+    "frontend_settings_toggle": "PASS - Settings page shows rolling_calibration_enabled toggle (ON)",
+    "frontend_settings_fields": "PASS - Settings shows Rolling Min Samples, Rolling Recalc Interval, Rolling Recalc After",
+    "frontend_toggle_click": "PASS - Clicking toggle changes state ON -> OFF -> ON",
+    "regression_weather_endpoints": "PASS - signals, executions, health, forecasts, alerts all work",
+    "regression_other_pages": "PASS - Overview, Arbitrage, Sniper, Positions, Analytics, Settings all load"
+  }
+}

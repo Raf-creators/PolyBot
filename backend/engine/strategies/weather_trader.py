@@ -69,6 +69,10 @@ class WeatherTrader(BaseStrategy):
 
         # Calibration (per-station, loaded/computed on start)
         self._calibrations: Dict[str, SigmaCalibration] = {}
+        # Rolling calibration service (injected from server.py)
+        self._rolling_calibration_service = None
+        # Active calibration source tracking
+        self._calibration_sources: Dict[str, str] = {}  # station_id → source name
 
         # Signal + execution tracking
         self._signals: List[WeatherSignal] = []
@@ -130,6 +134,32 @@ class WeatherTrader(BaseStrategy):
         """Inject weather alert service for real-time signal alerts."""
         self._alert_service = service
 
+    def set_rolling_calibration_service(self, service):
+        """Inject rolling calibration service."""
+        self._rolling_calibration_service = service
+
+    async def reload_rolling_calibrations(self):
+        """Hot-reload rolling calibrations into the active calibration table."""
+        if not self._rolling_calibration_service:
+            return {"status": "no_service"}
+        rolling_cals = self._rolling_calibration_service.get_cached_calibrations()
+        min_samples = self.config.rolling_min_samples
+        upgraded = 0
+        for sid, rcal in rolling_cals.items():
+            if rcal.sample_count >= min_samples:
+                self._calibrations[sid] = SigmaCalibration(
+                    station_id=sid,
+                    calibrated_at=rcal.calibrated_at,
+                    sample_count=rcal.sample_count,
+                    sigma_by_lead_hours=rcal.sigma_by_lead_hours,
+                    seasonal_factors=rcal.seasonal_factors,
+                    station_type_factor=rcal.station_type_factor,
+                    mean_bias_f=rcal.mean_bias_f,
+                )
+                self._calibration_sources[sid] = "rolling_live"
+                upgraded += 1
+        return {"status": "reloaded", "rolling_stations": upgraded}
+
     def apply_shadow_overrides(self):
         """Apply conservative shadow-mode config overrides."""
         for key, val in SHADOW_CONFIG_OVERRIDES.items():
@@ -147,20 +177,56 @@ class WeatherTrader(BaseStrategy):
         self._bus.on(EventType.ORDER_UPDATE, self._on_order_update)
         await self._feed.start()
 
-        # Load calibrations from MongoDB if available
+        # Load calibrations: rolling > historical > defaults
+        # Step 1: Load historical bootstrap calibrations
         if self._calibration_service:
             try:
                 calibrations = await self._calibration_service.get_all_calibrations()
                 if calibrations:
                     self._calibrations = calibrations
+                    for sid in calibrations:
+                        self._calibration_sources[sid] = "historical_bootstrap"
                     logger.info(
-                        f"WeatherTrader loaded {len(calibrations)} calibrations: "
+                        f"WeatherTrader loaded {len(calibrations)} historical calibrations: "
                         f"{list(calibrations.keys())}"
                     )
                 else:
-                    logger.info("WeatherTrader: no calibrations found, using defaults")
+                    logger.info("WeatherTrader: no historical calibrations found, using defaults")
             except Exception as e:
-                logger.warning(f"WeatherTrader: failed to load calibrations: {e}")
+                logger.warning(f"WeatherTrader: failed to load historical calibrations: {e}")
+
+        # Step 2: Overlay rolling calibrations (higher priority)
+        if self._rolling_calibration_service:
+            try:
+                await self._rolling_calibration_service.load_cached()
+                rolling_cals = self._rolling_calibration_service.get_cached_calibrations()
+                min_samples = self.config.rolling_min_samples
+                for sid, rcal in rolling_cals.items():
+                    if rcal.sample_count >= min_samples:
+                        # Convert RollingCalibration to SigmaCalibration for use in calibrate_sigma()
+                        self._calibrations[sid] = SigmaCalibration(
+                            station_id=sid,
+                            calibrated_at=rcal.calibrated_at,
+                            sample_count=rcal.sample_count,
+                            sigma_by_lead_hours=rcal.sigma_by_lead_hours,
+                            seasonal_factors=rcal.seasonal_factors,
+                            station_type_factor=rcal.station_type_factor,
+                            mean_bias_f=rcal.mean_bias_f,
+                        )
+                        self._calibration_sources[sid] = "rolling_live"
+                if rolling_cals:
+                    live_count = sum(1 for s in self._calibration_sources.values() if s == "rolling_live")
+                    logger.info(
+                        f"WeatherTrader: {live_count} stations using rolling calibration "
+                        f"(min_samples={min_samples})"
+                    )
+            except Exception as e:
+                logger.warning(f"WeatherTrader: failed to load rolling calibrations: {e}")
+
+        # Set source for stations with no calibration
+        for sid in STATION_REGISTRY:
+            if sid not in self._calibration_sources:
+                self._calibration_sources[sid] = "default_sigma_table"
         self._scan_task = asyncio.create_task(self._scan_loop())
         logger.info(
             f"WeatherTrader started "
@@ -754,11 +820,7 @@ class WeatherTrader(BaseStrategy):
             recorded.add(key)
 
             # Determine calibration source
-            cal_source = (
-                "historical_calibration"
-                if sig.station_id in self._calibrations
-                else "default_sigma_table"
-            )
+            cal_source = self._calibration_sources.get(sig.station_id, "default_sigma_table")
 
             record = ForecastAccuracyRecord(
                 station_id=sig.station_id,
@@ -781,6 +843,29 @@ class WeatherTrader(BaseStrategy):
     def _get_city(self, station_id: str) -> str:
         station = STATION_REGISTRY.get(station_id)
         return station.city if station else station_id
+
+    def _get_calibration_source_summary(self) -> Dict[str, int]:
+        """Count stations per calibration source."""
+        summary: Dict[str, int] = {}
+        for source in self._calibration_sources.values():
+            summary[source] = summary.get(source, 0) + 1
+        return summary
+
+    def _get_primary_calibration_source(self) -> str:
+        """Human-readable label for the dominant calibration source."""
+        summary = self._get_calibration_source_summary()
+        if summary.get("rolling_live", 0) > 0:
+            return "rolling_live"
+        if summary.get("historical_bootstrap", 0) > 0:
+            return "historical_bootstrap"
+        return "default_sigma_table"
+
+    def _get_calibration_note(self) -> str:
+        summary = self._get_calibration_source_summary()
+        parts = []
+        for src, count in sorted(summary.items()):
+            parts.append(f"{src}: {count}")
+        return ", ".join(parts) if parts else "Using default NWS MOS sigma table"
 
     # ---- API Data Accessors ----
 
@@ -818,15 +903,10 @@ class WeatherTrader(BaseStrategy):
                 "using_defaults": len(self._calibrations) == 0,
                 "calibrated_stations": list(self._calibrations.keys()),
                 "total_stations": len(STATION_REGISTRY),
-                "calibration_source": (
-                    "historical_calibration" if self._calibrations
-                    else "default_sigma_table"
-                ),
-                "note": (
-                    f"Calibrated: {list(self._calibrations.keys())}"
-                    if self._calibrations
-                    else "Using default NWS MOS sigma table"
-                ),
+                "sources": dict(self._calibration_sources),
+                "source_summary": self._get_calibration_source_summary(),
+                "calibration_source": self._get_primary_calibration_source(),
+                "note": self._get_calibration_note(),
             },
             "classifications": {
                 cid: {

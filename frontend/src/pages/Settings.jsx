@@ -432,6 +432,10 @@ function StrategyConfigSection({ config, fetchConfig }) {
     min_weather_alert_edge_bps: 'Alert Min Edge (bps)',
     min_weather_alert_price_move_bps: 'Alert Min Price Move (bps)',
     weather_alert_cooldown_seconds: 'Alert Cooldown (s)',
+    rolling_calibration_enabled: 'Rolling Calibration',
+    rolling_min_samples: 'Rolling Min Samples',
+    rolling_recalc_interval_hours: 'Rolling Recalc Interval (h)',
+    rolling_recalc_after_n_records: 'Rolling Recalc After (records)',
   };
 
   const handleSave = async (stratId, key, rawValue) => {

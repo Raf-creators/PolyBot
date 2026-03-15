@@ -45,6 +45,7 @@ from engine.clob_ws import ClobWebSocketClient
 from services.forecast_accuracy_service import ForecastAccuracyService
 from services.calibration_service import CalibrationService
 from services.weather_alert_service import WeatherAlertService
+from services.rolling_calibration_service import RollingCalibrationService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -60,6 +61,7 @@ forecast_accuracy_service: Optional[ForecastAccuracyService] = None
 calibration_service: Optional[CalibrationService] = None
 clob_ws_client: Optional[ClobWebSocketClient] = None
 weather_alert_service: Optional[WeatherAlertService] = None
+rolling_calibration_service: Optional[RollingCalibrationService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -86,7 +88,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, weather_alert_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, weather_alert_service, rolling_calibration_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -143,6 +145,12 @@ async def lifespan(app: FastAPI):
     weather_alert_service.set_config(weather_trader_ref.config)
     weather_trader_ref.set_alert_service(weather_alert_service)
 
+    # Rolling calibration service
+    rolling_calibration_service = RollingCalibrationService(db)
+    await rolling_calibration_service.ensure_indexes()
+    rolling_calibration_service.set_config(weather_trader_ref.config)
+    weather_trader_ref.set_rolling_calibration_service(rolling_calibration_service)
+
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
     persisted = await config_service.load()
@@ -151,6 +159,9 @@ async def lifespan(app: FastAPI):
         # Re-sync alert service with loaded config
         if weather_alert_service and weather_trader_ref:
             weather_alert_service.set_config(weather_trader_ref.config)
+        # Re-sync rolling calibration service with loaded config
+        if rolling_calibration_service and weather_trader_ref:
+            rolling_calibration_service.set_config(weather_trader_ref.config)
         logger.info("Persisted configuration applied")
     else:
         # Save defaults on first boot
@@ -408,6 +419,9 @@ async def update_config_granular(body: dict):
                         # Sync alert service config
                         if weather_alert_service:
                             weather_alert_service.set_config(weather_trader_ref.config)
+                        # Sync rolling calibration config
+                        if rolling_calibration_service:
+                            rolling_calibration_service.set_config(weather_trader_ref.config)
                     except Exception as e:
                         raise HTTPException(400, f"Invalid weather config: {e}")
                 changes["weather_trader"] = "updated"
@@ -974,11 +988,53 @@ async def reload_calibrations():
         raise HTTPException(500, "Services not initialized")
     calibrations = await calibration_service.get_all_calibrations()
     weather_trader_ref._calibrations = calibrations
+    # Also reload rolling calibrations
+    rolling_result = {}
+    if rolling_calibration_service:
+        await rolling_calibration_service.load_cached()
+        rolling_result = await weather_trader_ref.reload_rolling_calibrations()
     return {
         "status": "reloaded",
         "calibrations_loaded": len(calibrations),
         "stations": list(calibrations.keys()),
+        "rolling": rolling_result,
     }
+
+
+# ---- Rolling Calibration Endpoints ----
+
+@api_router.get("/strategies/weather/calibration/rolling/status")
+async def get_rolling_calibration_status():
+    """Get rolling calibration status and per-station details."""
+    if not rolling_calibration_service:
+        return {"enabled": False, "status": "service_not_initialized"}
+    return await rolling_calibration_service.get_status()
+
+
+@api_router.post("/strategies/weather/calibration/rolling/run")
+async def run_rolling_calibration(body: dict = None):
+    """Run rolling calibration from live forecast_accuracy data.
+
+    Body (optional): { "station_ids": ["KLGA", "KORD"] }
+    """
+    if not rolling_calibration_service:
+        raise HTTPException(500, "Rolling calibration service not initialized")
+    station_ids = body.get("station_ids") if body else None
+    result = await rolling_calibration_service.run_rolling_calibration(station_ids=station_ids)
+    # Hot-reload into WeatherTrader
+    if weather_trader_ref:
+        await weather_trader_ref.reload_rolling_calibrations()
+    return result
+
+
+@api_router.post("/strategies/weather/calibration/rolling/reload")
+async def reload_rolling_calibrations():
+    """Reload rolling calibrations from MongoDB into the running WeatherTrader."""
+    if not rolling_calibration_service or not weather_trader_ref:
+        raise HTTPException(500, "Services not initialized")
+    await rolling_calibration_service.load_cached()
+    result = await weather_trader_ref.reload_rolling_calibrations()
+    return result
 
 
 

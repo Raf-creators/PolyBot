@@ -74,6 +74,12 @@ class WeatherConfig(BaseModel):
     min_weather_alert_price_move_bps: float = 300.0         # min price move (bps) to trigger alert
     weather_alert_cooldown_seconds: float = 300.0           # 5 min debounce per market alert key
 
+    # Rolling calibration settings
+    rolling_calibration_enabled: bool = True
+    rolling_min_samples: int = 15                           # min resolved records per group to use
+    rolling_recalc_interval_hours: float = 168.0            # recalculate weekly (168h)
+    rolling_recalc_after_n_records: int = 20                # OR recalculate after N new records
+
 
 # ---- Station Info ----
 
@@ -171,6 +177,26 @@ class SigmaCalibration(BaseModel):
     })
     station_type_factor: float = 1.0   # 0.90 coastal, 1.10 inland
     mean_bias_f: float = 0.0           # systematic bias in degrees F
+
+
+class RollingCalibration(BaseModel):
+    """Rolling live calibration computed from resolved forecast_accuracy records."""
+    station_id: str
+    source: str = "rolling"                     # always "rolling"
+    calibrated_at: str = Field(default_factory=utc_now)
+    sample_count: int = 0
+    sigma_by_lead_hours: Dict[str, float] = Field(default_factory=dict)
+    seasonal_factors: Dict[str, float] = Field(default_factory=dict)
+    station_type_factor: float = 1.0
+    mean_bias_f: float = 0.0
+    # Per-group detail
+    bias_by_lead_hours: Dict[str, float] = Field(default_factory=dict)   # lead bracket → mean bias
+    bias_by_season: Dict[str, float] = Field(default_factory=dict)       # season → mean bias
+    samples_by_lead_hours: Dict[str, int] = Field(default_factory=dict)  # lead bracket → count
+    samples_by_season: Dict[str, int] = Field(default_factory=dict)      # season → count
+    coverage_start: Optional[str] = None       # earliest target_date in window
+    coverage_end: Optional[str] = None         # latest target_date in window
+    records_since_last_update: int = 0         # new records since last calc
 
 
 # ---- Bucket Probability Result ----

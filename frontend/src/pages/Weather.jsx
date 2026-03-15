@@ -35,24 +35,28 @@ export default function Weather() {
   const [stationSummary, setStationSummary] = useState({});
   const [calibrationHealth, setCalibrationHealth] = useState(null);
   const [sigmaCalStatus, setSigmaCalStatus] = useState(null);
+  const [rollingCalStatus, setRollingCalStatus] = useState(null);
   const [calRunning, setCalRunning] = useState(false);
+  const [rollingCalRunning, setRollingCalRunning] = useState(false);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
         axios.get(`${API_BASE}/strategies/weather/calibration/status`),
+        axios.get(`${API_BASE}/strategies/weather/calibration/rolling/status`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
       setCalibrationHealth(cal.data);
       setStationSummary(cal.data?.station_summaries || {});
       setSigmaCalStatus(sigCal.data);
+      setRollingCalStatus(rolCal.data);
     } catch {}
   }, [demoMode]);
 
@@ -289,6 +293,27 @@ export default function Weather() {
               />
             </div>
 
+            {/* Rolling Calibration */}
+            <RollingCalibrationSection
+              status={rollingCalStatus}
+              running={rollingCalRunning}
+              onRun={async () => {
+                setRollingCalRunning(true);
+                try {
+                  await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/run`);
+                  await fetchCalibration();
+                  fetchWeatherHealth();
+                } catch {}
+                setRollingCalRunning(false);
+              }}
+              onReload={async () => {
+                try {
+                  await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/reload`);
+                  fetchWeatherHealth();
+                } catch {}
+              }}
+            />
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               {/* Per-Station Accuracy */}
               <StationAccuracySection stations={stationSummary} />
@@ -308,30 +333,7 @@ export default function Weather() {
         {/* Health Tab */}
         <TabsContent value="health" className="mt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            <SectionCard title="Calibration" testId="section-weather-calibration">
-              <div className="space-y-3 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Sigma Source</span>
-                  <span className="text-amber-400 font-mono">Default NWS MOS Table</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Historical Calibration</span>
-                  <span className="text-zinc-500 font-mono">Not Available</span>
-                </div>
-                <div className="pt-2 border-t border-zinc-800 text-zinc-600">
-                  Using published NWS accuracy data for sigma estimates. See Calibration tab for live accuracy tracking.
-                </div>
-                <div className="space-y-1.5 pt-2 border-t border-zinc-800">
-                  <div className="text-zinc-500 mb-1">Default Sigma by Lead Time</div>
-                  {[['0-24h', '1.8F'],['24-48h', '2.7F'],['48-72h', '3.4F'],['72-120h', '4.8F'],['120-168h', '6.2F']].map(([bracket, sigma]) => (
-                    <div key={bracket} className="flex justify-between">
-                      <span className="text-zinc-500">{bracket}</span>
-                      <span className="text-zinc-300 font-mono">{sigma}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </SectionCard>
+            <CalibrationStatusCard calStatus={health.calibration_status || {}} />
 
             <SectionCard title="Scanner Metrics" testId="section-weather-metrics">
               <div className="space-y-2 text-xs">
@@ -442,6 +444,10 @@ export default function Weather() {
                   ['Alert Min Edge', `${config.min_weather_alert_edge_bps} bps`],
                   ['Alert Min Price Move', `${config.min_weather_alert_price_move_bps} bps`],
                   ['Alert Cooldown', `${config.weather_alert_cooldown_seconds}s`],
+                  ['Rolling Cal Enabled', config.rolling_calibration_enabled ? 'Yes' : 'No'],
+                  ['Rolling Min Samples', config.rolling_min_samples],
+                  ['Rolling Recalc Interval', `${config.rolling_recalc_interval_hours}h`],
+                  ['Rolling Recalc After', `${config.rolling_recalc_after_n_records} records`],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -836,5 +842,139 @@ function WeatherAlertsSection({ alerts, stats }) {
     </div>
   );
 }
+
+const SOURCE_STYLES = {
+  rolling_live: { label: 'ROLLING LIVE', color: 'text-emerald-400' },
+  historical_bootstrap: { label: 'HISTORICAL', color: 'text-amber-400' },
+  default_sigma_table: { label: 'DEFAULT', color: 'text-zinc-500' },
+};
+
+function CalibrationStatusCard({ calStatus }) {
+  const source = calStatus.calibration_source || 'default_sigma_table';
+  const sourceSummary = calStatus.source_summary || {};
+  const style = SOURCE_STYLES[source] || SOURCE_STYLES.default_sigma_table;
+
+  return (
+    <SectionCard title="Calibration Source" testId="section-weather-calibration">
+      <div className="space-y-3 text-xs">
+        <div className="flex justify-between items-center">
+          <span className="text-zinc-500">Active Source</span>
+          <Badge data-testid="calibration-source-badge" variant="outline" className={`text-[9px] ${style.color}`}>
+            {style.label}
+          </Badge>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-zinc-500">Calibrated Stations</span>
+          <span className="text-zinc-300 font-mono">{calStatus.calibrated_stations?.length || 0} / {calStatus.total_stations || 0}</span>
+        </div>
+        {Object.keys(sourceSummary).length > 0 && (
+          <div className="pt-2 border-t border-zinc-800 space-y-1">
+            <div className="text-zinc-600 mb-1">Source Breakdown</div>
+            {Object.entries(sourceSummary).map(([src, count]) => {
+              const s = SOURCE_STYLES[src] || SOURCE_STYLES.default_sigma_table;
+              return (
+                <div key={src} className="flex justify-between">
+                  <span className={s.color}>{s.label}</span>
+                  <span className="text-zinc-300 font-mono">{count} stations</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="pt-2 border-t border-zinc-800 text-zinc-600">
+          {calStatus.note || 'Using default NWS MOS sigma table'}
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function RollingCalibrationSection({ status, running, onRun, onReload }) {
+  if (!status) return null;
+  const stations = status.stations || {};
+  const stationList = Object.values(stations);
+
+  return (
+    <SectionCard
+      title="Rolling Live Calibration"
+      testId="section-rolling-calibration"
+      action={
+        <div className="flex gap-2">
+          <Button
+            data-testid="run-rolling-calibration-btn"
+            size="sm" variant="outline"
+            disabled={running}
+            onClick={onRun}
+            className="h-6 text-[10px] px-3 border-zinc-700"
+          >
+            {running ? 'Running...' : 'Run Now'}
+          </Button>
+          <Button
+            data-testid="reload-rolling-calibration-btn"
+            size="sm" variant="outline"
+            onClick={onReload}
+            className="h-6 text-[10px] px-3 border-zinc-700"
+          >
+            Reload
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3 text-xs">
+        <div className="flex flex-wrap gap-x-6 gap-y-1 text-zinc-500">
+          <span>Enabled: <span className={`font-mono ${status.enabled ? 'text-emerald-400' : 'text-zinc-500'}`}>{status.enabled ? 'YES' : 'NO'}</span></span>
+          <span>Resolved Records: <span className="text-zinc-300 font-mono">{status.total_resolved_records || 0}</span></span>
+          <span>Stations Calibrated: <span className="text-zinc-300 font-mono">{status.total_stations_calibrated || 0}</span></span>
+          <span>Min Samples: <span className="text-zinc-400 font-mono">{status.min_samples_required}</span></span>
+          <span>Needs Recalc: <span className={`font-mono ${status.needs_recalculation ? 'text-amber-400' : 'text-zinc-500'}`}>{status.needs_recalculation ? 'YES' : 'No'}</span></span>
+        </div>
+        {status.last_run && (
+          <div className="text-zinc-600">Last run: {formatTimeAgo(status.last_run)} ({status.last_status})</div>
+        )}
+
+        {stationList.length > 0 ? (
+          <div className="pt-2 border-t border-zinc-800 space-y-2">
+            {stationList.map((s) => (
+              <div key={s.station_id} className="border border-zinc-800 rounded-md px-3 py-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
+                  <div className="flex gap-3">
+                    <span className="text-zinc-500">Samples: <span className="text-zinc-300 font-mono">{s.sample_count}</span></span>
+                    <Badge
+                      variant="outline"
+                      className={`text-[9px] ${s.sufficient ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}
+                    >
+                      {s.sufficient ? 'SUFFICIENT' : 'SPARSE'}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-zinc-500">
+                  <span>Bias: <span className={`font-mono ${s.mean_bias_f > 0 ? 'text-red-400' : s.mean_bias_f < 0 ? 'text-blue-400' : 'text-zinc-400'}`}>{s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f?.toFixed(2)}F</span></span>
+                  <span>Sigma 0-24h: <span className="text-zinc-300 font-mono">{s.sigma_0_24?.toFixed(2)}F</span></span>
+                  <span>Sigma 48-72h: <span className="text-zinc-300 font-mono">{s.sigma_48_72?.toFixed(2)}F</span></span>
+                  {s.coverage_start && <span>Coverage: {s.coverage_start} to {s.coverage_end}</span>}
+                </div>
+                {s.bias_by_lead && Object.keys(s.bias_by_lead).length > 0 && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[10px] text-zinc-600">
+                    {Object.entries(s.bias_by_lead).map(([bracket, bias]) => (
+                      <span key={bracket}>
+                        {bracket}: <span className={`font-mono ${bias > 0.5 ? 'text-red-400' : bias < -0.5 ? 'text-blue-400' : 'text-zinc-400'}`}>{bias > 0 ? '+' : ''}{bias?.toFixed(2)}F</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-zinc-600 pt-2 border-t border-zinc-800">
+            No rolling calibrations computed yet. Requires {status.min_samples_required} resolved forecast records per station.
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
 
 
