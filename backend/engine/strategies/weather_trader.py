@@ -723,9 +723,9 @@ class WeatherTrader(BaseStrategy):
 
     def get_health(self) -> dict:
         # Determine execution mode from state
-        exec_mode = "unknown"
-        if self._state:
-            exec_mode = self._state.trading_mode.value if hasattr(self._state, 'trading_mode') else "paper"
+        exec_mode = "paper"
+        if self._state and hasattr(self._state, 'trading_mode'):
+            exec_mode = self._state.trading_mode.value
 
         return {
             **self._m,

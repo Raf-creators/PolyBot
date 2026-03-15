@@ -155,8 +155,15 @@ expired          → Expired on CLOB
 - `/app/test_reports/iteration_17.json`
 
 ## Prioritized Backlog
-### P0 — Shadow-Mode Testing
-- Enable WeatherTrader in shadow mode with tuned config (higher stale tolerance, tighter edge threshold)
+### P0 — Shadow-Mode Testing (Complete, 2026-03-14)
+- Shadow config overrides: min_edge=500bps, kelly=0.15, max_stale=600s, cooldown=2400s, max_concurrent=4
+- Forecast accuracy service: MongoDB `forecast_accuracy` collection, records forecasts on every scan, manual resolution endpoint
+- Calibration visibility: Calibration tab on Weather page with shadow summary, calibration health, per-station accuracy, accuracy log
+- New endpoints: `/api/strategies/weather/shadow-summary`, `/shadow/enable`, `/shadow/reset`, `/accuracy/history`, `/accuracy/calibration`, `/accuracy/unresolved`, `/accuracy/resolve`
+- Live run results: 25 markets classified, 18 signals generated (500bps+ threshold), 4 shadow executions filled
+- 30 forecast accuracy records collected (1 resolved: KLGA forecast=47.3F actual=43F error=-4.3F)
+- Testing: 30/30 backend + all frontend tests passed (100%)
+- `/app/test_reports/iteration_18.json`
 
 ### P1 — Historical Calibration Bootstrap
 - Auto-calibrate sigma values from Open-Meteo archive data per station/season
