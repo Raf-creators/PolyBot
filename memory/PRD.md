@@ -203,9 +203,31 @@ expired          → Expired on CLOB
 - **No changes** to core trading logic, execution behavior, or risk engine
 - Testing: 22/22 backend API + all frontend UI passed (100%) + 15/15 unit tests — `/app/test_reports/iteration_21.json`
 
-### P4 — Future
+### P4 — Rolling Calibration System (Complete, 2026-03-15)
+- **RollingCalibrationService** (`/app/backend/services/rolling_calibration_service.py`): Aggregates resolved `forecast_accuracy` records by station + lead-time bracket + season to compute rolling sigma values and bias estimates
+- **Tri-level calibration priority**: rolling_live > historical_bootstrap > default_sigma_table
+  - WeatherTrader loads historical calibrations first, then overlays rolling calibrations for stations with sufficient data
+  - Each station's calibration source is tracked and reported in health endpoint
+- **Minimum sample safety**: Requires `rolling_min_samples` (default 15) resolved records per station before producing a rolling calibration. Falls back to historical/default when sparse
+- **Recalculation policy** (configurable, whichever fires first):
+  - Time-based: every `rolling_recalc_interval_hours` (default 168h = weekly)
+  - Record-count-based: after `rolling_recalc_after_n_records` (default 20) new resolved records
+- **Bias tracking**: Per-station, per-lead-bracket, per-season mean forecast error tracked and exposed
+- **Config**: 4 new `WeatherConfig` fields: `rolling_calibration_enabled` (bool), `rolling_min_samples` (15), `rolling_recalc_interval_hours` (168), `rolling_recalc_after_n_records` (20)
+- **Storage**: `weather_rolling_calibration` MongoDB collection (separate from raw forecast_accuracy and historical bootstrap)
+- **API endpoints**:
+  - `GET /api/strategies/weather/calibration/rolling/status`
+  - `POST /api/strategies/weather/calibration/rolling/run`
+  - `POST /api/strategies/weather/calibration/rolling/reload`
+- **Dashboard**: 
+  - Calibration tab: "Rolling Live Calibration" section with stats, per-station bias/sigma details, Run Now/Reload buttons
+  - Health tab: Dynamic "Calibration Source" card showing active source badge, station counts, source breakdown
+  - Strategy Config: Shows rolling calibration settings
+- **Settings**: Rolling calibration toggle and numeric threshold fields
+- Testing: 31/31 backend API + all frontend UI passed (100%) + 8/8 unit tests — `/app/test_reports/iteration_22.json`
+
+### P5 — Future
 - Fix pre-existing `test_phase7_config_persistence.py` failures
-- Rolling calibration system (auto-refine sigma from live forecast_accuracy data)
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
 - Copy trading skeleton
