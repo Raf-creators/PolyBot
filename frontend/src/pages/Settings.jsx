@@ -436,6 +436,7 @@ function StrategyConfigSection({ config, fetchConfig }) {
     rolling_min_samples: 'Rolling Min Samples',
     rolling_recalc_interval_hours: 'Rolling Recalc Interval (h)',
     rolling_recalc_after_n_records: 'Rolling Recalc After (records)',
+    min_liquidity_score: 'Min Liquidity Score (0-100)',
   };
 
   const handleSave = async (stratId, key, rawValue) => {

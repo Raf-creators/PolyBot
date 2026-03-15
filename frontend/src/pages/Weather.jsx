@@ -119,13 +119,20 @@ export default function Weather() {
     { key: 'confidence', label: 'Conf', align: 'right', sortable: true, render: (v) => (
       <span className={`font-mono ${v >= 0.6 ? 'text-emerald-400' : v >= 0.3 ? 'text-amber-400' : 'text-zinc-500'}`}>{v > 0 ? (v * 100).toFixed(0) + '%' : '—'}</span>
     )},
+    { key: 'liquidity_score', label: 'Liq', align: 'right', sortable: true, render: (v) => {
+      const s = v || 0;
+      const color = s >= 50 ? 'text-emerald-400' : s >= 35 ? 'text-teal-400' : s >= 20 ? 'text-cyan-400' : 'text-zinc-500';
+      return <span className={`font-mono ${color}`}>{s > 0 ? s.toFixed(0) : '—'}</span>;
+    }},
     { key: 'recommended_size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{v > 0 ? formatNumber(v, 1) : '—'}</span> },
     { key: 'lead_hours', label: 'Lead', align: 'right', render: (v) => <span className="font-mono text-zinc-400">{v > 0 ? `${v.toFixed(0)}h` : '—'}</span> },
   ];
 
   const rejectedColumns = [
     ...signalColumns.slice(0, 5),
-    { key: 'rejection_reason', label: 'Reason', render: (v) => <span className="text-zinc-500 text-xs">{v}</span> },
+    { key: 'rejection_reason', label: 'Reason', render: (v) => (
+      <span className={`text-xs ${v?.includes('liquidity_too_low') ? 'text-orange-400' : 'text-zinc-500'}`}>{v}</span>
+    )},
     { key: 'detected_at', label: 'Detected', render: (v) => <span className="text-zinc-600">{formatTimeAgo(v)}</span> },
   ];
 
@@ -448,6 +455,7 @@ export default function Weather() {
                   ['Rolling Min Samples', config.rolling_min_samples],
                   ['Rolling Recalc Interval', `${config.rolling_recalc_interval_hours}h`],
                   ['Rolling Recalc After', `${config.rolling_recalc_after_n_records} records`],
+                  ['Min Liquidity Score', config.min_liquidity_score],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>

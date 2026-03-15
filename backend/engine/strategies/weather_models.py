@@ -80,6 +80,9 @@ class WeatherConfig(BaseModel):
     rolling_recalc_interval_hours: float = 168.0            # recalculate weekly (168h)
     rolling_recalc_after_n_records: int = 20                # OR recalculate after N new records
 
+    # Liquidity score filter
+    min_liquidity_score: float = 35.0                       # 0-100, skip buckets scoring below this
+
 
 # ---- Station Info ----
 
@@ -232,6 +235,7 @@ class WeatherSignal(BaseModel):
     recommended_size: float
     is_tradable: bool
     rejection_reason: Optional[str] = None
+    liquidity_score: float = 0.0
     detected_at: str = Field(default_factory=utc_now)
 
 

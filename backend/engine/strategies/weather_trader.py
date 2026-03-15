@@ -586,6 +586,18 @@ class WeatherTrader(BaseStrategy):
                     f"low_liquidity ({liquidity:.0f})", bucket_label=bucket.label))
                 continue
 
+            # --- Liquidity score filter ---
+            liq_score = self.get_liquidity_score(bucket.token_id)
+            if self.config.min_liquidity_score > 0 and liq_score < self.config.min_liquidity_score:
+                self._m["rejection_reasons"]["liquidity_too_low"] = self._m["rejection_reasons"].get("liquidity_too_low", 0) + 1
+                signals.append(self._reject_signal(
+                    cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
+                    f"liquidity_too_low (score {liq_score:.0f} < {self.config.min_liquidity_score:.0f})",
+                    bucket_label=bucket.label,
+                    model_prob=prob, market_price=market_price,
+                    liquidity_score=liq_score))
+                continue
+
             # --- Edge threshold ---
             if edge_bps < self.config.min_edge_bps:
                 signals.append(self._reject_signal(
@@ -659,6 +671,7 @@ class WeatherTrader(BaseStrategy):
                 confidence=confidence,
                 recommended_size=size,
                 is_tradable=True,
+                liquidity_score=round(liq_score, 1),
             )
             signals.append(signal)
             buckets_traded += 1
@@ -677,6 +690,7 @@ class WeatherTrader(BaseStrategy):
         self, cm, forecast, mu, sigma, lead_hours,
         forecast_age_min, data_age, reason,
         bucket_label="", model_prob=0.0, market_price=0.0,
+        liquidity_score=0.0,
     ) -> WeatherSignal:
         """Create a rejected signal for the log and update metrics."""
         self._m["opportunities_rejected"] += 1
@@ -699,6 +713,7 @@ class WeatherTrader(BaseStrategy):
             recommended_size=0,
             is_tradable=False,
             rejection_reason=reason,
+            liquidity_score=round(liquidity_score, 1),
         )
 
     # ---- Stage 5: Execution ----
@@ -913,6 +928,7 @@ class WeatherTrader(BaseStrategy):
             "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},
             "alert_stats": self._alert_service.get_stats() if self._alert_service else {"enabled": False},
             "liquidity_scores_cached": len(self._liquidity_scores),
+            "liquidity_too_low_rejections": self._m.get("rejection_reasons", {}).get("liquidity_too_low", 0),
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),
             "calibration_status": {

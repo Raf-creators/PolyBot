@@ -51,6 +51,7 @@ def _make_weather_config(**overrides):
         cooldown_seconds=1800.0,
         max_concurrent_signals=8,
         max_buckets_per_market=2,
+        min_liquidity_score=0.0,  # disabled by default in tests
     )
     defaults.update(overrides)
     return WeatherConfig(**defaults)
@@ -255,6 +256,45 @@ class TestEVFiltering:
         signals = trader._evaluate_market(cm, time.time())
         rejected_liq = [s for s in signals if "liquidity" in (s.rejection_reason or "")]
         assert len(rejected_liq) > 0
+
+    def test_liquidity_score_below_threshold_rejected(self):
+        """Markets with liquidity_score < min_liquidity_score should be rejected."""
+        state = _make_mock_state()
+        cid, tids = _inject_weather_market(state)
+        trader, cm = self._setup_trader_with_forecast(
+            state, cid, mu=43.5, min_liquidity_score=99.0)  # impossibly high score threshold
+        # Liquidity scores default to 0 (not cached), so all buckets should be rejected
+        signals = trader._evaluate_market(cm, time.time())
+        rejected_liq = [s for s in signals if "liquidity_too_low" in (s.rejection_reason or "")]
+        assert len(rejected_liq) > 0
+        # No tradable signals
+        tradable = [s for s in signals if s.is_tradable]
+        assert len(tradable) == 0
+
+    def test_liquidity_score_above_threshold_passes(self):
+        """Markets with sufficient liquidity score should not be rejected for it."""
+        state = _make_mock_state()
+        cid, tids = _inject_weather_market(state)
+        trader, cm = self._setup_trader_with_forecast(
+            state, cid, mu=43.5, min_liquidity_score=5.0, min_edge_bps=1.0)
+        # Pre-populate high scores for all tokens
+        for tid in tids:
+            trader._liquidity_scores[tid] = 80.0
+        signals = trader._evaluate_market(cm, time.time())
+        # Should have no liquidity_too_low rejections
+        rejected_liq = [s for s in signals if "liquidity_too_low" in (s.rejection_reason or "")]
+        assert len(rejected_liq) == 0
+
+    def test_liquidity_score_zero_threshold_disables_filter(self):
+        """min_liquidity_score=0 should disable the filter."""
+        state = _make_mock_state()
+        cid, tids = _inject_weather_market(state)
+        trader, cm = self._setup_trader_with_forecast(
+            state, cid, mu=43.5, min_liquidity_score=0.0)
+        # Even with zero scores, no liquidity_too_low rejections
+        signals = trader._evaluate_market(cm, time.time())
+        rejected_liq = [s for s in signals if "liquidity_too_low" in (s.rejection_reason or "")]
+        assert len(rejected_liq) == 0
 
     def test_lead_time_too_short(self):
         state = _make_mock_state()

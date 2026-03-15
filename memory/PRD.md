@@ -233,11 +233,14 @@ expired          → Expired on CLOB
 - **Heatmap API**: `GET /api/markets/liquidity-heatmap` aggregates weather market tiles by condition_id (city+date), with per-bucket scores and summary stats
 - **Scores API**: `GET /api/markets/liquidity-scores` returns `{token_id: score}` for all tracked markets
 - **Strategy awareness**: WeatherTrader refreshes liquidity scores each scan cycle via `refresh_liquidity_scores()`
+- **Liquidity threshold filter**: `min_liquidity_score` config (default 35) rejects markets scoring below threshold with `liquidity_too_low` reason. Exposed in health metrics. 0 disables.
 - **Markets page**: Complete rewrite with dual-tab layout:
   - "Liquidity Heatmap" tab: city-grouped tiles with color-coded score badges (DRY/SPARSE/THIN/MODERATE/GOOD/DEEP), mini bucket bars, click-to-detail dialog
   - "All Markets" tab: existing searchable market table
 - **Detail dialog**: Per-bucket breakdown showing mid price, spread, liquidity, and individual scores
-- Testing: 20/20 backend API + all frontend UI tests (100%) + 12/12 unit tests — `/app/test_reports/iteration_23.json`
+- **Signals table**: Shows `Liq` column with color-coded liquidity score per signal
+- **Rejected signals**: `liquidity_too_low` rejections highlighted in orange
+- Testing: 20/20 backend API + all frontend UI tests (100%) + 12/12 liquidity unit tests + 3 rejection threshold tests — `/app/test_reports/iteration_23.json`
 
 ### P6 — Future
 - CLOB WebSocket for real-time fill updates
