@@ -112,6 +112,15 @@ def _inject_weather_market(state, uid="t1", mu_target=43.5):
     return cid, [f"weather-{uid}-{i}" for i in range(5)]
 
 
+def _run(coro):
+    """Run an async coroutine synchronously in tests."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 # ===========================================================================
 # Classification
 # ===========================================================================
@@ -122,7 +131,7 @@ class TestClassification:
         cid, tids = _inject_weather_market(state)
         trader = WeatherTrader(config=_make_weather_config())
         trader._state = state
-        classified = trader._classify_markets()
+        classified = _run(trader._classify_markets())
         assert cid in classified
         cm = classified[cid]
         assert cm.station_id == "KLGA"
@@ -143,7 +152,7 @@ class TestClassification:
         ))
         trader = WeatherTrader(config=_make_weather_config())
         trader._state = state
-        classified = trader._classify_markets()
+        classified = _run(trader._classify_markets())
         assert "btc-cond" not in classified
 
     def test_classifies_multiple_markets(self):
@@ -152,7 +161,7 @@ class TestClassification:
         cid2, _ = _inject_weather_market(state, uid="nyc2")
         trader = WeatherTrader(config=_make_weather_config())
         trader._state = state
-        classified = trader._classify_markets()
+        classified = _run(trader._classify_markets())
         assert len(classified) >= 2
 
 
@@ -166,7 +175,7 @@ class TestForecastHandling:
         cid, tids = _inject_weather_market(state)
         trader = WeatherTrader(config=_make_weather_config())
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         # No forecasts in feed cache
         cm = trader._classified[cid]
@@ -186,7 +195,7 @@ class TestForecastHandling:
         config = _make_weather_config(max_stale_forecast_minutes=0.001)  # ~0.06 sec
         trader = WeatherTrader(config=config)
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         # Inject a forecast but make it stale
         cm = trader._classified[cid]
@@ -215,7 +224,7 @@ class TestEVFiltering:
         config = _make_weather_config(**config_kw)
         trader = WeatherTrader(config=config)
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         cm = trader._classified[cid]
         snap = ForecastSnapshot(
@@ -290,7 +299,7 @@ class TestCooldown:
         config = _make_weather_config(min_edge_bps=100.0, cooldown_seconds=3600.0)
         trader = WeatherTrader(config=config)
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         cm = trader._classified[cid]
         snap = ForecastSnapshot(
@@ -330,7 +339,7 @@ class TestKillSwitch:
         config = _make_weather_config(min_edge_bps=100.0)
         trader = WeatherTrader(config=config)
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         cm = trader._classified[cid]
         snap = ForecastSnapshot(
@@ -514,7 +523,7 @@ class TestMaxBucketsPerMarket:
         )
         trader = WeatherTrader(config=config)
         trader._state = state
-        trader._classified = trader._classify_markets()
+        trader._classified = _run(trader._classify_markets())
 
         cm = trader._classified[cid]
         snap = ForecastSnapshot(

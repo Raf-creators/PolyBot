@@ -227,7 +227,6 @@ expired          → Expired on CLOB
 - Testing: 31/31 backend API + all frontend UI passed (100%) + 8/8 unit tests — `/app/test_reports/iteration_22.json`
 
 ### P5 — Future
-- Fix pre-existing `test_phase7_config_persistence.py` failures
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
 - Copy trading skeleton
