@@ -1,0 +1,135 @@
+{
+  "summary": "Historical Calibration Bootstrap (P1) feature testing - All 22 backend API tests passed (100%). All frontend UI tests passed. Calibration endpoints, MongoDB persistence, WeatherTrader integration, and Weather page Calibration tab all working correctly.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "POST /api/strategies/weather/calibration/run - runs calibration for single station (KLGA) with status=calibrated, sample_count>=80, base_sigma_f, mean_bias_f, sigma_by_lead",
+      "POST /api/strategies/weather/calibration/run - returns sigma_by_lead with all 5 lead brackets (0_24, 24_48, 48_72, 72_120, 120_168)",
+      "POST /api/strategies/weather/calibration/run - handles unknown station_id gracefully with errors list",
+      "GET /api/strategies/weather/calibration/status - returns total_stations_calibrated=5, total_stations_registered=8, last_run, last_status=completed, stations",
+      "GET /api/strategies/weather/calibration/status - station details include sample_count, calibrated_at, base_sigma_0_24, base_sigma_48_72, mean_bias_f, ready=true",
+      "GET /api/strategies/weather/calibration/KLGA - returns station_id, calibrated_at, sample_count=91, sigma_by_lead_hours, seasonal_factors, station_type_factor, mean_bias_f",
+      "GET /api/strategies/weather/calibration/NONEXISTENT - returns 404 for non-existent station",
+      "GET /api/strategies/weather/calibration/{station_id} - all 5 calibrated stations (KLGA, KORD, KATL, KDFW, KMIA) return valid data",
+      "POST /api/strategies/weather/calibration/reload - returns status=reloaded, calibrations_loaded=5, stations list",
+      "GET /api/strategies/weather/health - calibration_status shows using_defaults=false, calibration_source=historical_calibration after calibration",
+      "GET /api/strategies/weather/signals - regression test passed",
+      "GET /api/strategies/weather/executions - regression test passed",
+      "GET /api/strategies/weather/forecasts - regression test passed",
+      "GET /api/strategies/weather/stations - regression test passed (returns 8 stations)",
+      "GET /api/strategies/weather/config - regression test passed",
+      "GET /api/strategies/weather/shadow-summary - regression test passed",
+      "GET /api/strategies/weather/accuracy/history - regression test passed",
+      "GET /api/strategies/weather/accuracy/calibration - regression test passed",
+      "GET /api/strategies/weather/accuracy/unresolved - regression test passed",
+      "GET /api/demo/strategies/weather/signals - demo mode regression passed",
+      "GET /api/demo/strategies/weather/health - demo mode regression passed",
+      "GET /api/demo/strategies/weather/shadow-summary - demo mode regression passed"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with data-testid='weather-page'",
+      "Weather Trader heading visible with PAPER mode badge (data-testid='weather-exec-mode-badge')",
+      "Scan status visible (data-testid='weather-scan-status') showing IDLE | Scans: 0",
+      "Stats grid visible (data-testid='weather-stats-grid')",
+      "All 6 tabs present: Signals, Rejected, Executions, Forecasts, Calibration, Health",
+      "Calibration tab - Shadow-Mode Summary section (data-testid='section-shadow-summary') renders with Shadow Config and Operational Stats",
+      "Calibration tab - Shadow mode badge (data-testid='shadow-mode-badge') shows current mode",
+      "Calibration tab - Calibration Health section (data-testid='section-calibration-health') shows status COLLECTING, Using Defaults: Yes, 30 total records",
+      "Calibration tab - Sigma Calibration section (data-testid='section-sigma-calibration') shows 5/8 stations calibrated, Last Run date, status COMPLETED",
+      "Calibration tab - Run Calibration button (data-testid='run-calibration-btn') visible",
+      "Calibration tab - Reload button (data-testid='reload-calibration-btn') visible (because calibrations exist)",
+      "Calibration tab - Per-Station Accuracy section (data-testid='section-station-accuracy') shows KLGA with 1 sample, MAE 4.3F",
+      "Calibration tab - Calibrated Sigma Values section (data-testid='section-station-sigma') shows KLGA, KORD, KATL, KDFW, KMIA with 91 samples each, READY badges, sigma values for 0-24h and 48-72h lead times, bias values",
+      "Calibration tab - Forecast Accuracy Log section (data-testid='section-accuracy-log') renders table",
+      "Health tab - All 6 sections render: Calibration, Scanner Metrics, Feed Health, Rejection Reasons, Strategy Config, Classified Markets",
+      "Signals, Rejected, Executions, Forecasts tabs all clickable and show appropriate empty state messages"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_calibration_feature.py",
+    "/app/test_reports/pytest/pytest_results_calibration.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_calibration_feature.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (22/22 tests passed)",
+    "frontend": "100% (all UI flows verified)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "5 calibration records in MongoDB weather_sigma_calibration collection (created by main agent): KLGA, KORD, KATL, KDFW, KMIA - each with 91 samples",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Historical Calibration Bootstrap (P1) fully implemented and tested. KEY FEATURES: (1) POST /api/strategies/weather/calibration/run - fetches 90 days historical data from Open-Meteo, computes sigma_by_lead_hours for each station (2) GET /api/strategies/weather/calibration/status - shows total calibrated 5/8, last_run timestamp, per-station details with sample_count, sigma values, bias (3) GET /api/strategies/weather/calibration/{station_id} - returns full calibration with sigma_by_lead_hours, seasonal_factors, station_type_factor (4) POST /api/strategies/weather/calibration/reload - reloads from MongoDB into WeatherTrader._calibrations (5) Weather health shows calibration_status.using_defaults=false, calibration_source=historical_calibration after calibration (6) MongoDB weather_sigma_calibration collection has 5 documents (7) Weather page Calibration tab has: Shadow-Mode Summary, Calibration Health, Sigma Calibration section with Run/Reload buttons, Per-Station Accuracy, Calibrated Sigma Values showing all 5 stations with sigma data (8) Engine is STOPPED as required.",
+
+  "features_tested": {
+    "calibration_run_endpoint": "PASS - POST runs calibration, returns per-station results with sample_count, base_sigma_f, mean_bias_f, sigma_by_lead",
+    "calibration_status_endpoint": "PASS - GET returns total calibrated 5/8, last run info, per-station details",
+    "station_calibration_endpoint": "PASS - GET /calibration/{station_id} returns sigma_by_lead_hours, seasonal_factors, mean_bias_f",
+    "calibration_reload_endpoint": "PASS - POST reloads 5 calibrations from MongoDB into WeatherTrader",
+    "weather_health_calibration_status": "PASS - Shows using_defaults=false, calibration_source=historical_calibration",
+    "mongodb_persistence": "PASS - weather_sigma_calibration collection has 5 documents with correct schema",
+    "frontend_sigma_calibration_section": "PASS - Shows Stations Calibrated 5/8, Last Run, COMPLETED status, Run/Reload buttons",
+    "frontend_station_sigma_section": "PASS - Shows all 5 stations with 91 samples, READY badges, sigma values",
+    "regression_weather_endpoints": "PASS - All existing endpoints (signals, executions, forecasts, stations, config) work",
+    "regression_shadow_accuracy_endpoints": "PASS - shadow-summary, accuracy/history, accuracy/calibration, accuracy/unresolved all work",
+    "regression_demo_mode": "PASS - Demo mode weather endpoints still work"
+  },
+
+  "verified_calibration_data": {
+    "KLGA": {
+      "sample_count": 91,
+      "base_sigma_0_24": 2.7837,
+      "base_sigma_48_72": 4.8157,
+      "mean_bias_f": 2.6,
+      "seasonal_factors": {"winter": 0.941, "spring": 1.2078, "summer": 1, "fall": 1},
+      "station_type_factor": 0.9
+    },
+    "KORD": {
+      "sample_count": 91,
+      "base_sigma_0_24": 1.826,
+      "base_sigma_48_72": 3.159,
+      "mean_bias_f": 1.6923
+    },
+    "KATL": {
+      "sample_count": 91,
+      "base_sigma_0_24": 2.1499,
+      "base_sigma_48_72": 3.7194,
+      "mean_bias_f": 0.8593
+    },
+    "KDFW": {
+      "sample_count": 91,
+      "base_sigma_0_24": 2.0474,
+      "base_sigma_48_72": 3.542,
+      "mean_bias_f": 1.2165
+    },
+    "KMIA": {
+      "sample_count": 91,
+      "base_sigma_0_24": 1.2315,
+      "base_sigma_48_72": 2.1306,
+      "mean_bias_f": 0.6813
+    }
+  }
+}

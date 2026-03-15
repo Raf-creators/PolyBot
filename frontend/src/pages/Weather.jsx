@@ -4,6 +4,7 @@ import { useApi } from '../hooks/useApi';
 import { StatCard } from '../components/StatCard';
 import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
+import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatBps, formatPrice, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
@@ -32,21 +33,25 @@ export default function Weather() {
   const [accuracyHistory, setAccuracyHistory] = useState([]);
   const [stationSummary, setStationSummary] = useState({});
   const [calibrationHealth, setCalibrationHealth] = useState(null);
+  const [sigmaCalStatus, setSigmaCalStatus] = useState(null);
+  const [calRunning, setCalRunning] = useState(false);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
-    if (demoMode) return; // No calibration data in demo mode
+    if (demoMode) return;
     try {
-      const [ss, ah, cal] = await Promise.all([
+      const [ss, ah, cal, sigCal] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
+        axios.get(`${API_BASE}/strategies/weather/calibration/status`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
       setCalibrationHealth(cal.data);
       setStationSummary(cal.data?.station_summaries || {});
+      setSigmaCalStatus(sigCal.data);
     } catch {}
   }, [demoMode]);
 
@@ -249,8 +254,32 @@ export default function Weather() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               {/* Calibration Health */}
               <CalibrationHealthSection health={calibrationHealth} />
-              {/* Per-Station Summary */}
+              {/* Historical Sigma Calibration */}
+              <SigmaCalibrationSection
+                status={sigmaCalStatus}
+                calRunning={calRunning}
+                onRunCalibration={async () => {
+                  setCalRunning(true);
+                  try {
+                    await axios.post(`${API_BASE}/strategies/weather/calibration/run`);
+                    await fetchCalibration();
+                  } catch {}
+                  setCalRunning(false);
+                }}
+                onReload={async () => {
+                  try {
+                    await axios.post(`${API_BASE}/strategies/weather/calibration/reload`);
+                    fetchWeatherHealth();
+                  } catch {}
+                }}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Per-Station Accuracy */}
               <StationAccuracySection stations={stationSummary} />
+              {/* Per-Station Sigma Values */}
+              <StationSigmaSection status={sigmaCalStatus} />
             </div>
 
             {/* Accuracy Log */}
@@ -554,3 +583,134 @@ function StationAccuracySection({ stations }) {
     </SectionCard>
   );
 }
+
+function SigmaCalibrationSection({ status, calRunning, onRunCalibration, onReload }) {
+  const s = status || {};
+  const ready = s.total_stations_calibrated > 0;
+
+  return (
+    <SectionCard
+      title="Sigma Calibration"
+      testId="section-sigma-calibration"
+      action={
+        <div className="flex gap-2">
+          <Button
+            data-testid="run-calibration-btn"
+            size="sm"
+            variant="outline"
+            onClick={onRunCalibration}
+            disabled={calRunning}
+            className="h-6 text-[10px] px-2.5 border-zinc-700"
+          >
+            {calRunning ? 'Running...' : 'Run Calibration'}
+          </Button>
+          {ready && (
+            <Button
+              data-testid="reload-calibration-btn"
+              size="sm"
+              variant="outline"
+              onClick={onReload}
+              className="h-6 text-[10px] px-2.5 border-zinc-700"
+            >
+              Reload
+            </Button>
+          )}
+        </div>
+      }
+    >
+      <div className="space-y-2 text-xs">
+        <div className="flex justify-between">
+          <span className="text-zinc-500">Stations Calibrated</span>
+          <span className={`font-mono ${ready ? 'text-emerald-400' : 'text-zinc-500'}`}>
+            {s.total_stations_calibrated ?? 0} / {s.total_stations_registered ?? 8}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-zinc-500">Last Run</span>
+          <span className="text-zinc-400 font-mono">{s.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-zinc-500">Status</span>
+          <Badge
+            variant="outline"
+            className={`text-[9px] ${
+              s.last_status === 'completed' ? 'border-emerald-500/30 text-emerald-400'
+              : s.last_status === 'running' ? 'border-amber-500/30 text-amber-400'
+              : 'border-zinc-700 text-zinc-500'
+            }`}
+          >
+            {(s.last_status || 'NOT RUN').toUpperCase()}
+          </Badge>
+        </div>
+        {!ready && (
+          <p className="text-zinc-600 pt-2 border-t border-zinc-800">
+            Click "Run Calibration" to fetch 90 days of historical data from Open-Meteo and compute station-specific sigma values.
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+function StationSigmaSection({ status }) {
+  const stations = status?.stations || {};
+  const entries = Object.values(stations);
+
+  const LEAD_LABELS = {
+    '0_24': '0-24h',
+    '24_48': '24-48h',
+    '48_72': '48-72h',
+    '72_120': '72-120h',
+    '120_168': '120-168h',
+  };
+
+  return (
+    <SectionCard title="Calibrated Sigma Values" testId="section-station-sigma">
+      <div className="space-y-3 text-xs">
+        {entries.length === 0 ? (
+          <p className="text-zinc-600">No calibration data. Run calibration to compute station-specific sigma values from historical forecast accuracy.</p>
+        ) : (
+          entries.map((s) => (
+            <div key={s.station_id} className="space-y-1.5 pb-2 border-b border-zinc-800 last:border-0">
+              <div className="flex justify-between items-center">
+                <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-600 text-[10px]">{s.sample_count} samples</span>
+                  <Badge
+                    variant="outline"
+                    className={`text-[9px] ${s.ready ? 'border-emerald-500/30 text-emerald-400' : 'border-amber-500/30 text-amber-400'}`}
+                  >
+                    {s.ready ? 'READY' : 'LOW DATA'}
+                  </Badge>
+                </div>
+              </div>
+              <div className="grid grid-cols-5 gap-1 text-[10px]">
+                {['0_24', '24_48', '48_72', '72_120', '120_168'].map((bracket) => (
+                  <div key={bracket} className="text-center">
+                    <div className="text-zinc-600">{LEAD_LABELS[bracket]}</div>
+                    <div className="text-zinc-300 font-mono">
+                      {bracket === '0_24' && s.base_sigma_0_24 != null
+                        ? `${s.base_sigma_0_24.toFixed(2)}F`
+                        : bracket === '48_72' && s.base_sigma_48_72 != null
+                        ? `${s.base_sigma_48_72.toFixed(2)}F`
+                        : '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {s.mean_bias_f != null && (
+                <div className="flex justify-between text-[10px]">
+                  <span className="text-zinc-600">Bias</span>
+                  <span className={`font-mono ${Math.abs(s.mean_bias_f) > 2 ? 'text-amber-400' : 'text-zinc-400'}`}>
+                    {s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f.toFixed(2)}F
+                  </span>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+

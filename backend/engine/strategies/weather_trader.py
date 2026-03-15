@@ -79,6 +79,8 @@ class WeatherTrader(BaseStrategy):
 
         # Forecast accuracy service (injected from server.py)
         self._accuracy_service = None
+        # Calibration service (injected from server.py)
+        self._calibration_service = None
 
         # Metrics
         self._m: Dict = {
@@ -112,6 +114,10 @@ class WeatherTrader(BaseStrategy):
         """Inject forecast accuracy tracking service."""
         self._accuracy_service = service
 
+    def set_calibration_service(self, service):
+        """Inject calibration service for sigma loading."""
+        self._calibration_service = service
+
     def apply_shadow_overrides(self):
         """Apply conservative shadow-mode config overrides."""
         for key, val in SHADOW_CONFIG_OVERRIDES.items():
@@ -128,6 +134,21 @@ class WeatherTrader(BaseStrategy):
         await super().start(state, bus)
         self._bus.on(EventType.ORDER_UPDATE, self._on_order_update)
         await self._feed.start()
+
+        # Load calibrations from MongoDB if available
+        if self._calibration_service:
+            try:
+                calibrations = await self._calibration_service.get_all_calibrations()
+                if calibrations:
+                    self._calibrations = calibrations
+                    logger.info(
+                        f"WeatherTrader loaded {len(calibrations)} calibrations: "
+                        f"{list(calibrations.keys())}"
+                    )
+                else:
+                    logger.info("WeatherTrader: no calibrations found, using defaults")
+            except Exception as e:
+                logger.warning(f"WeatherTrader: failed to load calibrations: {e}")
         self._scan_task = asyncio.create_task(self._scan_loop())
         logger.info(
             f"WeatherTrader started "
@@ -744,7 +765,15 @@ class WeatherTrader(BaseStrategy):
                 "using_defaults": len(self._calibrations) == 0,
                 "calibrated_stations": list(self._calibrations.keys()),
                 "total_stations": len(STATION_REGISTRY),
-                "note": "Using default NWS MOS sigma table" if not self._calibrations else "Historical calibration loaded",
+                "calibration_source": (
+                    "historical_calibration" if self._calibrations
+                    else "default_sigma_table"
+                ),
+                "note": (
+                    f"Calibrated: {list(self._calibrations.keys())}"
+                    if self._calibrations
+                    else "Using default NWS MOS sigma table"
+                ),
             },
             "classifications": {
                 cid: {

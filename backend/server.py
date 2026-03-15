@@ -42,6 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from services.forecast_accuracy_service import ForecastAccuracyService
+from services.calibration_service import CalibrationService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -54,6 +55,7 @@ telegram_notifier: Optional[TelegramNotifier] = None
 config_service: Optional[ConfigService] = None
 live_order_service: Optional[LiveOrderService] = None
 forecast_accuracy_service: Optional[ForecastAccuracyService] = None
+calibration_service: Optional[CalibrationService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -80,7 +82,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -113,6 +115,11 @@ async def lifespan(app: FastAPI):
     forecast_accuracy_service = ForecastAccuracyService(db)
     await forecast_accuracy_service.ensure_indexes()
     weather_trader_ref.set_accuracy_service(forecast_accuracy_service)
+
+    # Historical calibration service
+    calibration_service = CalibrationService(db)
+    await calibration_service.ensure_indexes()
+    weather_trader_ref.set_calibration_service(calibration_service)
 
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
@@ -870,6 +877,63 @@ async def reset_weather_config():
         "status": "config_reset_to_defaults",
         "config": weather_trader_ref.config.model_dump(),
     }
+
+
+# ---- Calibration Endpoints ----
+
+@api_router.post("/strategies/weather/calibration/run")
+async def run_calibration(body: dict = None):
+    """Run historical calibration for all or specified stations.
+
+    Body (optional): { "station_ids": ["KLGA", "KORD"], "lookback_days": 90 }
+    """
+    if not calibration_service:
+        raise HTTPException(500, "Calibration service not initialized")
+
+    station_ids = None
+    lookback_days = 90
+    if body:
+        station_ids = body.get("station_ids")
+        lookback_days = body.get("lookback_days", 90)
+
+    result = await calibration_service.run_calibration(
+        station_ids=station_ids, lookback_days=lookback_days,
+    )
+    return result
+
+
+@api_router.get("/strategies/weather/calibration/status")
+async def get_calibration_status():
+    """Get calibration status including per-station details."""
+    if not calibration_service:
+        raise HTTPException(500, "Calibration service not initialized")
+    return await calibration_service.get_status()
+
+
+@api_router.get("/strategies/weather/calibration/{station_id}")
+async def get_station_calibration(station_id: str):
+    """Get calibration data for a specific station."""
+    if not calibration_service:
+        raise HTTPException(500, "Calibration service not initialized")
+    cal = await calibration_service.get_calibration(station_id)
+    if not cal:
+        raise HTTPException(404, f"No calibration for {station_id}")
+    return cal.model_dump()
+
+
+@api_router.post("/strategies/weather/calibration/reload")
+async def reload_calibrations():
+    """Reload calibrations from MongoDB into the running WeatherTrader."""
+    if not calibration_service or not weather_trader_ref:
+        raise HTTPException(500, "Services not initialized")
+    calibrations = await calibration_service.get_all_calibrations()
+    weather_trader_ref._calibrations = calibrations
+    return {
+        "status": "reloaded",
+        "calibrations_loaded": len(calibrations),
+        "stations": list(calibrations.keys()),
+    }
+
 
 
 @api_router.post("/test/inject-weather-market")
