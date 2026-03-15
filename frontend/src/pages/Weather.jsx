@@ -73,6 +73,7 @@ export default function Weather() {
 
   const config = health.config || {};
   const feedHealth = health.feed_health || {};
+  const clobHealth = health.clob_ws_health || {};
   const rejReasons = health.rejection_reasons || {};
   const classFailReasons = health.classification_failure_reasons || {};
   const classifications = health.classifications || {};
@@ -352,6 +353,38 @@ export default function Weather() {
                     <span className={`font-mono ${String(label).includes('Error') && val ? 'text-red-400' : 'text-zinc-300'}`}>{val ?? '—'}</span>
                   </div>
                 ))}
+              </div>
+            </SectionCard>
+
+            <SectionCard title="CLOB WebSocket" testId="section-clob-ws-health">
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Status</span>
+                  <span className={`font-mono font-medium ${clobHealth.connected ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {clobHealth.connected ? 'CONNECTED' : 'DISCONNECTED'}
+                  </span>
+                </div>
+                {[
+                  ['Subscribed Tokens', clobHealth.subscribed_tokens],
+                  ['Messages Received', clobHealth.messages_received],
+                  ['Price Updates', clobHealth.price_updates],
+                  ['Book Updates', clobHealth.book_updates],
+                  ['Trade Updates', clobHealth.trade_updates],
+                  ['Reconnects', clobHealth.reconnect_count],
+                  ['Uptime', clobHealth.uptime_seconds != null ? `${Math.floor(clobHealth.uptime_seconds / 60)}m ${Math.floor(clobHealth.uptime_seconds % 60)}s` : null],
+                  ['Last Message', clobHealth.last_message_seconds_ago != null ? `${clobHealth.last_message_seconds_ago.toFixed(0)}s ago` : null],
+                  ['Errors', clobHealth.errors],
+                ].map(([label, val]) => (
+                  <div key={label} className="flex justify-between">
+                    <span className="text-zinc-500">{label}</span>
+                    <span className={`font-mono ${label === 'Errors' && val > 0 ? 'text-red-400' : 'text-zinc-300'}`}>{val ?? '—'}</span>
+                  </div>
+                ))}
+                {clobHealth.last_error && (
+                  <div className="pt-2 border-t border-zinc-800">
+                    <span className="text-red-400 text-[10px]">{truncate(clobHealth.last_error, 60)}</span>
+                  </div>
+                )}
               </div>
             </SectionCard>
 

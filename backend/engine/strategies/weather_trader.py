@@ -81,6 +81,8 @@ class WeatherTrader(BaseStrategy):
         self._accuracy_service = None
         # Calibration service (injected from server.py)
         self._calibration_service = None
+        # CLOB WebSocket client (injected from server.py)
+        self._clob_ws = None
 
         # Metrics
         self._m: Dict = {
@@ -117,6 +119,10 @@ class WeatherTrader(BaseStrategy):
     def set_calibration_service(self, service):
         """Inject calibration service for sigma loading."""
         self._calibration_service = service
+
+    def set_clob_ws(self, client):
+        """Inject CLOB WebSocket client for real-time price subscriptions."""
+        self._clob_ws = client
 
     def apply_shadow_overrides(self):
         """Apply conservative shadow-mode config overrides."""
@@ -288,6 +294,12 @@ class WeatherTrader(BaseStrategy):
                         results[cm.condition_id] = cm
                 for err in cls_errors:
                     fail_reasons[err] = fail_reasons.get(err, 0) + 1
+
+                # Subscribe discovered tokens to CLOB WS for real-time updates
+                if self._clob_ws:
+                    ws_tokens = [m["yes_token_id"] for m in raw_markets if m.get("yes_token_id")]
+                    if ws_tokens:
+                        self._clob_ws.subscribe_tokens(ws_tokens)
                 self._m["gamma_events_discovered"] = len(raw_markets)
         except Exception as e:
             logger.warning(f"Gamma event discovery error: {e}")
@@ -759,6 +771,7 @@ class WeatherTrader(BaseStrategy):
                 for k, v in SHADOW_CONFIG_OVERRIDES.items()
             ),
             "feed_health": self._feed.health,
+            "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),
             "calibration_status": {

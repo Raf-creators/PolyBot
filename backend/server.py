@@ -41,6 +41,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from engine.clob_ws import ClobWebSocketClient
 from services.forecast_accuracy_service import ForecastAccuracyService
 from services.calibration_service import CalibrationService
 
@@ -56,6 +57,7 @@ config_service: Optional[ConfigService] = None
 live_order_service: Optional[LiveOrderService] = None
 forecast_accuracy_service: Optional[ForecastAccuracyService] = None
 calibration_service: Optional[CalibrationService] = None
+clob_ws_client: Optional[ClobWebSocketClient] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -82,7 +84,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -120,6 +122,13 @@ async def lifespan(app: FastAPI):
     calibration_service = CalibrationService(db)
     await calibration_service.ensure_indexes()
     weather_trader_ref.set_calibration_service(calibration_service)
+
+    # CLOB WebSocket client for real-time market data
+    clob_ws_client = ClobWebSocketClient()
+    clob_ws_client.set_state(state)
+    clob_ws_client.set_bus(bus)
+    await clob_ws_client.start()
+    weather_trader_ref.set_clob_ws(clob_ws_client)
 
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
@@ -180,6 +189,8 @@ async def lifespan(app: FastAPI):
             pass
     if engine and engine.is_running:
         await engine.stop()
+    if clob_ws_client:
+        await clob_ws_client.stop()
     mongo_client.close()
 
 
@@ -628,6 +639,14 @@ async def get_feed_health():
     if not state:
         raise HTTPException(500, "Engine not initialized")
     return state.health
+
+
+@api_router.get("/health/clob-ws")
+async def get_clob_ws_health():
+    if not clob_ws_client:
+        return {"connected": False, "note": "not_configured"}
+    return clob_ws_client.health
+
 
 
 # ---- Arb Strategy ----
