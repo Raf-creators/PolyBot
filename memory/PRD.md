@@ -186,8 +186,26 @@ expired          → Expired on CLOB
 - Polling fallback preserved (MarketDataFeed unchanged)
 - Testing: 30/30 backend + all frontend passed (100%) — `/app/test_reports/iteration_20.json`
 
-### P3 — Future
+### P3 — Real-time Weather Signal Alerting (Complete, 2026-03-15)
+- **WeatherAlertService** (`/app/backend/services/weather_alert_service.py`): Detects 5 alert types from CLOB WS data stream
+  - `PRICE_MOVE`: Large price changes (>300bps default)
+  - `EDGE_CHANGE`: Significant edge shifts (>200bps default)
+  - `BECAME_TRADABLE`: Market crossing tradability threshold
+  - `NO_LONGER_TRADABLE`: Market falling below tradability
+  - `SPREAD_DEVIATION`: Bucket spread-sum approaching rejection threshold
+- **Spam control**: Per-market debounce with configurable cooldown (default 300s per alert_key = type:station:date:bucket)
+- **Config**: 4 new `WeatherConfig` fields persisted via existing MongoDB config system
+  - `weather_alerts_enabled` (bool, default true), `min_weather_alert_edge_bps` (200), `min_weather_alert_price_move_bps` (300), `weather_alert_cooldown_seconds` (300)
+- **Telegram**: Formatted messages via existing `TelegramNotifier.send_message()` (fire-and-forget)
+- **API**: `GET /api/strategies/weather/alerts` returns `{alerts: [], stats: {...}}`
+- **Dashboard**: "Alerts" tab on Weather page with stats bar, alert feed, type badges, and empty state
+- **Settings**: Weather Trader config section with ON/OFF toggle for alerts, editable threshold fields
+- **No changes** to core trading logic, execution behavior, or risk engine
+- Testing: 22/22 backend API + all frontend UI passed (100%) + 15/15 unit tests — `/app/test_reports/iteration_21.json`
+
+### P4 — Future
 - Fix pre-existing `test_phase7_config_persistence.py` failures
+- Rolling calibration system (auto-refine sigma from live forecast_accuracy data)
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
 - Copy trading skeleton
