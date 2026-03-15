@@ -31,6 +31,7 @@ export function useApi() {
   const setWeatherExecutions = useDashboardStore((s) => s.setWeatherExecutions);
   const setWeatherHealth = useDashboardStore((s) => s.setWeatherHealth);
   const setWeatherForecasts = useDashboardStore((s) => s.setWeatherForecasts);
+  const setWeatherAlerts = useDashboardStore((s) => s.setWeatherAlerts);
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
   const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
@@ -148,6 +149,13 @@ export function useApi() {
     } catch {}
   }, [prefix, setWeatherForecasts]);
 
+  const fetchWeatherAlerts = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/strategies/weather/alerts`);
+      setWeatherAlerts(data);
+    } catch {}
+  }, [prefix, setWeatherAlerts]);
+
   const fetchPnlHistory = useCallback(async () => {
     try {
       const { data } = await api.get(`${prefix}/analytics/pnl-history`);
@@ -207,7 +215,7 @@ export function useApi() {
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,
     fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
-    fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts,
+    fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts,
     fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
     loadDemoSnapshot,
     startEngine, stopEngine,

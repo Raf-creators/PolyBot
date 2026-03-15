@@ -83,6 +83,8 @@ class WeatherTrader(BaseStrategy):
         self._calibration_service = None
         # CLOB WebSocket client (injected from server.py)
         self._clob_ws = None
+        # Weather alert service (injected from server.py)
+        self._alert_service = None
 
         # Metrics
         self._m: Dict = {
@@ -123,6 +125,10 @@ class WeatherTrader(BaseStrategy):
     def set_clob_ws(self, client):
         """Inject CLOB WebSocket client for real-time price subscriptions."""
         self._clob_ws = client
+
+    def set_alert_service(self, service):
+        """Inject weather alert service for real-time signal alerts."""
+        self._alert_service = service
 
     def apply_shadow_overrides(self):
         """Apply conservative shadow-mode config overrides."""
@@ -422,6 +428,13 @@ class WeatherTrader(BaseStrategy):
                 price_count += 1
         if price_count >= 2:
             spread_sum_deviation = abs(market_prices_sum - 1.0)
+            # Alert on spread deviation even if below rejection threshold
+            if self._alert_service:
+                self._alert_service.check_spread_deviation(
+                    station_id=cm.station_id, city=self._get_city(cm.station_id),
+                    target_date=cm.target_date, spread_deviation=spread_sum_deviation,
+                    max_spread_sum=self.config.max_spread_sum,
+                )
             if spread_sum_deviation > self.config.max_spread_sum:
                 return [self._reject_signal(cm, forecast, mu, sigma, lead_hours, 0, 0,
                                             f"spread_sum_deviation ({spread_sum_deviation:.3f} > {self.config.max_spread_sum})",
@@ -444,8 +457,41 @@ class WeatherTrader(BaseStrategy):
 
             edge_bps = compute_edge_bps(prob, market_price)
 
-            # --- Market freshness ---
+            # --- Compute confidence for alert purposes (even if bucket gets rejected) ---
             data_age = compute_data_age(snap.updated_at)
+            liquidity = snap.liquidity
+            bucket_confidence = 0.0
+            if data_age <= self.config.max_stale_market_seconds and liquidity >= self.config.min_liquidity:
+                bucket_confidence = compute_weather_confidence(
+                    liquidity=liquidity,
+                    market_data_age_seconds=data_age,
+                    forecast_age_minutes=forecast_age_min or 0,
+                    lead_hours=lead_hours,
+                    sigma=sigma,
+                )
+
+            # --- Alert service: track price/edge/tradability changes ---
+            is_bucket_tradable = (
+                edge_bps >= self.config.min_edge_bps
+                and bucket_confidence >= self.config.min_confidence
+                and data_age <= self.config.max_stale_market_seconds
+                and liquidity >= self.config.min_liquidity
+            )
+            if self._alert_service:
+                self._alert_service.check_and_alert(
+                    station_id=cm.station_id,
+                    city=self._get_city(cm.station_id),
+                    target_date=cm.target_date,
+                    bucket_label=bucket.label,
+                    token_id=bucket.token_id,
+                    model_prob=prob,
+                    market_price=market_price,
+                    edge_bps=edge_bps,
+                    confidence=bucket_confidence,
+                    is_tradable=is_bucket_tradable,
+                )
+
+            # --- Market freshness ---
             if data_age > self.config.max_stale_market_seconds:
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
@@ -453,7 +499,6 @@ class WeatherTrader(BaseStrategy):
                 continue
 
             # --- Liquidity ---
-            liquidity = snap.liquidity
             if liquidity < self.config.min_liquidity:
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
@@ -470,13 +515,7 @@ class WeatherTrader(BaseStrategy):
                 continue
 
             # --- Confidence ---
-            confidence = compute_weather_confidence(
-                liquidity=liquidity,
-                market_data_age_seconds=data_age,
-                forecast_age_minutes=forecast_age_min or 0,
-                lead_hours=lead_hours,
-                sigma=sigma,
-            )
+            confidence = bucket_confidence
             if confidence < self.config.min_confidence:
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
@@ -772,6 +811,7 @@ class WeatherTrader(BaseStrategy):
             ),
             "feed_health": self._feed.health,
             "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},
+            "alert_stats": self._alert_service.get_stats() if self._alert_service else {"enabled": False},
             "stations": list(STATION_REGISTRY.keys()),
             "classified_markets": len(self._classified),
             "calibration_status": {

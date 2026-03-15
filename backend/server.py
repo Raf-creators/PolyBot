@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 from engine.clob_ws import ClobWebSocketClient
 from services.forecast_accuracy_service import ForecastAccuracyService
 from services.calibration_service import CalibrationService
+from services.weather_alert_service import WeatherAlertService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -58,6 +59,7 @@ live_order_service: Optional[LiveOrderService] = None
 forecast_accuracy_service: Optional[ForecastAccuracyService] = None
 calibration_service: Optional[CalibrationService] = None
 clob_ws_client: Optional[ClobWebSocketClient] = None
+weather_alert_service: Optional[WeatherAlertService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -84,7 +86,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, weather_alert_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -135,11 +137,20 @@ async def lifespan(app: FastAPI):
     telegram_notifier.configure(enabled=False, signals_enabled=False)
     await telegram_notifier.start(state, bus)
 
+    # Weather alert service
+    weather_alert_service = WeatherAlertService()
+    weather_alert_service.set_telegram(telegram_notifier)
+    weather_alert_service.set_config(weather_trader_ref.config)
+    weather_trader_ref.set_alert_service(weather_alert_service)
+
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
     persisted = await config_service.load()
     if persisted:
         config_service.apply_to_engine(persisted, state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
+        # Re-sync alert service with loaded config
+        if weather_alert_service and weather_trader_ref:
+            weather_alert_service.set_config(weather_trader_ref.config)
         logger.info("Persisted configuration applied")
     else:
         # Save defaults on first boot
@@ -394,6 +405,9 @@ async def update_config_granular(body: dict):
                         filtered = {k: v for k, v in params.items() if k in known}
                         merged = {**weather_trader_ref.config.model_dump(), **filtered}
                         weather_trader_ref.config = WeatherConfig(**merged)
+                        # Sync alert service config
+                        if weather_alert_service:
+                            weather_alert_service.set_config(weather_trader_ref.config)
                     except Exception as e:
                         raise HTTPException(400, f"Invalid weather config: {e}")
                 changes["weather_trader"] = "updated"
@@ -776,6 +790,19 @@ async def get_weather_stations():
 
 
 # ---- Forecast Accuracy & Calibration Endpoints ----
+
+
+@api_router.get("/strategies/weather/alerts")
+async def get_weather_alerts(limit: int = 50):
+    if not weather_alert_service:
+        return {"alerts": [], "stats": {"enabled": False}}
+    return {
+        "alerts": weather_alert_service.get_alerts(limit=limit),
+        "stats": weather_alert_service.get_stats(),
+    }
+
+
+# ---- Forecast Accuracy & Calibration Endpoints (existing) ----
 
 @api_router.get("/strategies/weather/accuracy/history")
 async def get_forecast_accuracy_history(limit: int = 100, station_id: str = None):

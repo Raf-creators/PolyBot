@@ -24,8 +24,9 @@ export default function Weather() {
   const executions = useDashboardStore((s) => s.weatherExecutions);
   const health = useDashboardStore((s) => s.weatherHealth);
   const forecasts = useDashboardStore((s) => s.weatherForecasts);
+  const weatherAlerts = useDashboardStore((s) => s.weatherAlerts);
   const demoMode = useDashboardStore((s) => s.demoMode);
-  const { fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts } = useApi();
+  const { fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts } = useApi();
   const [tab, setTab] = useState('signals');
 
   // Calibration / accuracy state (fetched directly since these are weather-specific)
@@ -60,16 +61,18 @@ export default function Weather() {
     fetchWeatherExecutions();
     fetchWeatherHealth();
     fetchWeatherForecasts();
+    fetchWeatherAlerts();
     fetchCalibration();
     const interval = setInterval(() => {
       fetchWeatherSignals();
       fetchWeatherExecutions();
       fetchWeatherHealth();
       fetchWeatherForecasts();
+      fetchWeatherAlerts();
     }, 8000);
     const calInterval = setInterval(fetchCalibration, 30000);
     return () => { clearInterval(interval); clearInterval(calInterval); };
-  }, [fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchCalibration]);
+  }, [fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts, fetchCalibration]);
 
   const config = health.config || {};
   const feedHealth = health.feed_health || {};
@@ -79,6 +82,8 @@ export default function Weather() {
   const classifications = health.classifications || {};
   const isShadow = health.is_shadow || shadowSummary?.is_shadow;
   const execMode = health.execution_mode || shadowSummary?.execution_mode || 'paper';
+  const alertStats = health.alert_stats || {};
+  const alerts = weatherAlerts.alerts || [];
 
   const allExecs = useMemo(() => [
     ...(executions.active || []),
@@ -197,6 +202,9 @@ export default function Weather() {
           <TabsTrigger data-testid="tab-signals" value="signals" className="text-xs data-[state=active]:bg-zinc-800">
             Signals ({signals.total_tradable})
           </TabsTrigger>
+          <TabsTrigger data-testid="tab-alerts" value="alerts" className="text-xs data-[state=active]:bg-zinc-800">
+            Alerts ({alerts.length})
+          </TabsTrigger>
           <TabsTrigger data-testid="tab-rejected" value="rejected" className="text-xs data-[state=active]:bg-zinc-800">
             Rejected ({signals.total_rejected})
           </TabsTrigger>
@@ -220,6 +228,11 @@ export default function Weather() {
             <DataTable columns={signalColumns} data={signals.tradable || []}
               emptyMessage="No tradable weather signals — start engine & wait for weather markets" testId="weather-signals-table" />
           </SectionCard>
+        </TabsContent>
+
+        {/* Alerts Tab */}
+        <TabsContent value="alerts" className="mt-4">
+          <WeatherAlertsSection alerts={alerts} stats={alertStats} />
         </TabsContent>
 
         {/* Rejected Tab */}
@@ -425,6 +438,10 @@ export default function Weather() {
                   ['Kelly Scale', config.kelly_scale], ['Max Concurrent', config.max_concurrent_signals],
                   ['Max Buckets/Market', config.max_buckets_per_market], ['Cooldown', `${config.cooldown_seconds}s`],
                   ['Max Stale Market', `${config.max_stale_market_seconds}s`],
+                  ['Alerts Enabled', config.weather_alerts_enabled ? 'Yes' : 'No'],
+                  ['Alert Min Edge', `${config.min_weather_alert_edge_bps} bps`],
+                  ['Alert Min Price Move', `${config.min_weather_alert_price_move_bps} bps`],
+                  ['Alert Cooldown', `${config.weather_alert_cooldown_seconds}s`],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -746,4 +763,78 @@ function StationSigmaSection({ status }) {
     </SectionCard>
   );
 }
+
+const ALERT_TYPE_STYLES = {
+  price_move: { label: 'PRICE MOVE', color: 'text-amber-400', border: 'border-amber-500/30' },
+  edge_change: { label: 'EDGE CHANGE', color: 'text-blue-400', border: 'border-blue-500/30' },
+  became_tradable: { label: 'NOW TRADABLE', color: 'text-emerald-400', border: 'border-emerald-500/30' },
+  no_longer_tradable: { label: 'NOT TRADABLE', color: 'text-red-400', border: 'border-red-500/30' },
+  spread_deviation: { label: 'SPREAD WARN', color: 'text-orange-400', border: 'border-orange-500/30' },
+};
+
+function WeatherAlertsSection({ alerts, stats }) {
+  return (
+    <div data-testid="weather-alerts-section" className="space-y-4">
+      {/* Stats bar */}
+      <div className="flex items-center gap-4 text-xs text-zinc-500">
+        <span>Generated: <span className="text-zinc-300 font-mono">{stats.total_generated || 0}</span></span>
+        <span>Debounced: <span className="text-zinc-400 font-mono">{stats.total_debounced || 0}</span></span>
+        <span>Telegram: <span className="text-zinc-400 font-mono">{stats.total_telegram_sent || 0}</span></span>
+        <span>Cooldowns: <span className="text-zinc-400 font-mono">{stats.active_cooldowns || 0}</span></span>
+        <Badge
+          data-testid="alerts-enabled-badge"
+          variant="outline"
+          className={`text-[9px] ml-auto ${stats.enabled ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}
+        >
+          {stats.enabled ? 'ENABLED' : 'DISABLED'}
+        </Badge>
+      </div>
+
+      {/* Alert feed */}
+      <SectionCard testId="section-weather-alerts-feed">
+        {alerts.length === 0 ? (
+          <p className="text-xs text-zinc-600 py-4 text-center">
+            No weather alerts yet — alerts trigger on significant price moves, edge changes, and tradability shifts
+          </p>
+        ) : (
+          <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
+            {alerts.map((a) => {
+              const style = ALERT_TYPE_STYLES[a.alert_type] || { label: a.alert_type, color: 'text-zinc-400', border: 'border-zinc-700' };
+              return (
+                <div
+                  key={a.id}
+                  data-testid={`alert-item-${a.id}`}
+                  className={`border ${style.border} bg-zinc-950/60 rounded-md px-3 py-2 text-xs`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className={`text-[9px] ${style.color} ${style.border}`}>
+                        {style.label}
+                      </Badge>
+                      <span className="text-cyan-400 font-mono font-medium">{a.station_id}</span>
+                      <span className="text-zinc-500">{a.target_date}</span>
+                      {a.bucket_label && <span className="text-zinc-400">{a.bucket_label}</span>}
+                    </div>
+                    <span className="text-zinc-600 text-[10px]">{formatTimeAgo(a.timestamp)}</span>
+                  </div>
+                  <div className="text-zinc-400">{a.detail}</div>
+                  {(a.model_prob > 0 || a.edge_bps !== 0) && (
+                    <div className="flex gap-4 mt-1 text-[10px] text-zinc-500">
+                      {a.model_prob > 0 && <span>Model: <span className="text-zinc-300 font-mono">{formatPrice(a.model_prob)}</span></span>}
+                      {a.market_price > 0 && <span>Mkt: <span className="text-zinc-300 font-mono">{formatPrice(a.market_price)}</span></span>}
+                      {a.edge_bps !== 0 && <span>Edge: <span className={`font-mono ${a.edge_bps > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatBps(a.edge_bps)}</span></span>}
+                      {a.confidence > 0 && <span>Conf: <span className="text-zinc-300 font-mono">{(a.confidence * 100).toFixed(0)}%</span></span>}
+                      {a.price_move_bps > 0 && <span>Move: <span className="text-amber-400 font-mono">{a.price_move_bps.toFixed(0)}bps</span></span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
 

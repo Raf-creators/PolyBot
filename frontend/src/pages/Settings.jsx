@@ -428,12 +428,16 @@ function StrategyConfigSection({ config, fetchConfig }) {
     min_confidence: 'Min Confidence',
     max_concurrent_signals: 'Max Concurrent Signals',
     signal_cooldown_seconds: 'Signal Cooldown (s)',
+    weather_alerts_enabled: 'Weather Alerts',
+    min_weather_alert_edge_bps: 'Alert Min Edge (bps)',
+    min_weather_alert_price_move_bps: 'Alert Min Price Move (bps)',
+    weather_alert_cooldown_seconds: 'Alert Cooldown (s)',
   };
 
   const handleSave = async (stratId, key, rawValue) => {
     setSaving(true);
     try {
-      const value = isNaN(Number(rawValue)) ? rawValue : Number(rawValue);
+      const value = typeof rawValue === 'boolean' ? rawValue : (isNaN(Number(rawValue)) ? rawValue : Number(rawValue));
       await axios.post(`${API_BASE}/config/update`, {
         strategies: { [stratId]: { [key]: value } },
       });
@@ -451,7 +455,7 @@ function StrategyConfigSection({ config, fetchConfig }) {
     return <p className="text-xs text-zinc-600">No strategy configs available</p>;
   }
 
-  const STRAT_NAMES = { arb_scanner: 'Arb Scanner', crypto_sniper: 'Crypto Sniper' };
+  const STRAT_NAMES = { arb_scanner: 'Arb Scanner', crypto_sniper: 'Crypto Sniper', weather_trader: 'Weather Trader' };
 
   return (
     <div className="space-y-4">
@@ -462,10 +466,22 @@ function StrategyConfigSection({ config, fetchConfig }) {
             {Object.entries(params).map(([k, v]) => {
               const isEditing = editing?.stratId === stratId && editing?.key === k;
               const isNumeric = typeof v === 'number';
+              const isBool = typeof v === 'boolean';
               return (
                 <div key={k} className="flex items-center justify-between text-xs min-h-[28px]">
                   <span className="text-zinc-500">{LABELS[k] || k.replace(/_/g, ' ')}</span>
-                  {isEditing ? (
+                  {isBool ? (
+                    <Button
+                      data-testid={`toggle-${stratId}-${k}`}
+                      size="sm"
+                      variant={v ? 'default' : 'outline'}
+                      onClick={() => handleSave(stratId, k, !v)}
+                      disabled={saving}
+                      className={`h-6 text-[10px] px-3 ${v ? '' : 'border-zinc-700 text-zinc-400'}`}
+                    >
+                      {v ? 'ON' : 'OFF'}
+                    </Button>
+                  ) : isEditing ? (
                     <div className="flex items-center gap-1">
                       <Input
                         data-testid={`edit-${stratId}-${k}`}

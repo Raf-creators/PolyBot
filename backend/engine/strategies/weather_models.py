@@ -68,6 +68,12 @@ class WeatherConfig(BaseModel):
     # Fees
     maker_taker_rate: float = 0.002
 
+    # Alert settings
+    weather_alerts_enabled: bool = True
+    min_weather_alert_edge_bps: float = 200.0              # min edge change to trigger alert
+    min_weather_alert_price_move_bps: float = 300.0         # min price move (bps) to trigger alert
+    weather_alert_cooldown_seconds: float = 300.0           # 5 min debounce per market alert key
+
 
 # ---- Station Info ----
 
@@ -244,6 +250,33 @@ class ForecastAccuracyRecord(BaseModel):
     resolved: bool = False
     recorded_at: str = Field(default_factory=utc_now)
     resolved_at: Optional[str] = None
+
+
+# ---- Weather Alert ----
+
+class WeatherAlertType(str, Enum):
+    PRICE_MOVE = "price_move"
+    EDGE_CHANGE = "edge_change"
+    BECAME_TRADABLE = "became_tradable"
+    NO_LONGER_TRADABLE = "no_longer_tradable"
+    SPREAD_DEVIATION = "spread_deviation"
+
+
+class WeatherAlert(BaseModel):
+    id: str = Field(default_factory=new_id)
+    alert_type: WeatherAlertType
+    station_id: str
+    city: str = ""
+    target_date: str
+    bucket_label: str = ""
+    token_id: str = ""
+    model_prob: float = 0.0
+    market_price: float = 0.0
+    edge_bps: float = 0.0
+    confidence: float = 0.0
+    price_move_bps: float = 0.0
+    detail: str = ""
+    timestamp: str = Field(default_factory=utc_now)
 
 
 # ---- Shadow Mode Config Presets ----
