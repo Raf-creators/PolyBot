@@ -226,8 +226,20 @@ expired          → Expired on CLOB
 - **Settings**: Rolling calibration toggle and numeric threshold fields
 - Testing: 31/31 backend API + all frontend UI passed (100%) + 8/8 unit tests — `/app/test_reports/iteration_22.json`
 
-### P5 — Future
-- Volume/liquidity heatmap on Markets page
+### P5 — Volume/Liquidity Heatmap (Complete, 2026-03-15)
+- **LiquidityService** (`/app/backend/services/liquidity_service.py`): Per-token and per-event liquidity scoring (0-100)
+  - Score formula: spread width (40%), orderbook depth (30%), 24h volume (30%)
+  - Reference normalization: REF_SPREAD=4c, REF_DEPTH=$1000, REF_VOLUME=$5000
+- **Heatmap API**: `GET /api/markets/liquidity-heatmap` aggregates weather market tiles by condition_id (city+date), with per-bucket scores and summary stats
+- **Scores API**: `GET /api/markets/liquidity-scores` returns `{token_id: score}` for all tracked markets
+- **Strategy awareness**: WeatherTrader refreshes liquidity scores each scan cycle via `refresh_liquidity_scores()`
+- **Markets page**: Complete rewrite with dual-tab layout:
+  - "Liquidity Heatmap" tab: city-grouped tiles with color-coded score badges (DRY/SPARSE/THIN/MODERATE/GOOD/DEEP), mini bucket bars, click-to-detail dialog
+  - "All Markets" tab: existing searchable market table
+- **Detail dialog**: Per-bucket breakdown showing mid price, spread, liquidity, and individual scores
+- Testing: 20/20 backend API + all frontend UI tests (100%) + 12/12 unit tests — `/app/test_reports/iteration_23.json`
+
+### P6 — Future
 - CLOB WebSocket for real-time fill updates
 - Copy trading skeleton
 - Manual order entry
