@@ -176,7 +176,17 @@ expired          → Expired on CLOB
 - Weather page: Sigma Calibration section with Run/Reload buttons, Calibrated Sigma Values per station
 - Testing: 22/22 backend + all frontend passed (100%) — `/app/test_reports/iteration_19.json`
 
-### P2 — Future
+### P2 — CLOB WebSocket Integration (Complete, 2026-03-15)
+- Real-time market data via `wss://ws-subscriptions-clob.polymarket.com/ws/market`
+- ClobWebSocketClient: auto-connect, heartbeat/ping, exponential backoff reconnect
+- WeatherTrader auto-subscribes discovered token IDs (265 tokens from 5 cities)
+- Results: 5108 messages, 4990 price updates, 102 book updates, 5 trades — zero stale_market rejections
+- Health endpoint: `/api/health/clob-ws` + integrated into weather health
+- Weather Health tab shows CLOB WebSocket card with live metrics
+- Polling fallback preserved (MarketDataFeed unchanged)
+- Testing: 30/30 backend + all frontend passed (100%) — `/app/test_reports/iteration_20.json`
+
+### P3 — Future
 - Fix pre-existing `test_phase7_config_persistence.py` failures
 - Volume/liquidity heatmap on Markets page
 - CLOB WebSocket for real-time fill updates
