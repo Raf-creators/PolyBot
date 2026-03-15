@@ -165,8 +165,16 @@ expired          → Expired on CLOB
 - Testing: 30/30 backend + all frontend tests passed (100%)
 - `/app/test_reports/iteration_18.json`
 
-### P1 — Historical Calibration Bootstrap
-- Auto-calibrate sigma values from Open-Meteo archive data per station/season
+### P1 — Historical Calibration Bootstrap (Complete, 2026-03-15)
+- Fetched 90 days of historical forecast vs observed data from Open-Meteo APIs
+- Computed empirical sigma per station: KLGA 2.78F, KORD 1.83F, KATL 2.15F, KDFW 2.05F, KMIA 1.23F (0-24h)
+- Lead-time scaling: sigma grows ~sqrt(lead_days), from 0-24h to 120-168h
+- Seasonal factors computed (winter/spring/summer/fall)
+- Stored in MongoDB `weather_sigma_calibration` (5 stations, 91 samples each)
+- WeatherTrader auto-loads calibrations on engine start; replaces default NWS MOS table
+- API: `/calibration/run`, `/calibration/status`, `/calibration/{station_id}`, `/calibration/reload`
+- Weather page: Sigma Calibration section with Run/Reload buttons, Calibrated Sigma Values per station
+- Testing: 22/22 backend + all frontend passed (100%) — `/app/test_reports/iteration_19.json`
 
 ### P2 — Future
 - Fix pre-existing `test_phase7_config_persistence.py` failures
