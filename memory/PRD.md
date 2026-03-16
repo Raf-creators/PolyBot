@@ -305,6 +305,24 @@ expired          → Expired on CLOB
 - **Frontend**: Forecast Quality tab in Global Analytics shows Auto-Resolver section with status, interval, run counts, pending
 - Testing: 22/22 backend + 100% frontend passed — `/app/test_reports/iteration_26.json`
 
-### P9 — Future
+### P9 — Crypto Sniper Slug-based Classifier (Complete, 2026-03-16)
+- **Slug classification** (checked before question fallback):
+  - `{asset}-updown-{window}-{ts}` → updown market (strike=0 → use spot at eval time)
+  - `{asset}-up-or-down-{date}` → updown market (expiry from endDate)
+  - `{asset}-above-{price}-on-{date}` → threshold market (strike from slug)
+  - `will-{asset}-hit-{price}-by-{date}` → threshold market (strike from slug)
+- **Question fallback** (title-based, preserved backward compat):
+  - "Bitcoin above $X", "Ethereum hit $X", "BTC reach $X", "dip to $X"
+  - "Bitcoin Up or Down - March 17"
+  - "between $X and $Y" → range market (midpoint strike)
+- **Strike parsing**: handles "k" (×1000) and "m" (×1000000) suffixes
+- **MarketSnapshot**: added `slug`, `end_date` fields; stored from Gamma API
+- **Gamma API limit**: 100→500 to capture short-lived crypto markets
+- **SniperConfig**: `max_tte_seconds` default 28800 (8h) for updown windows
+- **Updown pricing**: strike=0 sentinel → uses current spot price at evaluation time
+- Current state: 1 classified (BTC $1M hit — rejected for tte=137d), 499 non-crypto correctly filtered. No short-term BTC/ETH updown markets currently active on Polymarket.
+- Testing: 64/64 backend + 7/7 frontend passed — `/app/test_reports/iteration_29.json`
+
+### P10 — Future
 - Copy trading skeleton
 - Manual order entry
