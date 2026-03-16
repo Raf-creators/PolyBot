@@ -1,0 +1,80 @@
+{
+  "summary": "Crypto Sniper Market Discovery Pipeline Fix - All tests passed. The targeted slug-construction approach successfully discovers short-lived crypto updown markets (BTC/ETH 5m, 15m, 4h) from Polymarket's Gamma API.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "crypto_discovery_tests": [
+      "GET /api/health/discovery returns crypto_markets_discovered > 0 (24 discovered)",
+      "GET /api/health/discovery returns crypto_slugs_hit > 0 (24 slugs hit)",
+      "crypto_active_slugs contains btc-updown and eth-updown slugs (12 BTC, 12 ETH)",
+      "No 1h markets in crypto_active_slugs (confirmed not available on Polymarket)",
+      "All crypto_active_slugs match pattern {asset}-updown-{window}-{unix_ts}",
+      "GET /api/strategies/sniper/health returns markets_classified > 0 (25 classified)",
+      "GET /api/strategies/sniper/health returns markets_evaluated > 0 (25 evaluated)",
+      "GET /api/strategies/sniper/health returns running = true",
+      "GET /api/strategies/sniper/signals returns valid response with tradable/rejected arrays",
+      "crypto_updown_btc (12) + crypto_updown_eth (12) = total (24)",
+      "crypto_fetch_errors = 0 (no errors)",
+      "last_crypto_fetch timestamp present and recent",
+      "crypto_slugs_queried = 32 (8 combos * 4 lookahead windows)",
+      "Discovery refreshes: timestamp changed after 20s wait",
+      "Sniper health has all required fields",
+      "Vol samples buffer warming up correctly (BTC/ETH samples > 0)"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_crypto_sniper_discovery.py",
+    "/app/test_reports/pytest/pytest_results_crypto_sniper_discovery.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "market_data.py _load_crypto_markets(): Correctly implements targeted slug construction with LOOKAHEAD=3",
+    "market_data.py CRYPTO_UPDOWN_COMBOS: Covers btc/eth with 5m/15m/1h/4h windows",
+    "market_data.py: Expired market filtering working (1h windows not found = correct behavior)",
+    "crypto_sniper.py classify_market_question(): Correctly classifies updown markets via slug patterns",
+    "server.py /api/health/discovery: Correctly exposes discovery_stats from MarketDataFeed"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_crypto_sniper_discovery.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (16/16 tests passed)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Crypto Sniper Discovery Fix verified. Key findings: (1) crypto_markets_discovered=24 (12 BTC + 12 ETH), (2) crypto_slugs_queried=32 (8 combos x 4 lookahead), (3) crypto_slugs_hit=24, (4) No 1h markets exist on Polymarket (correct), (5) All slugs match pattern {asset}-updown-{window}-{unix_ts}, (6) Discovery refreshes every 15s. Engine must be started via POST /api/engine/start before testing.",
+
+  "features_tested": {
+    "crypto_markets_discovered_gt_0": "PASS - 24 markets discovered",
+    "crypto_slugs_hit_gt_0": "PASS - 24 slugs hit",
+    "btc_eth_slugs_present": "PASS - btc-updown and eth-updown slugs found",
+    "no_1h_markets": "PASS - Confirmed 1h not available on Polymarket",
+    "slug_pattern_valid": "PASS - All slugs match expected pattern",
+    "markets_classified_gt_0": "PASS - 25 markets classified",
+    "markets_evaluated_gt_0": "PASS - 25 markets evaluated",
+    "sniper_running": "PASS - Strategy running",
+    "signals_endpoint_works": "PASS - Returns tradable/rejected arrays",
+    "discovery_refresh": "PASS - Timestamp changes after 20s"
+  }
+}

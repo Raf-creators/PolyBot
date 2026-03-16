@@ -13,12 +13,24 @@ logger = logging.getLogger(__name__)
 GAMMA_API = "https://gamma-api.polymarket.com"
 CLOB_API = "https://clob.polymarket.com"
 
-# Slug prefixes that indicate crypto updown markets
+# Slug prefixes that indicate crypto updown markets (used for midpoint refresh filtering)
 CRYPTO_SLUG_PREFIXES = [
     "btc-updown-", "eth-updown-",
     "bitcoin-up-or-down", "ethereum-up-or-down",
     "bitcoin-above-", "ethereum-above-",
     "sol-updown-", "xrp-updown-", "bnb-updown-",
+]
+
+# Targeted crypto updown discovery: (asset, window_label, interval_seconds)
+CRYPTO_UPDOWN_COMBOS = [
+    ("btc", "5m", 300),
+    ("btc", "15m", 900),
+    ("btc", "1h", 3600),
+    ("btc", "4h", 14400),
+    ("eth", "5m", 300),
+    ("eth", "15m", 900),
+    ("eth", "1h", 3600),
+    ("eth", "4h", 14400),
 ]
 
 
@@ -45,10 +57,11 @@ class MarketDataFeed:
         self._stats = {
             "broad_markets_loaded": 0,
             "crypto_markets_discovered": 0,
-            "crypto_events_scanned": 0,
+            "crypto_slugs_queried": 0,
+            "crypto_slugs_hit": 0,
             "crypto_updown_btc": 0,
             "crypto_updown_eth": 0,
-            "crypto_other": 0,
+            "crypto_active_slugs": [],
             "last_broad_fetch": None,
             "last_crypto_fetch": None,
             "crypto_fetch_errors": 0,
@@ -125,97 +138,86 @@ class MarketDataFeed:
             self._state.health["market_data_stale"] = True
             self._state.health["polymarket_connected"] = False
 
-    # ---- Layer 2: Targeted Crypto Discovery ----
+    # ---- Layer 2: Targeted Crypto Slug Discovery ----
 
     async def _load_crypto_markets(self):
-        """Paginate through /events to find crypto updown markets.
+        """Discover live crypto updown markets by constructing exact slugs.
 
-        Scans up to 3000 events (covers the full active set).
-        Filters by slug prefix and future end_date.
+        For each (asset, window) combo, compute the current time boundary and
+        generate slugs for the current window + next LOOKAHEAD windows.
+        Query GET /events?slug={exact_slug} for each — returns 0 or 1 event.
         """
+        LOOKAHEAD = 3  # current + next 3 windows
         try:
-            now = datetime.now(timezone.utc)
+            now_ts = int(time.time())
             crypto_count = 0
             btc_count = 0
             eth_count = 0
-            other_count = 0
-            events_scanned = 0
+            slugs_queried = 0
+            slugs_hit = 0
+            active_slugs = []
 
-            for offset in range(0, 3000, 100):
-                if not self._running:
-                    break
-                try:
-                    async with self._session.get(
-                        f"{GAMMA_API}/events",
-                        params={
-                            "active": "true",
-                            "closed": "false",
-                            "limit": "100",
-                            "offset": str(offset),
-                        },
-                    ) as resp:
-                        if resp.status != 200:
-                            break
-                        events = await resp.json()
-                        if not events:
-                            break
-                except Exception:
-                    break
+            for asset, window, interval in CRYPTO_UPDOWN_COMBOS:
+                base_ts = (now_ts // interval) * interval
+                for offset in range(LOOKAHEAD + 1):
+                    ts = base_ts + (offset * interval)
+                    slug = f"{asset}-updown-{window}-{ts}"
+                    slugs_queried += 1
 
-                events_scanned += len(events)
+                    try:
+                        async with self._session.get(
+                            f"{GAMMA_API}/events",
+                            params={"slug": slug},
+                        ) as resp:
+                            if resp.status != 200:
+                                continue
+                            events = await resp.json()
+                            if not events:
+                                continue
+                    except Exception:
+                        continue
 
-                for event in events:
+                    event = events[0]
+                    if event.get("closed", False):
+                        continue
+
+                    slugs_hit += 1
                     for m in event.get("markets", []):
-                        slug = m.get("slug", "").lower()
-
-                        # Check if this is a crypto updown/price market
-                        if not any(slug.startswith(p) for p in CRYPTO_SLUG_PREFIXES):
-                            continue
-
-                        # Skip expired markets (Gamma API sometimes returns stale data)
-                        end_date = m.get("endDate", "")
-                        if end_date:
-                            try:
-                                dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                                if dt <= now:
-                                    continue
-                            except (ValueError, TypeError):
-                                pass
-
-                        # Parse and load
                         try:
                             self._parse_gamma_market(m)
                             crypto_count += 1
-                            if slug.startswith("btc-") or slug.startswith("bitcoin-"):
+                            active_slugs.append(slug)
+                            if asset == "btc":
                                 btc_count += 1
-                            elif slug.startswith("eth-") or slug.startswith("ethereum-"):
-                                eth_count += 1
                             else:
-                                other_count += 1
+                                eth_count += 1
                         except Exception:
                             continue
 
-                # Small delay between pages to avoid rate limiting
-                await asyncio.sleep(0.3)
+                    # Tiny delay between API calls to avoid rate limits
+                    await asyncio.sleep(0.05)
 
-            self._stats["crypto_events_scanned"] = events_scanned
+            self._stats["crypto_slugs_queried"] = slugs_queried
+            self._stats["crypto_slugs_hit"] = slugs_hit
             self._stats["crypto_markets_discovered"] = crypto_count
             self._stats["crypto_updown_btc"] = btc_count
             self._stats["crypto_updown_eth"] = eth_count
-            self._stats["crypto_other"] = other_count
+            self._stats["crypto_active_slugs"] = active_slugs
             self._stats["last_crypto_fetch"] = utc_now()
 
             if crypto_count:
                 logger.info(
-                    f"Crypto discovery: {crypto_count} markets "
-                    f"(BTC={btc_count} ETH={eth_count} other={other_count}) "
-                    f"from {events_scanned} events"
+                    f"Crypto slug discovery: {crypto_count} markets "
+                    f"(BTC={btc_count} ETH={eth_count}) "
+                    f"from {slugs_hit}/{slugs_queried} slug hits"
                 )
             else:
-                logger.debug(f"Crypto discovery: 0 markets from {events_scanned} events")
+                logger.debug(
+                    f"Crypto slug discovery: 0 markets from {slugs_queried} slugs"
+                )
 
         except Exception as e:
-            logger.error(f"Crypto discovery failed: {e}")
+            logger.error(f"Crypto slug discovery failed: {e}")
             self._stats["crypto_fetch_errors"] += 1
 
     # ---- Gamma Market Parser ----
@@ -296,16 +298,16 @@ class MarketDataFeed:
                 await asyncio.sleep(30)
 
     async def _crypto_discovery_loop(self):
-        """Crypto-focused discovery every 30s — catches short-lived updown markets."""
+        """Crypto slug discovery every 15s — catches short-lived updown markets."""
         while self._running:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(15)
                 await self._load_crypto_markets()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Crypto discovery error: {e}")
-                await asyncio.sleep(15)
+                await asyncio.sleep(10)
 
     async def _midpoint_refresh_loop(self):
         """CLOB midpoint refresh for top-volume + crypto markets."""
