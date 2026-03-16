@@ -5,12 +5,13 @@ nixPkgs = ["python312", "nodejs_20"]
 cmds = [
   "python -m pip install --upgrade pip",
   "pip install -r requirements.txt",
-  "npm install -g yarn",
-  "cd frontend && yarn install --frozen-lockfile"
+  "corepack enable && cd frontend && yarn install"
 ]
 
 [phases.build]
-cmds = ["cd frontend && REACT_APP_BACKEND_URL= yarn build"]
+cmds = [
+  "cd frontend && REACT_APP_BACKEND_URL= yarn build"
+]
 
 [start]
 cmd = "cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT"
