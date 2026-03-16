@@ -162,7 +162,11 @@ async def lifespan(app: FastAPI):
 
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
-    telegram_notifier.configure(enabled=False, signals_enabled=False)
+    # Auto-enable Telegram when credentials are present
+    telegram_notifier.configure(
+        enabled=telegram_notifier.configured,
+        signals_enabled=telegram_notifier.configured,
+    )
     await telegram_notifier.start(state, bus)
 
     # Weather alert service
@@ -486,6 +490,19 @@ async def update_config_granular(body: dict):
         await config_service.save(snapshot)
 
     return {"status": "updated", "changes": changes, "persisted": True}
+
+
+@api_router.post("/telegram/test")
+async def send_telegram_test():
+    """Send a test message to verify Telegram configuration."""
+    if not telegram_notifier:
+        raise HTTPException(500, "Telegram notifier not initialized")
+    if not telegram_notifier.configured:
+        return {"success": False, "error": "Telegram credentials not configured"}
+    result = await telegram_notifier.send_message(
+        "<b>[Polymarket Edge OS]</b>\nTelegram integration verified.\nAlerts are now active."
+    )
+    return {"success": result, "stats": telegram_notifier.stats}
 
 
 # ---- Risk Controls ----
