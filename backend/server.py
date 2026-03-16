@@ -295,27 +295,21 @@ async def root():
 async def health():
     """Comprehensive health check — also used by Railway via /health proxy."""
     engine_running = engine is not None and engine.is_running
-    market_data_ok = (
-        engine is not None
-        and engine.market_data is not None
-        and engine.market_data.discovery_stats.get("last_broad_fetch") is not None
-    )
-    strategies_status = {}
+    active_strategies = []
     if state:
         for sid, s in state.strategies.items():
-            strategies_status[sid] = {"enabled": s.enabled}
+            if s.enabled:
+                active_strategies.append(sid)
     resolver_ok = (
         market_resolver_service is not None
         and market_resolver_service.health.get("running", False)
     )
-    healthy = engine_running and market_data_ok
     return {
-        "status": "healthy" if healthy else "starting",
-        "engine": "running" if engine_running else "stopped",
-        "market_feeds": "active" if market_data_ok else "initializing",
-        "strategies": strategies_status,
-        "resolver": "running" if resolver_ok else "stopped",
-        "mode": state.trading_mode.value if state else "unknown",
+        "status": "ok",
+        "engine": "running" if engine_running else "starting",
+        "strategies": active_strategies,
+        "resolver": "active" if resolver_ok else "starting",
+        "mode": state.trading_mode.value if state else "paper",
     }
 
 
