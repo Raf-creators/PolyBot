@@ -1672,7 +1672,7 @@ async def inject_test_trades():
                 signal_reason="test_signal",
                 timestamp=dt.isoformat(),
             )
-            state.trades.append(trade)
+            state.add_trade(trade)
             count += 1
     # Also inject some orders for execution quality testing
     from models import OrderStatus
@@ -1694,11 +1694,17 @@ async def inject_test_trades():
 
 @api_router.post("/test/clear-trades")
 async def clear_test_trades():
-    """Clear injected test trades."""
+    """Clear injected test trades and reset associated stats counters."""
     if not state:
         raise HTTPException(500, "Engine not initialized")
-    state.trades = [t for t in state.trades if not t.order_id.startswith("test_")]
+    remaining = [t for t in state.trades if not t.order_id.startswith("test_")]
+    state.trades = remaining
     state.orders = {k: v for k, v in state.orders.items() if not k.startswith("test_order_")}
+    # Recompute counters from remaining trades
+    state.total_trades = len(remaining)
+    state.win_count = sum(1 for t in remaining if t.pnl > 0)
+    state.loss_count = sum(1 for t in remaining if t.pnl < 0)
+    state.daily_pnl = sum(t.pnl for t in remaining)
     return {"status": "cleared"}
 
 

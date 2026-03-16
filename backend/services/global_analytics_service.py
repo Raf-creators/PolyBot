@@ -209,36 +209,48 @@ class GlobalAnalyticsService:
         if not trades:
             return {"cumulative_pnl": [], "signal_frequency": []}
 
-        # Build daily buckets
-        daily_pnl = defaultdict(float)
-        daily_count = defaultdict(int)
-        daily_by_strategy = defaultdict(lambda: defaultdict(int))
+        # Separate closed trades (non-zero PnL) for equity curve
+        close_trades = [t for t in trades if t.pnl and t.pnl != 0]
 
-        for t in trades:
+        # Build cumulative PnL from CLOSED trades only
+        daily_pnl = defaultdict(float)
+        daily_close_count = defaultdict(int)
+        for t in close_trades:
             ts = t.timestamp
             if isinstance(ts, str):
                 day = ts[:10]
             else:
                 day = ts.strftime("%Y-%m-%d") if hasattr(ts, 'strftime') else str(ts)[:10]
             daily_pnl[day] += t.pnl
-            daily_count[day] += 1
-            daily_by_strategy[day][t.strategy_id] += 1
+            daily_close_count[day] += 1
 
-        # Build cumulative PnL
-        days = sorted(daily_pnl.keys())
+        pnl_days = sorted(daily_pnl.keys())
         cumulative = 0
         cum_pnl_series = []
-        for d in days:
+        for d in pnl_days:
             cumulative += daily_pnl[d]
             cum_pnl_series.append({
                 "date": d,
                 "daily_pnl": round(daily_pnl[d], 4),
                 "cumulative_pnl": round(cumulative, 4),
+                "close_count": daily_close_count[d],
             })
 
-        # Signal frequency
+        # Signal frequency uses ALL trades (tracks execution volume)
+        daily_count = defaultdict(int)
+        daily_by_strategy = defaultdict(lambda: defaultdict(int))
+        for t in trades:
+            ts = t.timestamp
+            if isinstance(ts, str):
+                day = ts[:10]
+            else:
+                day = ts.strftime("%Y-%m-%d") if hasattr(ts, 'strftime') else str(ts)[:10]
+            daily_count[day] += 1
+            daily_by_strategy[day][t.strategy_id] += 1
+
+        freq_days = sorted(daily_count.keys())
         freq_series = []
-        for d in days:
+        for d in freq_days:
             entry = {"date": d, "total": daily_count[d]}
             for sid, cnt in daily_by_strategy[d].items():
                 entry[sid] = cnt

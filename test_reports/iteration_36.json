@@ -1,0 +1,102 @@
+{
+  "summary": "Analytics bug fix verified. All 10 backend tests passed. Frontend shows non-zero Daily P&L (+$23.57), Win Rate (66.1% with 37W/19L), and Closed Trades (56) on Overview page. P&L curve displays actual equity growth. Global Analytics shows consistent metrics across Performance tab (realized_pnl +$23.57, win_rate 66.1%) and Charts tab (cumulative PnL curve with actual data points).",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "WebSocket connection",
+        "issue": "Console shows 'WebSocket is closed before connection established' - transient reconnection issue, not blocking functionality as HTTP polling fallback works",
+        "affected_selectors": []
+      }
+    ],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_analytics_fix_tests": [
+      "GET /api/status returns non-zero stats (daily_pnl, win_count, loss_count, close_count, win_rate) - PASS",
+      "GET /api/analytics/global returns non-zero strategy_performance metrics - PASS",
+      "GET /api/analytics/pnl-history returns non-empty points array and close_trades > 0 - PASS",
+      "Data consistency: close_count matches across /api/status, /api/analytics/global, /api/analytics/pnl-history - PASS",
+      "Data consistency: win_rate approximately matches between /api/status and /api/analytics/global - PASS",
+      "GET /api/analytics/global timeseries.cumulative_pnl has non-zero last point with close_count field - PASS",
+      "POST /api/test/clear-trades then POST /api/test/inject-trades correctly updates stats - PASS",
+      "daily_pnl in /api/status is non-zero - PASS",
+      "Engine status is 'running' - PASS",
+      "GET /api/health returns status=ok - PASS"
+    ],
+    "frontend_visual_tests": [
+      "Overview page: Daily P&L card shows +$23.57 (non-zero) - PASS",
+      "Overview page: Win Rate card shows 66.1% with 37W/19L sub-text - PASS",
+      "Overview page: Closed Trades card shows 56 (non-zero) - PASS",
+      "Overview page: P&L Curve chart shows actual equity growth (not flat) - PASS",
+      "Global Analytics page Performance tab: Realized P&L +$23.57, Win Rate 66.1%, 64 Total Trades - PASS",
+      "Global Analytics page Charts tab: Cumulative P&L curve with actual data points - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "Backend: GET /api/status stats with daily_pnl > 0, win_count > 0, loss_count > 0, close_count > 0, win_rate > 0": "PASS - close_count=113, win_count=69, loss_count=44, win_rate=61.06",
+    "Backend: GET /api/analytics/global strategy_performance.close_trades > 0, realized_pnl > 0, win_rate > 0": "PASS - close_trades=113, realized_pnl=66.6073, win_rate=61.1",
+    "Backend: GET /api/analytics/pnl-history close_trades > 0, current_pnl > 0, points non-empty": "PASS - close_trades=113, current_pnl=66.6073, points_count=113",
+    "Backend: Data consistency close_count matches across all 3 endpoints": "PASS - all show 113",
+    "Backend: Data consistency win_rate approximately matches": "PASS - status=61.06, global=61.1",
+    "Backend: POST /api/test/clear-trades then inject-trades updates stats": "PASS",
+    "Backend: GET /api/analytics/global timeseries.cumulative_pnl last point non-zero with close_count": "PASS - last_point cumulative_pnl=66.6073, close_count=6",
+    "Frontend: Overview page stat cards show non-zero values": "PASS",
+    "Frontend: Overview page P&L Curve shows actual data points": "PASS",
+    "Frontend: Global Analytics Performance tab shows non-zero win_rate, realized_pnl, close_trades": "PASS",
+    "Frontend: Global Analytics Charts tab shows cumulative PnL curve": "PASS"
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_analytics_fix.py",
+    "/app/test_reports/pytest/pytest_results_analytics_fix.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "state.py Line 128-135: add_trade() correctly increments win_count/loss_count based on pnl sign",
+    "state.py Line 149-174: snapshot() correctly computes close_count = win_count + loss_count and win_rate",
+    "global_analytics_service.py Line 84-88: close_trades filter uses `t.pnl and t.pnl != 0` correctly",
+    "global_analytics_service.py Line 206-260: get_signal_timeseries() now filters closed trades for PnL curve",
+    "server.py Line 1505-1538: /analytics/pnl-history correctly filters by pnl != 0",
+    "server.py Line 1675: inject-trades now uses state.add_trade() to properly update counters",
+    "Frontend dashboardStore.js Line 58-71: setWsSnapshot correctly updates stats from WebSocket"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_analytics_fix.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (10/10 tests passed)",
+    "frontend": "100% (all UI elements showing correct non-zero values)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "Test trades injected via POST /api/test/inject-trades (57 trades initially, 113 total after re-inject)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Analytics bug fix verified working. The fix ensures: (1) inject-trades uses state.add_trade() to update counters, (2) get_signal_timeseries() separates closed trades (pnl!=0) for cumulative PnL from all trades for signal frequency, (3) clear-trades recomputes counters. Test trades need to be injected via POST /api/test/inject-trades for stats to show non-zero values. WebSocket has intermittent connection issues but HTTP polling fallback works correctly.",
+
+  "fix_summary": {
+    "root_cause": "inject-trades endpoint bypassed state.add_trade() so win/loss counters never updated; get_signal_timeseries() included open trades (pnl=0) in cumulative PnL, flattening equity curve",
+    "fix_applied": [
+      "server.py: inject-trades now calls state.add_trade() for each trade",
+      "global_analytics_service.py: get_signal_timeseries() filters to closed trades (pnl!=0) for PnL calculation",
+      "server.py: /api/analytics/pnl-history filters by pnl != 0"
+    ],
+    "verification": "All analytics endpoints now return consistent non-zero values for close_count, win_rate, realized_pnl"
+  }
+}
