@@ -322,12 +322,27 @@ expired          → Expired on CLOB
 ### P9A — Crypto Sniper Shadow Execution (Complete, 2026-03-16)
 - **Root cause of blocked executions**: Global `max_concurrent_positions=10` was fully consumed by weather trader positions; sniper signals passed all strategy filters but were rejected by the risk engine
 - **Risk config changes**: `max_concurrent_positions` 10→30, `max_market_exposure` 50→100 (conservative increase for paper mode)
+
+### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
 - **Live results**: 23 executions, 23 fills (100% fill rate), PnL tracking active across 19 open positions
 - **Safety preserved**: Paper mode enforced (no live credentials), conservative sizing ($3 default), bounded positions (max 30), bounded exposure ($100)
 - Testing: 12/12 backend — `/app/test_reports/iteration_32.json`
 
-### P10 — Future
+### P9B — Global Market Resolver (Complete, 2026-03-16)
+- **MarketResolverService** (`/app/backend/services/market_resolver_service.py`):
+  - Runs every 30s, iterates ALL open positions regardless of strategy
+  - For expired positions (end_date < now), queries Gamma API using `clob_token_ids` (not condition_id, which is non-unique across Polymarket)
+  - When market is closed + outcomePrices show 1/0 split: computes realized PnL, records closing TradeRecord (strategy_id=resolver), removes position from state
+  - Handles both sides of a market (Up/Down) via complement_token_id sibling resolution
+  - Stats: `GET /api/health/market-resolver`, manual trigger: `POST /api/market-resolver/run`
+- **Positions API enriched** (`GET /api/positions`): Now includes `end_date`, `time_to_expiry_seconds`, `expired`, `resolved` per position
+- **Frontend Positions UI** (`Positions.jsx`):
+  - "Expires In" column: countdown (s/m/h/d) for crypto positions, "—" for weather
+  - "Status" column: Active (green), Expiring (amber, <5m), Expired (red) badges
+  - "Expired" stat card in header
+- **Live results**: 2 positions resolved (BTC+ETH 5m), +$7.90 realized PnL, 2 wins / 0 losses
+- Testing: 15/15 backend + frontend — `/app/test_reports/iteration_33.json`
 - Copy trading skeleton
 - Manual order entry
