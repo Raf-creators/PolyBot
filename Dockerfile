@@ -1,8 +1,8 @@
 FROM node:20-slim AS frontend-build
 
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/yarn.lock ./
-RUN corepack enable && yarn install --frozen-lockfile
+COPY frontend/package.json ./
+RUN corepack enable && yarn install
 COPY frontend/ ./
 ENV REACT_APP_BACKEND_URL=
 RUN yarn build
@@ -21,4 +21,4 @@ WORKDIR /app/backend
 
 EXPOSE 8000
 
-CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["python", "server.py"]
