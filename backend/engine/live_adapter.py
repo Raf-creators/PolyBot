@@ -32,6 +32,7 @@ LIVE_DEFAULTS = {
 }
 
 POLL_INTERVAL_SECONDS = 5
+POLL_INTERVAL_WS_FALLBACK = 30  # Reduced polling when WS fills active
 
 
 class LiveAdapter:
@@ -41,6 +42,7 @@ class LiveAdapter:
         self._client = None
         self._authenticated = False
         self._live_order_service = None
+        self._fill_ws = None  # ClobFillWsClient (injected)
         self._poll_task: Optional[asyncio.Task] = None
 
         self._total_submitted = 0
@@ -49,6 +51,8 @@ class LiveAdapter:
         self._total_failed = 0
         self._total_cancelled = 0
         self._total_slippage_rejected = 0
+        self._ws_fill_count = 0
+        self._poll_fill_count = 0
         self._last_error: Optional[str] = None
         self._last_api_call: Optional[str] = None
         self._last_status_refresh: Optional[str] = None
@@ -74,6 +78,10 @@ class LiveAdapter:
 
     def set_order_service(self, service):
         self._live_order_service = service
+
+    def set_fill_ws(self, fill_ws):
+        """Inject fill WebSocket client for real-time fill updates."""
+        self._fill_ws = fill_ws
 
     async def initialize(self) -> bool:
         creds = self.credentials_present()
@@ -135,7 +143,9 @@ class LiveAdapter:
     async def _poll_loop(self):
         while True:
             try:
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                # Reduce polling when WS fill updates are active
+                interval = POLL_INTERVAL_WS_FALLBACK if (self._fill_ws and self._fill_ws._connected) else POLL_INTERVAL_SECONDS
+                await asyncio.sleep(interval)
                 if not self._authenticated or not self._live_order_service:
                     continue
                 active = self._live_order_service.active_orders
@@ -213,6 +223,7 @@ class LiveAdapter:
         await self._live_order_service.update_status(rec.id, **updates)
 
         if fill_delta > 0:
+            self._poll_fill_count += 1
             await self._process_fill_delta(rec, fill_delta, avg_price, new_status)
         if new_status != rec.status:
             logger.info(f"[LIVE] Order {rec.exchange_order_id[:12]} status: {rec.status} -> {new_status} (filled {new_filled}/{original_size})")
@@ -272,6 +283,76 @@ class LiveAdapter:
                   "filled_size": rec.filled_size + delta, "remaining_size": rec.remaining_size - delta,
                   "exchange_order_id": rec.exchange_order_id},
         ))
+
+    # ---- WebSocket Fill Callback ----
+
+    async def on_ws_fill(self, fill_event: dict):
+        """Process a real-time fill event from ClobFillWsClient.
+
+        Called with trade events (MATCHED, MINED, CONFIRMED).
+        Updates LiveOrderRecord, processes fill delta, emits events.
+        """
+        if not self._live_order_service:
+            return
+
+        taker_order_id = fill_event.get("taker_order_id", "")
+        asset_id = fill_event.get("asset_id", "")
+        side = fill_event.get("side", "")
+        size = fill_event.get("size", 0)
+        price = fill_event.get("price", 0)
+
+        # Match against active orders by exchange_order_id or token_id
+        matched_rec = None
+        for rec in self._live_order_service.active_orders.values():
+            if rec.exchange_order_id and rec.exchange_order_id == taker_order_id:
+                matched_rec = rec
+                break
+            # Also try matching by asset_id (token_id)
+            if rec.token_id == asset_id and rec.side == side.lower():
+                matched_rec = rec
+                break
+
+        if not matched_rec:
+            logger.debug(f"[FILL WS] No matching active order for trade {taker_order_id[:16]}...")
+            return
+
+        # Compute fill delta
+        prev_filled = matched_rec.filled_size
+        new_filled = min(prev_filled + size, matched_rec.requested_size)
+        fill_delta = new_filled - prev_filled
+
+        if fill_delta <= 0:
+            return
+
+        remaining = max(0, matched_rec.requested_size - new_filled)
+        new_status = "filled" if remaining <= 0 else "partially_filled"
+
+        # Calculate slippage
+        slippage_bps = None
+        if price > 0 and matched_rec.price > 0:
+            slippage_bps = round(abs(price - matched_rec.price) / matched_rec.price * 10000, 2)
+
+        updates = {
+            "status": new_status,
+            "filled_size": round(new_filled, 6),
+            "remaining_size": round(remaining, 6),
+            "avg_fill_price": round(price, 6),
+            "update_source": "websocket",
+        }
+        if slippage_bps is not None:
+            updates["slippage_bps"] = slippage_bps
+        if new_status == "filled":
+            updates["filled_at"] = utc_now()
+
+        await self._live_order_service.update_status(matched_rec.id, **updates)
+        self._ws_fill_count += 1
+
+        await self._process_fill_delta(matched_rec, fill_delta, price, new_status)
+
+        logger.info(
+            f"[FILL WS] Order {matched_rec.exchange_order_id[:12] if matched_rec.exchange_order_id else matched_rec.id} "
+            f"fill via WS: +{fill_delta:.4f} at {price:.4f} ({new_status})"
+        )
 
     # ---- Cancel ----
 
@@ -489,6 +570,9 @@ class LiveAdapter:
     def status(self) -> dict:
         creds = self.credentials_present()
         svc = self._live_order_service
+        ws_connected = self._fill_ws._connected if self._fill_ws else False
+        fill_method = "websocket+polling" if ws_connected else "polling"
+        poll_interval = POLL_INTERVAL_WS_FALLBACK if ws_connected else POLL_INTERVAL_SECONDS
         return {
             "adapter": "live",
             "authenticated": self._authenticated,
@@ -499,14 +583,17 @@ class LiveAdapter:
             "total_failed": self._total_failed,
             "total_cancelled": self._total_cancelled,
             "total_slippage_rejected": self._total_slippage_rejected,
+            "ws_fill_count": self._ws_fill_count,
+            "poll_fill_count": self._poll_fill_count,
             "open_orders": svc.open_count if svc else 0,
             "partial_orders": svc.partial_count if svc else 0,
             "last_api_call": self._last_api_call,
             "last_status_refresh": self._last_status_refresh,
             "last_error": self._last_error,
             "recent_errors": self._recent_errors[-5:],
-            "fill_update_method": "polling",
-            "poll_interval_seconds": POLL_INTERVAL_SECONDS,
+            "fill_update_method": fill_method,
+            "poll_interval_seconds": poll_interval,
+            "fill_ws_health": self._fill_ws.health if self._fill_ws else {"connected": False, "has_credentials": False},
         }
 
     async def get_balance(self) -> Optional[float]:

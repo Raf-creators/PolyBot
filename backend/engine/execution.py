@@ -103,4 +103,5 @@ class ExecutionEngine:
             "last_api_call": None, "last_status_refresh": None,
             "last_error": "engine not started", "recent_errors": [],
             "fill_update_method": "polling", "poll_interval_seconds": 5,
+            "fill_ws_health": {"connected": False, "has_credentials": False},
         }

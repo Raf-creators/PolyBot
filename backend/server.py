@@ -42,6 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from engine.clob_ws import ClobWebSocketClient
+from engine.clob_fill_ws import ClobFillWsClient
 from services.forecast_accuracy_service import ForecastAccuracyService
 from services.calibration_service import CalibrationService
 from services.weather_alert_service import WeatherAlertService
@@ -61,6 +62,7 @@ live_order_service: Optional[LiveOrderService] = None
 forecast_accuracy_service: Optional[ForecastAccuracyService] = None
 calibration_service: Optional[CalibrationService] = None
 clob_ws_client: Optional[ClobWebSocketClient] = None
+clob_fill_ws_client: Optional[ClobFillWsClient] = None
 weather_alert_service: Optional[WeatherAlertService] = None
 rolling_calibration_service: Optional[RollingCalibrationService] = None
 ws_clients: Set[WebSocket] = set()
@@ -89,7 +91,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, weather_alert_service, rolling_calibration_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -134,6 +136,19 @@ async def lifespan(app: FastAPI):
     clob_ws_client.set_bus(bus)
     await clob_ws_client.start()
     weather_trader_ref.set_clob_ws(clob_ws_client)
+
+    # CLOB fill WebSocket (user channel for trade/fill events)
+    # Credentials may or may not be present (graceful degradation)
+    api_key = os.environ.get("POLY_API_KEY", "")
+    api_secret = os.environ.get("POLY_API_SECRET", "")
+    passphrase = os.environ.get("POLY_PASSPHRASE", "")
+    clob_fill_ws_client = ClobFillWsClient(
+        api_key=api_key,
+        api_secret=api_secret,
+        passphrase=passphrase,
+    )
+    # Store reference for deferred wiring (adapter created on engine.start())
+    await clob_fill_ws_client.start()
 
     # Phase 6: Telegram notifier (non-blocking, fails gracefully)
     telegram_notifier = TelegramNotifier()
@@ -214,6 +229,8 @@ async def lifespan(app: FastAPI):
         await engine.stop()
     if clob_ws_client:
         await clob_ws_client.stop()
+    if clob_fill_ws_client:
+        await clob_fill_ws_client.stop()
     mongo_client.close()
 
 
@@ -241,7 +258,16 @@ async def health():
 async def get_status():
     if not state:
         raise HTTPException(500, "Engine not initialized")
-    return state.snapshot()
+    snap = state.snapshot()
+    # Inject fill WS health into stats.health
+    if clob_fill_ws_client:
+        snap["stats"]["health"]["fill_ws_connected"] = clob_fill_ws_client._connected
+        snap["stats"]["health"]["fill_ws_has_credentials"] = clob_fill_ws_client.has_credentials
+    # Inject execution fill_update_method
+    if engine and engine.execution_engine:
+        exec_status = engine.execution_engine.live_adapter_status
+        snap["stats"]["health"]["fill_update_method"] = exec_status.get("fill_update_method", "polling")
+    return snap
 
 
 # ---- Engine Control ----
@@ -253,6 +279,11 @@ async def start_engine():
     if engine.is_running:
         raise HTTPException(400, "Engine already running")
     await engine.start()
+    # Wire fill WS to live adapter (now available after engine.start())
+    if clob_fill_ws_client and engine.execution_engine._live_adapter:
+        adapter = engine.execution_engine._live_adapter
+        adapter.set_fill_ws(clob_fill_ws_client)
+        clob_fill_ws_client._fill_callback = adapter.on_ws_fill
     return {"status": "started", "mode": state.trading_mode.value}
 
 
@@ -694,6 +725,13 @@ async def get_clob_ws_health():
     if not clob_ws_client:
         return {"connected": False, "note": "not_configured"}
     return clob_ws_client.health
+
+
+@api_router.get("/health/fill-ws")
+async def get_fill_ws_health():
+    if not clob_fill_ws_client:
+        return {"connected": False, "has_credentials": False, "note": "not_configured"}
+    return clob_fill_ws_client.health
 
 
 

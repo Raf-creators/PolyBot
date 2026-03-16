@@ -109,6 +109,19 @@ export default function Overview() {
                 ))}
               </div>
             )}
+            <div className="pt-2 border-t border-zinc-800 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-zinc-500">Fill Updates</span>
+                <span className="text-zinc-400 font-mono text-[10px]">{health.fill_update_method || 'polling'}</span>
+              </div>
+              {health.fill_ws_health && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-500">Fill WS</span>
+                  <HealthBadge status={health.fill_ws_health?.connected ? 'healthy' : 'degraded'}
+                    label={health.fill_ws_health?.connected ? 'connected' : health.fill_ws_health?.has_credentials ? 'disconnected' : 'no credentials'} />
+                </div>
+              )}
+            </div>
           </div>
         </SectionCard>
 
