@@ -371,6 +371,19 @@ expired          → Expired on CLOB
 - **What User Must Do**: Push to GitHub via "Save to Github" to deploy the `load_state_from_db` + diagnostics fixes to Railway. After Railway redeploy, the diagnostics footer will confirm the code version and database being used.
 - Testing: 14/14 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_38.json`
 
+### P9G — Production Resolver & Market Snapshot Persistence (Complete, 2026-03-16)
+- **Root Cause of Stale Chart on Railway**:
+  1. **Market data not persisted for positions**: After restart, positions are loaded from the snapshot but their associated `MarketSnapshot` objects (containing `end_date`, `condition_id`, `complement_token_id`) are NOT loaded. The `state.markets` dict starts empty. The resolver calls `get_market(token_id)` → returns None → skips all positions.
+  2. **MarketSnapshot loading bug**: Initial implementation used `mdoc.pop("token_id")` which removed the required `token_id` field before constructing the model, causing silent failure.
+  3. **No diagnostic visibility**: The resolver silently skipped positions without logging WHY, making it impossible to diagnose from the dashboard.
+  4. **No staleness info on pnl-history**: No way to tell if the chart data is stale (last close could be hours ago).
+- **Fixes Applied**:
+  - `persistence.py`: `_flush()` now persists market snapshots alongside position snapshots; `load_state_from_db()` loads them back on startup using `MarketSnapshot(**mdoc)`
+  - `market_resolver_service.py`: Added `skip_reasons` dict tracking `no_market`, `no_end_date`, `not_expired`, `already_checked` — exposed in `_stats['skip_reasons']`
+  - `server.py`: `/api/analytics/pnl-history` now returns `latest_close_at` and `server_time` for staleness detection; `/api/diagnostics` includes resolver stats
+- **Result**: After restart, `no_market` skips reduced from 36→11 (25 market snapshots loaded from DB). Remaining 11 positions lack market data in both DB and live feed. 25 weather positions correctly skipped with `no_end_date` (handled by auto_resolver, not market_resolver).
+- Testing: 13/13 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_39.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
