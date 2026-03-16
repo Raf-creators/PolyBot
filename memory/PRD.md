@@ -323,6 +323,16 @@ expired          → Expired on CLOB
 - **Root cause of blocked executions**: Global `max_concurrent_positions=10` was fully consumed by weather trader positions; sniper signals passed all strategy filters but were rejected by the risk engine
 - **Risk config changes**: `max_concurrent_positions` 10→30, `max_market_exposure` 50→100 (conservative increase for paper mode)
 
+
+### P9C — Railway Deployment Configuration (Complete, 2026-03-16)
+- **Deployment files**: `requirements.txt` (19 packages), `Procfile` (uvicorn with dynamic PORT), `railway.toml` (nixpacks, healthcheck)
+- **Auto-start engine**: All background services (Crypto Sniper, Weather Trader, Market Resolver, Market Data Feed, Arb Scanner, Risk Engine) start automatically during FastAPI lifespan — no manual `POST /api/engine/start` required
+- **Dynamic PORT**: `__main__` block reads `PORT` env var (default 8000) for Railway networking
+- **MONGO_URI support**: Checks `MONGO_URI` first (Railway), falls back to `MONGO_URL` (Emergent)
+- **Health endpoint**: `GET /health` and `GET /api/health` return comprehensive status: engine, market_feeds, strategies, resolver, mode
+- **No Emergent dependencies**: System runs independently as a server process
+- Testing: 28/28 backend — `/app/test_reports/iteration_34.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
