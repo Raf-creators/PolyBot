@@ -293,6 +293,9 @@ async def get_status():
     if engine and engine.execution_engine:
         exec_status = engine.execution_engine.live_adapter_status
         snap["stats"]["health"]["fill_update_method"] = exec_status.get("fill_update_method", "polling")
+    # Inject discovery stats
+    if engine and engine.market_data:
+        snap["stats"]["health"]["discovery"] = engine.market_data.discovery_stats
     return snap
 
 
@@ -788,6 +791,15 @@ async def trigger_auto_resolver():
         raise HTTPException(500, "Auto-resolver not initialized")
     result = await auto_resolver_service.run_once()
     return result
+
+
+@api_router.get("/health/discovery")
+async def get_discovery_health():
+    """Market discovery stats — broad + crypto-targeted layers."""
+    if not engine or not engine.market_data:
+        return {"note": "not_initialized"}
+    return engine.market_data.discovery_stats
+
 
 
 
