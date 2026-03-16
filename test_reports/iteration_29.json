@@ -1,0 +1,125 @@
+{
+  "summary": "Crypto Sniper Slug-based Classification feature fully verified. All 64 backend tests passed. Slug patterns btc-updown-5m-{ts}, bitcoin-up-or-down, bitcoin-above-{price}, will-bitcoin-hit-{price} all working. Strike parsing with 'k' and 'm' suffixes correct. MarketSnapshot has slug/end_date fields. Gamma API limit=500. max_tte_seconds=28800. Classification correctly identifies 1 BTC $1M market. All frontend pages load correctly.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_unit_tests": [
+      "test_parse_strike_plain_number - Plain number parsing",
+      "test_parse_strike_with_comma - Comma formatting",
+      "test_parse_strike_k_suffix - 150k → 150000",
+      "test_parse_strike_m_suffix - 1m → 1000000",
+      "test_parse_strike_decimal_with_k - 1.5k → 1500",
+      "test_parse_strike_decimal_with_m - 2.5m → 2500000",
+      "test_updown_slug_pattern - btc-updown-5m-{ts} regex match",
+      "test_bitcoin_up_or_down_slug_pattern - bitcoin-up-or-down-{date} regex match",
+      "test_bitcoin_above_price_slug_pattern - ethereum-above-2400-on-march-16 regex match",
+      "test_will_bitcoin_hit_slug_pattern - will-bitcoin-hit-150k-by-march-31-2026 regex match",
+      "test_will_bitcoin_hit_1m_slug_pattern - will-bitcoin-hit-1m-by-end-of-2026 regex match",
+      "test_classify_updown_slug - Full classification with market_type=updown, window=5m",
+      "test_classify_bitcoin_up_or_down_slug - Classification with end_date",
+      "test_classify_bitcoin_above_price_slug - ETH above 2400, market_type=threshold",
+      "test_classify_will_bitcoin_hit_slug - BTC hit 150k → strike=150000",
+      "test_classify_will_bitcoin_hit_1m_slug - BTC hit 1m → strike=1000000",
+      "test_question_fallback_hit - 'hit' keyword maps to direction=above",
+      "test_question_fallback_reach - 'reach' keyword maps to direction=above",
+      "test_question_fallback_dip - 'dip' keyword maps to direction=below",
+      "test_question_fallback_between_range - 'between X and Y' market_type=range",
+      "test_question_fallback_bitcoin_up_or_down - 'Up or Down' pattern",
+      "test_question_only_btc_above - Backward compat: slug='' falls back to question",
+      "test_question_only_eth_below - Backward compat for ETH below"
+    ],
+    "backend_api_tests": [
+      "GET /api/strategies/sniper/health returns 200 with running=true",
+      "GET /api/strategies/sniper/health shows config.max_tte_seconds=28800",
+      "GET /api/strategies/sniper/health shows markets_classified=1",
+      "GET /api/strategies/sniper/health shows classification_failure_reasons={no_regex_match: 499}",
+      "GET /api/strategies/sniper/signals returns rejected signal with asset=BTC, strike=1000000",
+      "GET /api/strategies/arb/health returns pairs_scanned=500 (Gamma API limit)",
+      "Regression: GET /api/status returns 200",
+      "Regression: GET /api/health returns 200 with status=healthy",
+      "Regression: GET /api/strategies/weather/health returns 200",
+      "Regression: GET /api/analytics/global returns 200"
+    ],
+    "frontend_ui_tests": [
+      "Overview page loads with data-testid='overview-page'",
+      "Sniper page loads with data-testid='sniper-page'",
+      "Weather page loads with data-testid='weather-page'",
+      "Markets page loads with data-testid='markets-page'",
+      "Global Analytics page loads",
+      "Sniper Health tab shows Max TTE = 28800s",
+      "Sniper Rejected tab shows BTC $1,000,000 signal"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_phase5_crypto_sniper.py",
+    "/app/backend/tests/test_slug_classifier.py",
+    "/app/test_reports/pytest/pytest_results_slug_classifier.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "crypto_sniper.py _SLUG_PATTERNS (lines 57-82): 4 slug patterns correctly defined for updown-5m, up-or-down, above-{price}, hit-{price}",
+    "crypto_sniper.py _parse_strike (lines 137-147): Correctly handles 'k' (1000x) and 'm' (1000000x) suffixes",
+    "crypto_sniper.py classify_market_question: Checks slug first, then falls back to question parsing - good design",
+    "sniper_models.py SniperConfig: max_tte_seconds=28800.0 (8 hours) as specified",
+    "models.py MarketSnapshot: slug and end_date fields present (lines 72-73)",
+    "market_data.py _load_markets: limit='500' parameter correctly set (line 58)",
+    "market_data.py _parse_gamma_market: slug and end_date stored correctly (lines 87-88, 113-114)"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_slug_classifier.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (64/64 tests passed, 1 skipped for insufficient vol data)",
+    "frontend": "100% (7/7 UI elements verified)"
+  },
+
+  "test_credentials": "None required - paper mode",
+
+  "seed_data_creation": "None",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Slug-based classification feature complete. Key changes verified: (1) _SLUG_PATTERNS handles btc-updown-5m-{ts}, bitcoin-up-or-down-{date}, bitcoin-above-{price}, will-bitcoin-hit-{price}. (2) _parse_strike handles k/m suffixes. (3) MarketSnapshot has slug/end_date fields. (4) Gamma API limit=500 (pairs_scanned=500 in arb health). (5) max_tte_seconds=28800 in config. (6) Currently 1 market classified (BTC $1M hit) - rejected for tte=137 days > max 8h. No short-term updown markets active on Polymarket currently.",
+
+  "features_tested": {
+    "slug_pattern_btc_updown_5m": "PASS - Regex matches and classifies",
+    "slug_pattern_bitcoin_up_or_down": "PASS - Regex matches and classifies",
+    "slug_pattern_bitcoin_above_price": "PASS - Regex matches and classifies with strike",
+    "slug_pattern_will_bitcoin_hit": "PASS - Regex matches and classifies with strike",
+    "strike_k_suffix": "PASS - 150k → 150000.0",
+    "strike_m_suffix": "PASS - 1m → 1000000.0",
+    "market_snapshot_slug_field": "PASS - Field present in model",
+    "market_snapshot_end_date_field": "PASS - Field present in model",
+    "gamma_api_limit_500": "PASS - pairs_scanned=500 in arb health",
+    "max_tte_seconds_28800": "PASS - config.max_tte_seconds=28800.0",
+    "classification_failure_reasons": "PASS - Shows breakdown {no_regex_match: 499}",
+    "signals_show_parsed_strike": "PASS - BTC $1,000,000 correctly parsed from '1m'",
+    "backward_compat_question_only": "PASS - slug='' falls back to question patterns",
+    "question_pattern_hit": "PASS - 'hit' → direction=above",
+    "question_pattern_reach": "PASS - 'reach' → direction=above",
+    "question_pattern_dip": "PASS - 'dip' → direction=below",
+    "question_pattern_between": "PASS - 'between X and Y' → market_type=range",
+    "regression_api_status": "PASS - Returns 200",
+    "regression_api_health": "PASS - Returns 200 with status=healthy",
+    "regression_arb_health": "PASS - Returns 200 with pairs_scanned=500",
+    "regression_weather_health": "PASS - Returns 200",
+    "regression_global_analytics": "PASS - Returns 200",
+    "regression_frontend_pages": "PASS - All pages load correctly"
+  }
+}

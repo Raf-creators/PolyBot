@@ -24,7 +24,7 @@ class SniperConfig(BaseModel):
     max_spread: float = 0.10
     max_stale_age_seconds: float = 60.0
     min_tte_seconds: float = 30.0
-    max_tte_seconds: float = 900.0
+    max_tte_seconds: float = 28800.0  # 8h — supports 4h+ updown windows
 
     # Volatility
     vol_lookback_minutes: float = 60.0
@@ -51,11 +51,13 @@ class CryptoMarketClassification(BaseModel):
     condition_id: str
     asset: str                  # "BTC" or "ETH"
     direction: str              # "above" or "below"
-    strike: float
+    strike: float               # 0 = updown (use spot at eval time)
     expiry_utc: str             # ISO datetime of resolution
     yes_token_id: str
     no_token_id: str
     question: str
+    market_type: str = "threshold"  # "updown", "threshold", "range"
+    window: Optional[str] = None    # "5m", "15m", "1h", "4h" for updown
     classified_at: str = Field(default_factory=utc_now)
 
 

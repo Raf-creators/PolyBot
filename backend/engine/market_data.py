@@ -55,7 +55,7 @@ class MarketDataFeed:
 
     async def _load_markets(self):
         try:
-            params = {"active": "true", "closed": "false", "limit": "100"}
+            params = {"active": "true", "closed": "false", "limit": "500"}
             async with self._session.get(f"{GAMMA_API}/markets", params=params) as resp:
                 if resp.status != 200:
                     logger.warning(f"Gamma API status {resp.status}")
@@ -84,6 +84,8 @@ class MarketDataFeed:
     def _parse_gamma_market(self, m: dict):
         question = m.get("question", "")
         condition_id = m.get("conditionId", "")
+        slug = m.get("slug", "")
+        end_date = m.get("endDate")
         try:
             outcomes = json.loads(m.get("outcomes", "[]"))
             prices = json.loads(m.get("outcomePrices", "[]"))
@@ -108,6 +110,8 @@ class MarketDataFeed:
                 condition_id=condition_id,
                 question=question,
                 outcome=outcome,
+                slug=slug,
+                end_date=end_date,
                 complement_token_id=complement,
                 mid_price=price,
                 last_price=price,

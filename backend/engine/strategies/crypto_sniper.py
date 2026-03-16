@@ -47,11 +47,42 @@ _ASSET_NORM = {
 _DIR_NORM = {
     "above": "above", "over": "above", "higher than": "above",
     "≥": "above", ">=": "above", ">": "above",
+    "reach": "above", "hit": "above",
     "below": "below", "under": "below", "lower than": "below",
+    "dip to": "below", "dip": "below",
     "≤": "below", "<=": "below", "<": "below",
 }
 
-_PATTERNS = [
+# Slug-based patterns — checked BEFORE question patterns
+_SLUG_PATTERNS = [
+    # {asset}-updown-{window}-{timestamp}  e.g., btc-updown-5m-1773666000
+    re.compile(
+        r"^(?P<asset>btc|eth|bitcoin|ethereum)-updown-"
+        r"(?P<window>5m|15m|1h|4h)-"
+        r"(?P<ts>\d{10,})",
+        re.IGNORECASE,
+    ),
+    # {asset}-up-or-down-{date-info}  e.g., bitcoin-up-or-down-march-17-2026-12pm-et
+    re.compile(
+        r"^(?P<asset>btc|eth|bitcoin|ethereum)-up-or-down-",
+        re.IGNORECASE,
+    ),
+    # {asset}-above-{price}-on-{date}  e.g., ethereum-above-2400-on-march-16
+    re.compile(
+        r"^(?P<asset>btc|eth|bitcoin|ethereum)-above-"
+        r"(?P<strike>[\d]+[km]?)-on-",
+        re.IGNORECASE,
+    ),
+    # will-{asset}-hit-{price}-by-{date}  e.g., will-bitcoin-hit-150k-by-march-31-2026
+    re.compile(
+        r"^will-(?P<asset>btc|eth|bitcoin|ethereum)-(?:hit|reach)-"
+        r"(?P<strike>[\d]+[km]?)-by-",
+        re.IGNORECASE,
+    ),
+]
+
+# Question-based patterns — fallback when slug doesn't match
+_QUESTION_PATTERNS = [
     # "Will BTC be above $97,000 at 12:15 UTC?"
     re.compile(
         r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
@@ -60,11 +91,17 @@ _PATTERNS = [
         r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
         re.IGNORECASE,
     ),
-    # "Bitcoin above $97,000?" (no explicit time — uses endDate from market)
+    # "Will the price of Ethereum be above $2,400 on March 16?" / "Will Bitcoin hit $150k by March 31?"
     re.compile(
-        r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
-        r".*?(?P<dir>above|below|over|under|higher than|lower than)"
-        r"\s+\$?(?P<strike>[\d,]+(?:\.\d+)?)",
+        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r".*?(?:be\s+)?(?P<dir>above|below|over|under|higher than|lower than|reach|hit|dip(?:\s+to)?)"
+        r"\s+\$?(?P<strike>[\d,]+(?:[km])?(?:\.\d+)?)",
+        re.IGNORECASE,
+    ),
+    # "Bitcoin Up or Down - March 17, 12PM ET" (question-based updown)
+    re.compile(
+        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"\s+Up\s+or\s+Down",
         re.IGNORECASE,
     ),
     # "BTC price ≥ $97000 at 4:00 PM ET"
@@ -74,7 +111,19 @@ _PATTERNS = [
         r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
         re.IGNORECASE,
     ),
+    # "Will the price of Bitcoin be between $70,000 and $72,000 on March 16?"
+    re.compile(
+        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r".*?between\s+\$?(?P<strike_low>[\d,]+(?:\.\d+)?)"
+        r"\s+and\s+\$?(?P<strike_high>[\d,]+(?:\.\d+)?)",
+        re.IGNORECASE,
+    ),
 ]
+
+# Window string to seconds mapping for updown slug parsing
+_WINDOW_SECONDS = {
+    "5m": 300, "15m": 900, "1h": 3600, "4h": 14400,
+}
 
 
 def _parse_asset(raw: str) -> Optional[str]:
@@ -87,7 +136,14 @@ def _parse_direction(raw: str) -> Optional[str]:
 
 def _parse_strike(raw: str) -> Optional[float]:
     try:
-        return float(raw.replace(",", ""))
+        clean = raw.replace(",", "")
+        # Handle "150k" → 150000, "1m" → 1000000
+        lower = clean.lower()
+        if lower.endswith("m"):
+            return float(clean[:-1]) * 1_000_000
+        if lower.endswith("k"):
+            return float(clean[:-1]) * 1_000
+        return float(clean)
     except (ValueError, TypeError):
         return None
 
@@ -126,23 +182,160 @@ def classify_market_question(
     yes_token_id: str,
     no_token_id: str,
     end_date: Optional[str] = None,
+    slug: str = "",
 ) -> Tuple[Optional[CryptoMarketClassification], Optional[str]]:
-    """Try to parse a market question into a crypto classification.
+    """Try to classify a market as a tradable crypto binary option.
 
+    Checks slug patterns first (most reliable), then falls back to question parsing.
     Returns (classification, None) on success or (None, rejection_reason) on failure.
-    Pure function — no side effects.
     """
-    for pattern in _PATTERNS:
+    # ---- Phase 1: Slug-based classification ----
+    if slug:
+        result = _classify_from_slug(slug, condition_id, yes_token_id, no_token_id, question, end_date)
+        if result:
+            return result, None
+
+    # ---- Phase 2: Question-based fallback ----
+    return _classify_from_question(question, condition_id, yes_token_id, no_token_id, end_date)
+
+
+def _classify_from_slug(
+    slug: str, condition_id: str, yes_token_id: str, no_token_id: str,
+    question: str, end_date: Optional[str],
+) -> Optional[CryptoMarketClassification]:
+    """Parse slug patterns for crypto markets."""
+
+    # Pattern 1: {asset}-updown-{window}-{timestamp}
+    m = _SLUG_PATTERNS[0].search(slug)
+    if m:
+        asset = _parse_asset(m.group("asset"))
+        if not asset:
+            return None
+        window = m.group("window")
+        ts = int(m.group("ts"))
+        expiry = datetime.fromtimestamp(ts, tz=timezone.utc)
+        if expiry <= datetime.now(timezone.utc):
+            return None  # Expired
+        return CryptoMarketClassification(
+            condition_id=condition_id,
+            asset=asset,
+            direction="above",  # updown → YES=Up → direction=above
+            strike=0,  # sentinel: use spot price at evaluation time
+            expiry_utc=expiry.isoformat(),
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
+            question=question,
+            window=window,
+            market_type="updown",
+        )
+
+    # Pattern 2: {asset}-up-or-down-{date-info}
+    m = _SLUG_PATTERNS[1].search(slug)
+    if m:
+        asset = _parse_asset(m.group("asset"))
+        if not asset:
+            return None
+        expiry = _parse_expiry(None, end_date)
+        if expiry is None or expiry <= datetime.now(timezone.utc):
+            return None
+        return CryptoMarketClassification(
+            condition_id=condition_id,
+            asset=asset,
+            direction="above",
+            strike=0,
+            expiry_utc=expiry.isoformat(),
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
+            question=question,
+            window=None,
+            market_type="updown",
+        )
+
+    # Pattern 3: {asset}-above-{price}-on-{date} OR will-{asset}-hit-{price}-by-{date}
+    for pat in _SLUG_PATTERNS[2:4]:
+        m = pat.search(slug)
+        if m:
+            asset = _parse_asset(m.group("asset"))
+            if not asset:
+                continue
+            strike = _parse_strike(m.group("strike"))
+            if strike is None or strike <= 0:
+                continue
+            expiry = _parse_expiry(None, end_date)
+            if expiry is None or expiry <= datetime.now(timezone.utc):
+                return None
+            return CryptoMarketClassification(
+                condition_id=condition_id,
+                asset=asset,
+                direction="above",
+                strike=strike,
+                expiry_utc=expiry.isoformat(),
+                yes_token_id=yes_token_id,
+                no_token_id=no_token_id,
+                question=question,
+                market_type="threshold",
+            )
+
+    return None
+
+
+def _classify_from_question(
+    question: str, condition_id: str, yes_token_id: str, no_token_id: str,
+    end_date: Optional[str],
+) -> Tuple[Optional[CryptoMarketClassification], Optional[str]]:
+    """Parse question text for crypto market classification."""
+
+    for i, pattern in enumerate(_QUESTION_PATTERNS):
         m = pattern.search(question)
         if not m:
             continue
 
         groups = m.groupdict()
-
         asset = _parse_asset(groups.get("asset", ""))
         if not asset:
-            return None, "unknown_asset"
+            continue
 
+        # "Up or Down" question pattern (index 2)
+        if i == 2:
+            expiry = _parse_expiry(None, end_date)
+            if expiry is None or expiry <= datetime.now(timezone.utc):
+                return None, "invalid_expiry"
+            return CryptoMarketClassification(
+                condition_id=condition_id,
+                asset=asset,
+                direction="above",
+                strike=0,
+                expiry_utc=expiry.isoformat(),
+                yes_token_id=yes_token_id,
+                no_token_id=no_token_id,
+                question=question,
+                market_type="updown",
+            ), None
+
+        # "Between X and Y" pattern (index 4)
+        if i == 4:
+            strike_low = _parse_strike(groups.get("strike_low", ""))
+            strike_high = _parse_strike(groups.get("strike_high", ""))
+            if strike_low is None or strike_high is None:
+                return None, "invalid_strike"
+            # Use midpoint as the strike, direction=above for the lower bound
+            strike = (strike_low + strike_high) / 2
+            expiry = _parse_expiry(groups.get("time"), end_date)
+            if expiry is None or expiry <= datetime.now(timezone.utc):
+                return None, "invalid_expiry"
+            return CryptoMarketClassification(
+                condition_id=condition_id,
+                asset=asset,
+                direction="above",
+                strike=strike,
+                expiry_utc=expiry.isoformat(),
+                yes_token_id=yes_token_id,
+                no_token_id=no_token_id,
+                question=question,
+                market_type="range",
+            ), None
+
+        # Standard directional patterns (index 0, 1, 3)
         direction = _parse_direction(groups.get("dir", ""))
         if not direction:
             return None, "unknown_direction"
@@ -154,8 +347,6 @@ def classify_market_question(
         expiry = _parse_expiry(groups.get("time"), end_date)
         if expiry is None:
             return None, "invalid_expiry"
-
-        # Check expiry is in the future
         if expiry <= datetime.now(timezone.utc):
             return None, "expired"
 
@@ -168,6 +359,7 @@ def classify_market_question(
             yes_token_id=yes_token_id,
             no_token_id=no_token_id,
             question=question,
+            market_type="threshold",
         ), None
 
     return None, "no_regex_match"
@@ -335,7 +527,7 @@ class CryptoSniper(BaseStrategy):
         self._m["markets_classified"] = len(self._classified_cache)
 
     def _classify_markets(self) -> Dict[str, CryptoMarketClassification]:
-        """Scan all markets, find binary crypto pairs, parse question text."""
+        """Scan all markets, find binary crypto pairs, parse question text and slug."""
         # First, group by condition_id into binary pairs (same as ArbScanner)
         by_condition: Dict[str, Dict] = {}
         for snap in self._state.markets.values():
@@ -345,9 +537,9 @@ class CryptoSniper(BaseStrategy):
             if cid not in by_condition:
                 by_condition[cid] = {}
             out = (snap.outcome or "").upper()
-            if "YES" in out:
+            if "YES" in out or "UP" in out:
                 by_condition[cid]["yes"] = snap
-            elif "NO" in out:
+            elif "NO" in out or "DOWN" in out:
                 by_condition[cid]["no"] = snap
 
         results = {}
@@ -365,7 +557,8 @@ class CryptoSniper(BaseStrategy):
                 condition_id=cid,
                 yes_token_id=yes_snap.token_id,
                 no_token_id=no_snap.token_id,
-                end_date=None,  # endDate not stored in MarketSnapshot currently
+                end_date=yes_snap.end_date,
+                slug=yes_snap.slug,
             )
 
             if classification:
@@ -497,9 +690,11 @@ class CryptoSniper(BaseStrategy):
             return None
 
         # ---- Fair probability ----
+        # For updown markets (strike=0), use current spot as strike
+        effective_strike = cm.strike if cm.strike > 0 else spot
         fair = compute_fair_probability(
             spot=spot,
-            strike=cm.strike,
+            strike=effective_strike,
             vol=vol,
             tte_seconds=tte,
             direction=cm.direction,

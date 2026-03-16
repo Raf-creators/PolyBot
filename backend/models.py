@@ -69,6 +69,8 @@ class MarketSnapshot(BaseModel):
     condition_id: str = ""
     question: str = ""
     outcome: str = ""
+    slug: str = ""
+    end_date: Optional[str] = None
     complement_token_id: Optional[str] = None
     best_bid: Optional[float] = None
     best_ask: Optional[float] = None
