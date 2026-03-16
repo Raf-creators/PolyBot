@@ -305,18 +305,19 @@ expired          → Expired on CLOB
 - **Frontend**: Forecast Quality tab in Global Analytics shows Auto-Resolver section with status, interval, run counts, pending
 - Testing: 22/22 backend + 100% frontend passed — `/app/test_reports/iteration_26.json`
 
-### P9 — Crypto Sniper Classifier + Dual-Layer Discovery (Complete, 2026-03-16)
+### P9 — Crypto Sniper Classifier + Targeted Slug Discovery (Complete, 2026-03-16)
 - **Slug classification**: `{asset}-updown-{window}-{ts}`, `{asset}-up-or-down-{date}`, `{asset}-above-{price}`, `will-{asset}-hit-{price}`
 - **Question fallback**: "hit/reach/dip", "above/below", "between X and Y", "Up or Down"
 - **Strike parsing**: "k" (x1000), "m" (x1M)
-- **Dual-Layer Discovery** (`market_data.py`):
+- **Targeted Slug Discovery** (`market_data.py`):
   - Layer 1 (Broad): `/markets?limit=500` every 60s
-  - Layer 2 (Targeted): `/events` paginated (3000) every 30s with CRYPTO_SLUG_PREFIXES filter
+  - Layer 2 (Targeted Slug Construction): For each (asset × window) combo, compute current time boundary, generate exact slugs for current + next 3 windows, query `GET /events?slug={exact_slug}` — returns 0 or 1 event per query. Runs every 15s.
   - CLOB midpoint enrichment for top-volume + crypto markets every 15s
-  - Expired market filtering by `end_date > now`
-  - Stats: `GET /api/health/discovery`
-- State: 500 broad + 3000 events scanned. 0 active crypto updown (all expired). When btc-updown-5m markets spawn, they will be discovered within 30s.
-- Testing: 18/18 + 41/42 unit + 5/5 frontend — `/app/test_reports/iteration_30.json`
+  - `CRYPTO_UPDOWN_COMBOS`: btc/eth × 5m/15m/1h/4h = 8 combos × 4 lookahead = 32 slug queries
+  - Stats: `GET /api/health/discovery` — includes `crypto_active_slugs` list
+- **Live results**: 24 active markets discovered (BTC=12, ETH=12) across 5m/15m/4h. 1h confirmed not available on Polymarket. 25 classified, 25 evaluated, 57 signals generated.
+- **Previous approach (replaced)**: Paginated 3000 `/events` — too slow and missed short-lived markets
+- Testing: 16/16 backend — `/app/test_reports/iteration_31.json`
 
 ### P10 — Future
 - Copy trading skeleton
