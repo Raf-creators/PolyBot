@@ -356,6 +356,21 @@ expired          → Expired on CLOB
 - **Data Consistency**: `/api/status`, `/api/analytics/global`, `/api/analytics/pnl-history` all return matching close_count, win_rate, realized_pnl
 - Testing: 11/11 backend + 8/8 frontend (100%) — `/app/test_reports/iteration_37.json`
 
+### P9F — Diagnostics & Environment Visibility (Complete, 2026-03-16)
+- **Root Cause of Railway vs Emergent Discrepancy**:
+  1. Railway is running OLD code (pre-`load_state_from_db` fix) — doesn't have `/api/diagnostics` endpoint
+  2. Railway and Emergent use **completely separate MongoDB databases** (Railway: external MongoDB, Emergent: `test_database@localhost:27017`)
+  3. Railway starts fresh in-memory state on every deploy with 0 trades loaded from DB
+  4. Code changes require user to "Save to Github" → Railway auto-deploys from GitHub
+- **Fixes Applied**:
+  - `server.py`: Added `/api/diagnostics` endpoint showing git_commit, environment (railway/emergent_preview/local), DB name+host, server_start_time, trades_loaded_from_db count, `has_persistence_reload` flag
+  - `server.py`: Added `_detect_environment()`, `_detect_git_commit()`, `_load_build_info()` helpers
+  - `Dockerfile`: Generates `build_info.json` with timestamps, embeds `REACT_APP_BUILD_TIME` in frontend build
+  - `DiagnosticsFooter.jsx`: Fixed footer bar showing env/commit/db/boot/loaded-trades/db-reload-status
+  - `AppShell.jsx`, `dashboardStore.js`, `useApi.js`: Wired diagnostics data fetch
+- **What User Must Do**: Push to GitHub via "Save to Github" to deploy the `load_state_from_db` + diagnostics fixes to Railway. After Railway redeploy, the diagnostics footer will confirm the code version and database being used.
+- Testing: 14/14 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_38.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
