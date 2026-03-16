@@ -133,7 +133,7 @@ class RiskConfig(BaseModel):
     max_loss_per_strategy: float = 50.0
     max_position_size: float = 25.0
     max_market_exposure: float = 50.0
-    max_concurrent_positions: int = 10
+    max_concurrent_positions: int = 25
     max_order_size: float = 10.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0    # Max acceptable slippage for live orders

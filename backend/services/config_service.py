@@ -114,6 +114,14 @@ class ConfigService:
         risk_dict = config.get("risk")
         if risk_dict:
             try:
+                # Migrate old default: if DB has the old default of 10,
+                # upgrade to the new default (25) so multi-strategy trading works
+                if risk_dict.get("max_concurrent_positions") == 10:
+                    risk_dict["max_concurrent_positions"] = RiskConfig().max_concurrent_positions
+                    logger.info(
+                        f"[CONFIG] Migrated max_concurrent_positions: 10 → "
+                        f"{risk_dict['max_concurrent_positions']}"
+                    )
                 state.risk_config = RiskConfig(**risk_dict)
             except Exception as e:
                 logger.warning(f"Failed to apply risk config: {e}")
