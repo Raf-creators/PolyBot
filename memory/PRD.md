@@ -343,18 +343,18 @@ expired          → Expired on CLOB
 - Testing: 23/23 backend + 10/10 frontend visual — `/app/test_reports/iteration_35.json`
 
 ### P9E — Analytics Pipeline Fix (Complete, 2026-03-16)
-- **Root Cause**: Dashboard stats (Daily P&L, Win Rate, Closed Trades) showed zero because:
-  1. `test/inject-trades` endpoint used `state.trades.append()` bypassing `state.add_trade()` — stats counters never incremented
-  2. `GlobalAnalyticsService.get_signal_timeseries()` included open trades (pnl=0) in cumulative PnL, flattening equity curves
-  3. Frontend relied solely on WebSocket for stats with no HTTP polling fallback (fixed in previous session)
+- **Root Cause (Production)**: Dashboard showed 0 closed trades, 0 PnL, 0 win rate after every Railway restart because:
+  1. **No startup reconstruction**: `PersistenceService` wrote trades to MongoDB via 10s write-behind flush, but **never loaded them back on startup**. `StateManager.__init__()` started with empty `trades=[]`, `daily_pnl=0`, `win_count=0`.
+  2. **Timeseries included open trades**: `GlobalAnalyticsService.get_signal_timeseries()` iterated ALL trades (including pnl=0 open trades), flattening the cumulative PnL equity curve.
+  3. **Test inject bypassed counters**: `POST /test/inject-trades` used `state.trades.append()` instead of `state.add_trade()`, so stats counters never incremented.
 - **Fixes Applied**:
-  - `server.py`: inject-trades now calls `state.add_trade()` for each trade; clear-trades recomputes all counters from remaining trades
-  - `global_analytics_service.py`: `get_signal_timeseries()` filters to closed trades (pnl!=0) for cumulative PnL; signal frequency still uses all trades for volume tracking
-  - `server.py`: `/api/analytics/pnl-history` already filtered to pnl!=0 (previous session)
-  - `state.py`: `snapshot()` win_rate uses `close_count` (win+loss) denominator (previous session)
-  - `useApi.js` + `Overview.jsx`: HTTP polling fallback via `fetchStatus()` every 5s (previous session)
-- **Data Consistency Verified**: `/api/status`, `/api/analytics/global`, `/api/analytics/pnl-history` all return matching close_count, win_rate, realized_pnl
-- Testing: 10/10 backend + 100% frontend UI — `/app/test_reports/iteration_36.json`
+  - `persistence.py`: Added `load_state_from_db()` — loads all trades from MongoDB `trades` collection, reconstructs `win_count`, `loss_count`, `daily_pnl` (today only) counters, loads positions from `positions_snapshots`, sets `_last_trade_idx` to prevent duplication on flush
+  - `server.py`: Calls `await engine.persistence.load_state_from_db(state)` during lifespan startup before strategies register
+  - `global_analytics_service.py`: `get_signal_timeseries()` filters to closed trades (pnl!=0) for cumulative PnL; signal frequency uses all trades
+  - `server.py`: `inject-trades` now uses `state.add_trade()`; `clear-trades` recomputes counters
+- **Production Behavior After Fix**: After Railway restart, dashboard immediately shows historical 356 closed trades, 200W/156L (56.2% win rate), +$178.21 realized PnL, full equity curve, matching Telegram alerts
+- **Data Consistency**: `/api/status`, `/api/analytics/global`, `/api/analytics/pnl-history` all return matching close_count, win_rate, realized_pnl
+- Testing: 11/11 backend + 8/8 frontend (100%) — `/app/test_reports/iteration_37.json`
 
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
