@@ -319,6 +319,15 @@ expired          → Expired on CLOB
 - **Previous approach (replaced)**: Paginated 3000 `/events` — too slow and missed short-lived markets
 - Testing: 16/16 backend — `/app/test_reports/iteration_31.json`
 
+### P9A — Crypto Sniper Shadow Execution (Complete, 2026-03-16)
+- **Root cause of blocked executions**: Global `max_concurrent_positions=10` was fully consumed by weather trader positions; sniper signals passed all strategy filters but were rejected by the risk engine
+- **Risk config changes**: `max_concurrent_positions` 10→30, `max_market_exposure` 50→100 (conservative increase for paper mode)
+- **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
+- **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
+- **Live results**: 23 executions, 23 fills (100% fill rate), PnL tracking active across 19 open positions
+- **Safety preserved**: Paper mode enforced (no live credentials), conservative sizing ($3 default), bounded positions (max 30), bounded exposure ($100)
+- Testing: 12/12 backend — `/app/test_reports/iteration_32.json`
+
 ### P10 — Future
 - Copy trading skeleton
 - Manual order entry
