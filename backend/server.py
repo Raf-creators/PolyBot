@@ -1,4 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1939,6 +1941,22 @@ app.include_router(api_router)
 async def railway_health_check():
     """Root-level health check for Railway monitoring."""
     return await health()
+
+# ---- Serve frontend build (for Railway / production) ----
+
+_frontend_build = Path(__file__).resolve().parent.parent / "frontend" / "build"
+
+if _frontend_build.is_dir():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/static", StaticFiles(directory=str(_frontend_build / "static")), name="frontend-static")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """SPA catch-all: serve index.html for all non-API routes."""
+        file_path = _frontend_build / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(_frontend_build / "index.html"))
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,6 +1,11 @@
 [build]
 builder = "nixpacks"
 
+[build.nixpacks]
+pkgs = ["nodejs-18_x", "yarn"]
+buildCmd = "cd frontend && yarn install --frozen-lockfile && REACT_APP_BACKEND_URL= yarn build"
+installCmd = "pip install -r requirements.txt"
+
 [deploy]
 startCommand = "cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"

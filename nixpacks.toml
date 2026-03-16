@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["nodejs-18_x", "yarn", "python311"]
+
+[phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "cd frontend && yarn install --frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["cd frontend && REACT_APP_BACKEND_URL= yarn build"]
+
+[start]
+cmd = "cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT"

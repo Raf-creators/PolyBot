@@ -1,22 +1,14 @@
 """Telegram notification service for Polymarket Edge OS.
 
-Only sends two types of alerts:
-  1. TRADE EXECUTED — when an order is filled
-  2. TRADE CLOSED — when a position resolves with final PnL
-
-All other events (signals, scanner activity, weather alerts, risk,
-diagnostics) are logged locally but never sent to Telegram.
-
-Design:
-  - All sends are fire-and-forget via asyncio.create_task
-  - Never blocks the EventBus dispatch loop
-  - Rate-limited to avoid Telegram API throttling (max 20 msgs/min)
+Only sends alerts when a trade/position is CLOSED or RESOLVED with
+realized PnL. All other events are silently ignored.
 """
 
 import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -73,14 +65,16 @@ class TelegramNotifier:
 
         from models import EventType
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
+        bus.on(EventType.SYSTEM_EVENT, self._on_system_event)
 
         status = "enabled" if self.configured else "disabled (no credentials)"
-        logger.info(f"Telegram notifier started [{status}]")
+        logger.info(f"Telegram notifier started [{status}] — close-only alerts")
 
     async def stop(self):
         if self._bus:
             from models import EventType
             self._bus.off(EventType.ORDER_UPDATE, self._on_order_update)
+            self._bus.off(EventType.SYSTEM_EVENT, self._on_system_event)
         if self._client:
             await self._client.aclose()
         logger.info("Telegram notifier stopped")
@@ -96,7 +90,6 @@ class TelegramNotifier:
 
     async def send_message(self, text: str) -> bool:
         if not self.configured:
-            logger.debug("Telegram send skipped: no credentials")
             return False
         if not self._rate_ok():
             logger.warning("Telegram rate limit hit, dropping message")
@@ -126,81 +119,109 @@ class TelegramNotifier:
             return False
 
     def _fire(self, text: str):
-        """Fire-and-forget async send."""
         asyncio.create_task(self.send_message(text))
 
     # ---- Event Handlers ----
 
     async def _on_order_update(self, event):
+        """Only react to 'closed' status — ignore filled/submitted/etc."""
         if not self.enabled:
             return
+        if event.data.get("status") == "closed":
+            self._send_trade_closed(event.data)
 
-        status = event.data.get("status")
-        order_id = event.data.get("order_id", "?")
+    async def _on_system_event(self, event):
+        """Handle resolver-generated closes."""
+        if not self.enabled:
+            return
+        if event.source == "market_resolver" and event.data.get("action") == "positions_resolved":
+            count = event.data.get("count", 0)
+            pnl = event.data.get("pnl", 0)
+            if count > 0:
+                self._send_resolver_summary(count, pnl)
 
-        if status == "filled":
-            self._send_trade_executed(event, order_id)
-        elif status == "closed":
-            self._send_trade_closed(event, order_id)
-
-    def _send_trade_executed(self, event, order_id):
-        fill_price = event.data.get("fill_price", 0)
-        edge_bps = event.data.get("edge_bps", 0)
-
+    def _send_trade_closed(self, data: dict):
+        order_id = data.get("order_id", "?")
         trade = self._find_trade(order_id)
 
-        if trade:
-            strategy = trade.strategy_id.replace("_", " ").upper()
-            market = trade.market_question[:60] if trade.market_question else order_id[:12]
-            side = trade.side.value.upper()
-            size = trade.size
-            # Try to get edge from event data first, then from trade
-            edge = edge_bps or event.data.get("target_edge_bps", 0)
-        else:
-            strategy = event.data.get("strategy_id", "UNKNOWN").replace("_", " ").upper()
-            market = event.data.get("market_question", order_id[:12])[:60]
-            side = event.data.get("side", "?").upper()
-            size = event.data.get("size", 0)
-            edge = edge_bps
-
-        text = (
-            f"<b>TRADE EXECUTED</b>\n"
-            f"Strategy: {strategy}\n"
-            f"Market: {market}\n"
-            f"Side: {side}\n"
-            f"Price: {fill_price:.4f}\n"
-            f"Size: {size}\n"
-            f"Edge: {edge:.0f}bps"
-        )
-        self._fire(text)
-
-    def _send_trade_closed(self, event, order_id):
-        data = event.data
-        pnl = data.get("pnl", 0)
+        strategy = (data.get("strategy_id") or "unknown").replace("_", " ").upper()
+        market = (data.get("market_question") or order_id[:16])[:60]
+        side = data.get("side", "?")
+        outcome = data.get("outcome", side)
         entry_price = data.get("entry_price", 0)
-        roi = (pnl / (entry_price * data.get("size", 1)) * 100) if entry_price > 0 else 0
-
-        trade = self._find_trade(order_id)
+        exit_price = data.get("exit_price", data.get("fill_price", 0))
+        pnl = data.get("pnl", 0)
+        size = data.get("size", 1)
 
         if trade:
             strategy = trade.strategy_id.replace("_", " ").upper()
-            market = trade.market_question[:60] if trade.market_question else order_id[:12]
-        else:
-            strategy = data.get("strategy_id", "UNKNOWN").replace("_", " ").upper()
-            market = data.get("market_question", order_id[:12])[:60]
+            market = (trade.market_question or order_id[:16])[:60]
+            outcome = trade.outcome or trade.side.value
+            if not entry_price:
+                entry_price = trade.price
+            if not exit_price:
+                exit_price = trade.price
+            pnl = trade.pnl if trade.pnl else pnl
+            size = trade.size
 
-        resolution = data.get("resolution", "—")
+        cost = entry_price * size if entry_price and size else 0
+        roi = (pnl / cost * 100) if cost > 0 else 0
         pnl_sign = "+" if pnl >= 0 else ""
+        roi_sign = "+" if roi >= 0 else ""
+        emoji = "+" if pnl >= 0 else "-"
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         text = (
-            f"<b>TRADE CLOSED</b>\n"
+            f"<b>TRADE CLOSED {emoji}</b>\n"
             f"Strategy: {strategy}\n"
             f"Market: {market}\n"
-            f"Resolution: {resolution}\n"
-            f"PnL: {pnl_sign}${pnl:.2f}\n"
-            f"ROI: {pnl_sign}{roi:.1f}%"
+            f"Side: {outcome}\n"
+            f"Entry: {entry_price:.4f}\n"
+            f"Exit: {exit_price:.4f}\n"
+            f"PnL: <b>{pnl_sign}${pnl:.2f}</b>\n"
+            f"ROI: {roi_sign}{roi:.1f}%\n"
+            f"Time: {ts}"
         )
         self._fire(text)
+
+    def _send_resolver_summary(self, count: int, pnl: float):
+        pnl_sign = "+" if pnl >= 0 else ""
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        # Also send individual resolution details from recent trades
+        resolver_trades = []
+        if self._state:
+            for t in reversed(self._state.trades):
+                if t.strategy_id == "resolver":
+                    resolver_trades.append(t)
+                    if len(resolver_trades) >= count:
+                        break
+
+        if resolver_trades:
+            for t in resolver_trades:
+                cost = t.price * t.size if t.price else 0
+                roi = (t.pnl / cost * 100) if cost > 0 and t.pnl else 0
+                pnl_s = "+" if (t.pnl or 0) >= 0 else ""
+                roi_s = "+" if roi >= 0 else ""
+                won = "WON" if (t.pnl or 0) >= 0 else "LOST"
+                text = (
+                    f"<b>MARKET RESOLVED — {won}</b>\n"
+                    f"Market: {(t.market_question or '?')[:60]}\n"
+                    f"Outcome: {t.outcome or '?'}\n"
+                    f"Settlement: {t.price:.4f}\n"
+                    f"PnL: <b>{pnl_s}${t.pnl:.2f}</b>\n"
+                    f"ROI: {roi_s}{roi:.1f}%\n"
+                    f"Time: {ts}"
+                )
+                self._fire(text)
+        else:
+            text = (
+                f"<b>POSITIONS RESOLVED</b>\n"
+                f"Count: {count}\n"
+                f"PnL: <b>{pnl_sign}${pnl:.2f}</b>\n"
+                f"Time: {ts}"
+            )
+            self._fire(text)
 
     def _find_trade(self, order_id):
         if self._state:
