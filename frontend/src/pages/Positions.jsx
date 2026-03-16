@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatPrice, formatNumber, formatPnl, formatTimestamp, truncate, pnlColor } from '../utils/formatters';
 import { toast } from 'sonner';
-import { X } from 'lucide-react';
+import { X, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../utils/constants';
 
@@ -65,6 +65,35 @@ export default function Positions() {
   const totalUnrealizedPnl = useMemo(() => positions.reduce((sum, p) => sum + (p.unrealized_pnl || 0), 0), [positions]);
   const totalRealizedPnl = useMemo(() => positions.reduce((sum, p) => sum + (p.realized_pnl || 0), 0), [positions]);
   const totalExposure = useMemo(() => positions.reduce((sum, p) => sum + p.size * p.current_price, 0), [positions]);
+  const expiredCount = useMemo(() => positions.filter((p) => p.expired).length, [positions]);
+
+  const formatTTE = (seconds) => {
+    if (seconds == null) return '—';
+    if (seconds <= 0) return <span className="text-red-400 font-medium">Expired</span>;
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+    return `${Math.round(seconds / 86400)}d`;
+  };
+
+  const statusBadge = (pos) => {
+    if (pos.expired) return (
+      <Badge data-testid={`status-expired-${pos.token_id?.slice(0, 8)}`} className="bg-red-500/20 text-red-400 text-[10px]">
+        <AlertTriangle size={10} className="mr-0.5" /> Expired
+      </Badge>
+    );
+    const tte = pos.time_to_expiry_seconds;
+    if (tte != null && tte < 300) return (
+      <Badge data-testid={`status-expiring-${pos.token_id?.slice(0, 8)}`} className="bg-amber-500/20 text-amber-400 text-[10px]">
+        <Clock size={10} className="mr-0.5" /> Expiring
+      </Badge>
+    );
+    return (
+      <Badge data-testid={`status-active-${pos.token_id?.slice(0, 8)}`} className="bg-emerald-500/20 text-emerald-400 text-[10px]">
+        <CheckCircle size={10} className="mr-0.5" /> Active
+      </Badge>
+    );
+  };
 
   const positionColumns = [
     { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-300">{truncate(v, 35)}</span> },
@@ -80,6 +109,12 @@ export default function Positions() {
     { key: 'realized_pnl', label: 'Real. P&L', align: 'right', sortable: true, render: (v) => (
       <span className={pnlColor(v)}>{formatPnl(v)}</span>
     )},
+    { key: 'time_to_expiry_seconds', label: 'Expires In', align: 'right', sortable: true, render: (v) => (
+      <span data-testid="col-tte" className={v != null && v <= 0 ? 'text-red-400' : v != null && v < 300 ? 'text-amber-400' : 'text-zinc-400'}>
+        {formatTTE(v)}
+      </span>
+    )},
+    { key: 'status', label: 'Status', render: (_v, row) => statusBadge(row) },
   ];
 
   const tradeColumns = [
@@ -163,8 +198,9 @@ export default function Positions() {
         <h1 className="text-lg font-semibold text-zinc-100">Positions & Trades</h1>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <StatCard testId="stat-positions-count" label="Open Positions" value={positions.length} />
+        <StatCard testId="stat-expired" label="Expired" value={expiredCount} />
         <StatCard testId="stat-exposure" label="Total Exposure" value={`$${totalExposure.toFixed(2)}`} />
         <StatCard testId="stat-unrealized" label="Unrealized P&L" value={formatPnl(totalUnrealizedPnl)} format="pnl" />
         <StatCard testId="stat-realized" label="Realized P&L" value={formatPnl(totalRealizedPnl)} format="pnl" />

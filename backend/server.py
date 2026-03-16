@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import os
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Set
 
@@ -49,6 +50,7 @@ from services.weather_alert_service import WeatherAlertService
 from services.rolling_calibration_service import RollingCalibrationService
 from services.liquidity_service import LiquidityService
 from services.auto_resolver_service import AutoResolverService
+from services.market_resolver_service import MarketResolverService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -67,6 +69,7 @@ clob_fill_ws_client: Optional[ClobFillWsClient] = None
 weather_alert_service: Optional[WeatherAlertService] = None
 rolling_calibration_service: Optional[RollingCalibrationService] = None
 auto_resolver_service: Optional[AutoResolverService] = None
+market_resolver_service: Optional[MarketResolverService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -101,7 +104,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -190,6 +193,10 @@ async def lifespan(app: FastAPI):
     )
     await auto_resolver_service.start()
 
+    # Global market resolver — resolves all positions when markets expire
+    market_resolver_service = MarketResolverService()
+    await market_resolver_service.start(state, bus)
+
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
     persisted = await config_service.load()
@@ -256,6 +263,8 @@ async def lifespan(app: FastAPI):
         await clob_fill_ws_client.stop()
     if auto_resolver_service:
         await auto_resolver_service.stop()
+    if market_resolver_service:
+        await market_resolver_service.stop()
     mongo_client.close()
 
 
@@ -694,7 +703,35 @@ async def cancel_live_order(order_id: str):
 async def get_positions():
     if not state:
         raise HTTPException(500, "Engine not initialized")
-    return [p.model_dump() for p in state.positions.values()]
+    now = datetime.now(timezone.utc)
+    result = []
+    for pos in state.positions.values():
+        d = pos.model_dump()
+        # Enrich with market metadata
+        market = state.get_market(pos.token_id)
+        if market:
+            d["end_date"] = market.end_date
+            d["condition_id"] = market.condition_id
+            if market.end_date:
+                try:
+                    end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    tte = (end_dt - now).total_seconds()
+                    d["time_to_expiry_seconds"] = round(tte, 0)
+                    d["expired"] = tte <= 0
+                except (ValueError, TypeError):
+                    d["time_to_expiry_seconds"] = None
+                    d["expired"] = False
+            else:
+                d["time_to_expiry_seconds"] = None
+                d["expired"] = False
+            d["resolved"] = market.end_date is not None and d.get("expired", False)
+        else:
+            d["end_date"] = None
+            d["time_to_expiry_seconds"] = None
+            d["expired"] = False
+            d["resolved"] = False
+        result.append(d)
+    return result
 
 
 @api_router.get("/orders")
@@ -799,6 +836,23 @@ async def get_discovery_health():
     if not engine or not engine.market_data:
         return {"note": "not_initialized"}
     return engine.market_data.discovery_stats
+
+
+@api_router.get("/health/market-resolver")
+async def get_market_resolver_health():
+    """Market resolver stats — position resolution from expired markets."""
+    if not market_resolver_service:
+        return {"note": "not_initialized"}
+    return market_resolver_service.health
+
+
+@api_router.post("/market-resolver/run")
+async def trigger_market_resolver():
+    """Manually trigger a resolution pass."""
+    if not market_resolver_service:
+        raise HTTPException(500, "Resolver not initialized")
+    result = await market_resolver_service.run_once()
+    return result
 
 
 

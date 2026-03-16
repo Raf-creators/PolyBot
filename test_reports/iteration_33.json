@@ -1,0 +1,104 @@
+{
+  "summary": "Market Resolver Global Service Testing Complete. All 15 backend tests passed. Frontend displays 'Expires In' column with time values for crypto positions and '—' for weather positions. Status column shows Active/Expiring/Expired badges. Expired stat card displays count. Market resolver service running correctly at 30s interval.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "market_resolver_health_tests": [
+      "GET /api/health/market-resolver returns 200",
+      "Market resolver running=true",
+      "Market resolver interval_seconds=30",
+      "Market resolver total_runs field exists and increments",
+      "Market resolver positions_resolved field exists",
+      "Market resolver recent_resolutions field is valid array"
+    ],
+    "market_resolver_manual_run_tests": [
+      "POST /api/market-resolver/run returns {resolved, pnl, queried, checked, duration_ms}"
+    ],
+    "positions_enrichment_tests": [
+      "GET /api/positions returns 200",
+      "Positions have end_date, time_to_expiry_seconds, expired, resolved fields",
+      "Crypto sniper positions (Bitcoin/Ethereum Up or Down) have non-null end_date and time_to_expiry_seconds",
+      "Weather positions have end_date=null and expired=false"
+    ],
+    "resolution_trades_tests": [
+      "GET /api/trades returns 200",
+      "Resolver trades (when present) have pnl field",
+      "Resolver trades (when present) have signal_reason starting with 'market_resolved:'"
+    ],
+    "frontend_tests": [
+      "Positions page loads with data-testid='positions-page'",
+      "'Expires In' column displays '—' for weather positions",
+      "'Expires In' column displays time values (2m, 7m, 4h) for crypto positions",
+      "'Status' column shows Active/Expiring badges appropriately",
+      "'Expired' stat card present with count",
+      "Table headers include 'Expires In' and 'Status' columns"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_market_resolver.py",
+    "/app/test_reports/pytest/pytest_results_market_resolver.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "market_resolver_service.py: Correctly implements resolution loop at 30s interval",
+    "market_resolver_service.py: _check_resolution_by_token() uses clob_token_ids for unique market lookup (not condition_id)",
+    "market_resolver_service.py: Correctly computes PnL as (settlement_price - avg_cost) * size",
+    "market_resolver_service.py: Creates TradeRecord with strategy_id='resolver' and signal_reason='market_resolved:{outcome}'",
+    "server.py GET /api/positions: Correctly enriches positions with end_date, time_to_expiry_seconds, expired, resolved",
+    "server.py GET /api/health/market-resolver: Returns complete resolver health stats",
+    "Positions.jsx: formatTTE helper correctly formats seconds to '—', 'Expired', or time strings (s/m/h/d)",
+    "Positions.jsx: statusBadge helper correctly returns Active/Expiring/Expired badges based on position state"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_market_resolver.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (15/15 tests passed)",
+    "frontend": "100% (all UI elements verified)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None - used live crypto sniper and weather trader positions",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Market Resolver service verified. Key findings: (1) Resolver runs every 30s, checks expired positions, (2) Resolution requires Polymarket oracle to have resolved market (closed=true + outcomePrices 0/1), (3) Crypto positions have end_date/time_to_expiry_seconds from market metadata, (4) Weather positions have null end_date (broad fetch doesn't include it), (5) Frontend correctly displays 'Expires In' column and Status badges. Engine must be started via POST /api/engine/start before testing. Vol warmup takes ~150s (30 samples @ 5s).",
+
+  "features_tested": {
+    "GET /api/health/market-resolver running=true": "PASS",
+    "GET /api/health/market-resolver interval_seconds=30": "PASS",
+    "GET /api/health/market-resolver total_runs field": "PASS",
+    "GET /api/health/market-resolver recent_resolutions structure": "PASS",
+    "POST /api/market-resolver/run returns expected fields": "PASS",
+    "GET /api/positions has end_date field": "PASS",
+    "GET /api/positions has time_to_expiry_seconds field": "PASS",
+    "GET /api/positions has expired field": "PASS",
+    "GET /api/positions has resolved field": "PASS",
+    "Crypto positions have non-null end_date": "PASS",
+    "Crypto positions have time values (2m, 7m, 4h)": "PASS",
+    "Weather positions have null end_date": "PASS",
+    "Frontend Expires In column displays time values": "PASS",
+    "Frontend Expires In column displays '—' for weather": "PASS",
+    "Frontend Status column with Active/Expiring/Expired badges": "PASS",
+    "Frontend Expired stat card": "PASS"
+  },
+
+  "notes": "Resolver correctly identifies expired positions but actual resolution depends on Polymarket oracle timing. The oracle typically resolves markets a few minutes after endDate. During testing, 3 positions were expired (tte < 0) but awaiting oracle resolution. This is expected behavior."
+}
