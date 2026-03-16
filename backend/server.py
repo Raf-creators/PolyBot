@@ -1944,19 +1944,40 @@ async def railway_health_check():
 
 # ---- Serve frontend build (for Railway / production) ----
 
-_frontend_build = Path(__file__).resolve().parent.parent / "frontend" / "build"
+def _find_frontend_build() -> Optional[Path]:
+    """Search for frontend/build in multiple locations."""
+    candidates = [
+        Path(__file__).resolve().parent.parent / "frontend" / "build",  # /app/frontend/build
+        Path.cwd().parent / "frontend" / "build",                       # relative to CWD
+        Path.cwd() / "frontend" / "build",                              # CWD is project root
+        Path("/app/frontend/build"),                                     # absolute fallback
+    ]
+    env_path = os.environ.get("FRONTEND_BUILD_PATH")
+    if env_path:
+        candidates.insert(0, Path(env_path))
+    for p in candidates:
+        if p.is_dir() and (p / "index.html").is_file():
+            return p
+    return None
 
-if _frontend_build.is_dir():
-    # Serve static assets (JS, CSS, images)
+_frontend_build = _find_frontend_build()
+
+if _frontend_build:
+    logger.info(f"Frontend build found at {_frontend_build}")
     app.mount("/static", StaticFiles(directory=str(_frontend_build / "static")), name="frontend-static")
+else:
+    logger.warning(f"Frontend build NOT found. Dashboard will not be served. CWD={Path.cwd()}, __file__={__file__}")
 
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        """SPA catch-all: serve index.html for all non-API routes."""
-        file_path = _frontend_build / full_path
-        if full_path and file_path.is_file():
-            return FileResponse(str(file_path))
-        return FileResponse(str(_frontend_build / "index.html"))
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """SPA catch-all: serve index.html for all non-API routes."""
+    if not _frontend_build:
+        return {"detail": "Frontend not built. Run: cd frontend && yarn build"}
+    file_path = _frontend_build / full_path
+    if full_path and file_path.is_file():
+        return FileResponse(str(file_path))
+    return FileResponse(str(_frontend_build / "index.html"))
 
 app.add_middleware(
     CORSMiddleware,
