@@ -45,6 +45,7 @@ export default function GlobalAnalytics() {
   const forecast = data?.forecast_quality || {};
   const liquidity = data?.liquidity_insights || {};
   const ts = data?.timeseries || {};
+  const resolver = data?.auto_resolver || {};
 
   return (
     <div data-testid="global-analytics-page" className="space-y-5">
@@ -67,7 +68,7 @@ export default function GlobalAnalytics() {
           <PerformanceTab perf={perf} />
         </TabsContent>
         <TabsContent value="forecast" className="mt-4 space-y-4">
-          <ForecastTab forecast={forecast} />
+          <ForecastTab forecast={forecast} resolver={resolver} />
         </TabsContent>
         <TabsContent value="liquidity" className="mt-4 space-y-4">
           <LiquidityTab liquidity={liquidity} />
@@ -166,7 +167,7 @@ function PerformanceTab({ perf }) {
 
 // ---- Forecast Quality Tab ----
 
-function ForecastTab({ forecast }) {
+function ForecastTab({ forecast, resolver }) {
   const stations = Object.entries(forecast.station_metrics || {});
   const errorDist = forecast.error_distribution || [];
   const hasData = forecast.total_forecasts > 0;
@@ -181,6 +182,21 @@ function ForecastTab({ forecast }) {
         <StatCard testId="ga-pending" label="Pending" value={formatNumber(forecast.pending_resolution)} />
         <StatCard testId="ga-cal-status" label="Calibration" value={forecast.calibration_status || '—'} />
       </div>
+
+      {resolver.running != null && (
+        <SectionCard title="Auto-Resolver" testId="section-auto-resolver">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1">
+            <Metric label="Status" value={resolver.running ? 'Running' : 'Stopped'} color={resolver.running ? 'text-emerald-400' : 'text-red-400'} testId="ga-resolver-status" />
+            <Metric label="Interval" value={resolver.interval_hours ? `${resolver.interval_hours}h` : '—'} testId="ga-resolver-interval" />
+            <Metric label="Total Runs" value={formatNumber(resolver.total_runs)} testId="ga-resolver-runs" />
+            <Metric label="Total Resolved" value={formatNumber(resolver.total_resolved)} testId="ga-resolver-total-resolved" />
+            <Metric label="Pending Records" value={formatNumber(resolver.pending_records)} testId="ga-resolver-pending" />
+            <Metric label="Last Run Resolved" value={formatNumber(resolver.last_run_resolved)} testId="ga-resolver-last-resolved" />
+            <Metric label="Last Run" value={resolver.last_run_at ? new Date(resolver.last_run_at).toLocaleTimeString() : 'Not yet'} testId="ga-resolver-last-run" />
+            <Metric label="Last Error" value={resolver.last_error || 'None'} color={resolver.last_error ? 'text-red-400' : 'text-zinc-500'} testId="ga-resolver-error" />
+          </div>
+        </SectionCard>
+      )}
 
       {errorDist.length > 0 && (
         <SectionCard title="Forecast Error Distribution" testId="section-error-dist">

@@ -48,6 +48,7 @@ from services.calibration_service import CalibrationService
 from services.weather_alert_service import WeatherAlertService
 from services.rolling_calibration_service import RollingCalibrationService
 from services.liquidity_service import LiquidityService
+from services.auto_resolver_service import AutoResolverService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -65,6 +66,7 @@ clob_ws_client: Optional[ClobWebSocketClient] = None
 clob_fill_ws_client: Optional[ClobFillWsClient] = None
 weather_alert_service: Optional[WeatherAlertService] = None
 rolling_calibration_service: Optional[RollingCalibrationService] = None
+auto_resolver_service: Optional[AutoResolverService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -99,7 +101,7 @@ async def _ws_broadcast_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, ws_broadcast_task
 
     state = StateManager()
     bus = EventBus()
@@ -175,6 +177,15 @@ async def lifespan(app: FastAPI):
     rolling_calibration_service.set_config(weather_trader_ref.config)
     weather_trader_ref.set_rolling_calibration_service(rolling_calibration_service)
 
+    # Auto-resolver service — resolves pending forecast_accuracy records
+    auto_resolver_service = AutoResolverService(
+        db=db,
+        forecast_accuracy_service=forecast_accuracy_service,
+        rolling_calibration_service=rolling_calibration_service,
+        interval_hours=float(os.environ.get("AUTO_RESOLVER_INTERVAL_HOURS", "6")),
+    )
+    await auto_resolver_service.start()
+
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
     persisted = await config_service.load()
@@ -239,6 +250,8 @@ async def lifespan(app: FastAPI):
         await clob_ws_client.stop()
     if clob_fill_ws_client:
         await clob_fill_ws_client.stop()
+    if auto_resolver_service:
+        await auto_resolver_service.stop()
     mongo_client.close()
 
 
@@ -743,6 +756,23 @@ async def get_fill_ws_health():
     return clob_fill_ws_client.health
 
 
+@api_router.get("/health/auto-resolver")
+async def get_auto_resolver_health():
+    """Health and status of the automated forecast resolution service."""
+    if not auto_resolver_service:
+        return {"running": False, "note": "not_configured"}
+    return auto_resolver_service.health
+
+
+@api_router.post("/auto-resolver/run")
+async def trigger_auto_resolver():
+    """Manually trigger a resolution pass."""
+    if not auto_resolver_service:
+        raise HTTPException(500, "Auto-resolver not initialized")
+    result = await auto_resolver_service.run_once()
+    return result
+
+
 
 # ---- Arb Strategy ----
 
@@ -843,7 +873,11 @@ async def get_weather_executions():
 async def get_weather_health():
     if not weather_trader_ref:
         raise HTTPException(500, "Weather trader not initialized")
-    return weather_trader_ref.get_health()
+    health = weather_trader_ref.get_health()
+    # Inject auto-resolver status
+    if auto_resolver_service:
+        health["auto_resolver"] = auto_resolver_service.health
+    return health
 
 
 @api_router.get("/strategies/weather/config")
@@ -1318,7 +1352,11 @@ async def get_global_analytics():
         crypto_sniper=crypto_sniper_ref,
         forecast_accuracy_service=forecast_accuracy_service,
     )
-    return await svc.get_full_report()
+    report = await svc.get_full_report()
+    # Inject auto-resolver health
+    if auto_resolver_service:
+        report["auto_resolver"] = auto_resolver_service.health
+    return report
 
 
 @api_router.get("/analytics/summary")
