@@ -1,0 +1,97 @@
+{
+  "summary": "Telegram Noise Reduction feature verified. TelegramNotifier now only subscribes to ORDER_UPDATE events (no SIGNAL, RISK_ALERT, SYSTEM_EVENT). Weather alert service _emit() method no longer sends to Telegram. All 13 backend API tests passed (100%). All 7 frontend UI tests passed.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/config returns telegram.configured=true",
+      "GET /api/config returns telegram.enabled=true",
+      "GET /api/config returns credentials_present.telegram=true",
+      "GET /api/strategies/weather/alerts shows total_telegram_sent=0 (weather no longer sends to Telegram)",
+      "GET /api/strategies/weather/alerts returns proper stats structure",
+      "POST /api/telegram/test returns success=true with stats",
+      "Regression: GET /api/status returns 200",
+      "Regression: GET /api/health returns 200 with status=healthy",
+      "Regression: GET /api/analytics/global returns 200",
+      "Regression: GET /api/health/auto-resolver returns running=true",
+      "Regression: GET /api/strategies/weather/health returns 200",
+      "Regression: GET /api/strategies/arb/health returns 200",
+      "Regression: GET /api/strategies/sniper/health returns 200"
+    ],
+    "frontend_ui_tests": [
+      "Overview page loads with data-testid='overview-page'",
+      "Weather page loads with data-testid='weather-page'",
+      "Markets page loads with data-testid='markets-page'",
+      "Global Analytics page loads with data-testid='global-analytics-page'",
+      "Settings page loads with data-testid='settings-page'",
+      "Telegram Alerts section visible",
+      "Credentials section visible with Telegram Bot: Connected"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_telegram_noise_reduction.py",
+    "/app/test_reports/pytest/pytest_results_telegram_noise.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "telegram_notifier.py line 75: bus.on(EventType.ORDER_UPDATE, self._on_order_update) - correctly subscribes ONLY to ORDER_UPDATE",
+    "telegram_notifier.py: No SIGNAL, RISK_ALERT, or SYSTEM_EVENT subscriptions (grep confirms 0 matches)",
+    "weather_alert_service.py _emit() method (lines 180-201): Correctly removed Telegram dispatch - only stores in memory and logs",
+    "weather_alert_service.py: _format_telegram() static method retained for future use but _emit() no longer calls _fire()",
+    "TRADE EXECUTED format (lines 167-174) includes: Strategy, Market, Side, Price, Size, Edge - matches requirement",
+    "TRADE CLOSED format (lines 195-202) includes: Strategy, Market, Resolution, PnL, ROI - matches requirement"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_telegram_noise_reduction.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (13/13 tests passed)",
+    "frontend": "100% (7/7 UI elements verified)"
+  },
+
+  "test_credentials": "Telegram credentials configured in backend/.env (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)",
+
+  "seed_data_creation": "None required",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Telegram noise reduction feature fully verified. Key changes: (1) TelegramNotifier only subscribes to ORDER_UPDATE events at line 75 in telegram_notifier.py. (2) Weather alert service _emit() no longer dispatches to Telegram - total_telegram_sent stays 0. (3) TRADE EXECUTED format includes Edge field. (4) TRADE CLOSED handler added for status='closed' events. Settings UI shows Telegram Bot Connected, Trade Alerts ON, Signal Alerts ON, Messages Sent = 1.",
+
+  "features_tested": {
+    "telegram_configured": "PASS - telegram.configured=true",
+    "telegram_enabled": "PASS - telegram.enabled=true",
+    "only_order_update_subscription": "PASS - Code review confirms only EventType.ORDER_UPDATE subscription",
+    "weather_alerts_no_telegram": "PASS - total_telegram_sent=0 in /api/strategies/weather/alerts",
+    "telegram_test_endpoint": "PASS - POST /api/telegram/test returns success format",
+    "trade_executed_format": "PASS - Includes Strategy/Market/Side/Price/Size/Edge",
+    "trade_closed_format": "PASS - Includes Strategy/Market/Resolution/PnL/ROI",
+    "regression_overview_page": "PASS",
+    "regression_weather_page": "PASS",
+    "regression_markets_page": "PASS",
+    "regression_global_analytics_page": "PASS",
+    "regression_settings_page": "PASS",
+    "regression_api_status": "PASS - Returns 200",
+    "regression_api_health": "PASS - Returns 200 with status=healthy",
+    "regression_api_global_analytics": "PASS - Returns 200",
+    "regression_auto_resolver_health": "PASS - running=true",
+    "regression_weather_strategy_health": "PASS - Returns 200",
+    "regression_arb_strategy_health": "PASS - Returns 200",
+    "regression_sniper_strategy_health": "PASS - Returns 200"
+  }
+}

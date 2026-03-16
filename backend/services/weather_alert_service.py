@@ -194,12 +194,6 @@ class WeatherAlertService:
         if len(self._alerts) > MAX_ALERTS:
             self._alerts = self._alerts[:MAX_ALERTS]
 
-        # Telegram dispatch (fire-and-forget)
-        if self._telegram and self._telegram.enabled:
-            msg = self._format_telegram(alert)
-            self._telegram._fire(msg)
-            self._total_telegram_sent += 1
-
         logger.info(f"[WEATHER ALERT] {alert.alert_type.value}: {alert.detail}")
 
         # Evict old cooldown entries (>10x cooldown age)

@@ -1,8 +1,11 @@
 """Telegram notification service for Polymarket Edge OS.
 
-Subscribes to EventBus events and dispatches formatted Telegram messages
-asynchronously. Fails gracefully if credentials are missing — the engine
-continues to run without alerts.
+Only sends two types of alerts:
+  1. TRADE EXECUTED — when an order is filled
+  2. TRADE CLOSED — when a position resolves with final PnL
+
+All other events (signals, scanner activity, weather alerts, risk,
+diagnostics) are logged locally but never sent to Telegram.
 
 Design:
   - All sends are fire-and-forget via asyncio.create_task
@@ -70,9 +73,6 @@ class TelegramNotifier:
 
         from models import EventType
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
-        bus.on(EventType.RISK_ALERT, self._on_risk_alert)
-        bus.on(EventType.SYSTEM_EVENT, self._on_system_event)
-        bus.on(EventType.SIGNAL, self._on_signal)
 
         status = "enabled" if self.configured else "disabled (no credentials)"
         logger.info(f"Telegram notifier started [{status}]")
@@ -81,9 +81,6 @@ class TelegramNotifier:
         if self._bus:
             from models import EventType
             self._bus.off(EventType.ORDER_UPDATE, self._on_order_update)
-            self._bus.off(EventType.RISK_ALERT, self._on_risk_alert)
-            self._bus.off(EventType.SYSTEM_EVENT, self._on_system_event)
-            self._bus.off(EventType.SIGNAL, self._on_signal)
         if self._client:
             await self._client.aclose()
         logger.info("Telegram notifier stopped")
@@ -137,146 +134,77 @@ class TelegramNotifier:
     async def _on_order_update(self, event):
         if not self.enabled:
             return
-        if event.source != "paper_adapter":
-            return
-        if event.data.get("status") != "filled":
-            return
 
+        status = event.data.get("status")
         order_id = event.data.get("order_id", "?")
-        fill_price = event.data.get("fill_price", 0)
-        latency = event.data.get("latency_ms", 0)
 
-        # Look up the trade in state for more context
-        trade = None
-        if self._state:
-            for t in reversed(self._state.trades):
-                if t.order_id == order_id:
-                    trade = t
-                    break
+        if status == "filled":
+            self._send_trade_executed(event, order_id)
+        elif status == "closed":
+            self._send_trade_closed(event, order_id)
+
+    def _send_trade_executed(self, event, order_id):
+        fill_price = event.data.get("fill_price", 0)
+        edge_bps = event.data.get("edge_bps", 0)
+
+        trade = self._find_trade(order_id)
 
         if trade:
             strategy = trade.strategy_id.replace("_", " ").upper()
-            question = trade.market_question[:60] if trade.market_question else order_id[:12]
-            text = (
-                f"<b>[TRADE EXECUTED]</b>\n"
-                f"Strategy: {strategy}\n"
-                f"Market: {question}\n"
-                f"Side: {trade.side.value.upper()}\n"
-                f"Price: {fill_price:.4f}\n"
-                f"Size: {trade.size}\n"
-                f"Latency: {latency:.1f}ms"
-            )
+            market = trade.market_question[:60] if trade.market_question else order_id[:12]
+            side = trade.side.value.upper()
+            size = trade.size
+            # Try to get edge from event data first, then from trade
+            edge = edge_bps or event.data.get("target_edge_bps", 0)
         else:
-            text = (
-                f"<b>[TRADE EXECUTED]</b>\n"
-                f"Order: {order_id[:12]}\n"
-                f"Price: {fill_price:.4f}\n"
-                f"Latency: {latency:.1f}ms"
-            )
-
-        self._fire(text)
-
-    async def _on_risk_alert(self, event):
-        if not self.enabled:
-            return
-
-        data = event.data
-        action = data.get("action")
-
-        if action == "kill_switch_activated":
-            text = (
-                f"<b>[RISK ALERT]</b>\n"
-                f"Kill switch ACTIVATED\n"
-                f"Reason: {data.get('reason', 'unknown')}"
-            )
-        else:
-            text = (
-                f"<b>[RISK]</b>\n"
-                f"Order rejected\n"
-                f"Reason: {data.get('reason', 'unknown')}"
-            )
-
-        self._fire(text)
-
-    async def _on_system_event(self, event):
-        if not self.enabled:
-            return
-
-        action = event.data.get("action", "")
-        mode = event.data.get("mode", "")
-
-        if action in ("started", "stopped"):
-            text = (
-                f"<b>[ENGINE]</b>\n"
-                f"{action.upper()}\n"
-                f"Mode: {mode}"
-            )
-            self._fire(text)
-
-    async def _on_signal(self, event):
-        if not self.signals_enabled:
-            return
-
-        d = event.data
-        strategy = d.get("strategy", "?").upper()
-        asset = d.get("asset", "")
-        strike = d.get("strike", "")
-        fair = d.get("fair_price", 0)
-        mkt = d.get("market_price", 0)
-        edge = d.get("edge_bps", 0)
-        side = d.get("side", "")
+            strategy = event.data.get("strategy_id", "UNKNOWN").replace("_", " ").upper()
+            market = event.data.get("market_question", order_id[:12])[:60]
+            side = event.data.get("side", "?").upper()
+            size = event.data.get("size", 0)
+            edge = edge_bps
 
         text = (
-            f"<b>[SIGNAL]</b>\n"
-            f"Strategy: {strategy}\n"
-            f"Asset: {asset}\n"
-            f"Strike: {strike}\n"
-            f"Fair: {fair:.4f}\n"
-            f"Market: {mkt:.4f}\n"
-            f"Edge: {edge:.0f}bps\n"
-            f"Side: {side}"
-        )
-
-        self._fire(text)
-
-    # ---- Formatting helpers (for external use / testing) ----
-
-    @staticmethod
-    def format_trade(strategy, market, side, price, size, edge_bps):
-        return (
-            f"<b>[TRADE EXECUTED]</b>\n"
+            f"<b>TRADE EXECUTED</b>\n"
             f"Strategy: {strategy}\n"
             f"Market: {market}\n"
             f"Side: {side}\n"
-            f"Price: {price:.4f}\n"
+            f"Price: {fill_price:.4f}\n"
             f"Size: {size}\n"
-            f"Edge: {edge_bps:.0f}bps"
+            f"Edge: {edge:.0f}bps"
         )
+        self._fire(text)
 
-    @staticmethod
-    def format_signal(strategy, asset, strike, fair, market, edge_bps):
-        return (
-            f"<b>[SIGNAL]</b>\n"
+    def _send_trade_closed(self, event, order_id):
+        data = event.data
+        pnl = data.get("pnl", 0)
+        entry_price = data.get("entry_price", 0)
+        roi = (pnl / (entry_price * data.get("size", 1)) * 100) if entry_price > 0 else 0
+
+        trade = self._find_trade(order_id)
+
+        if trade:
+            strategy = trade.strategy_id.replace("_", " ").upper()
+            market = trade.market_question[:60] if trade.market_question else order_id[:12]
+        else:
+            strategy = data.get("strategy_id", "UNKNOWN").replace("_", " ").upper()
+            market = data.get("market_question", order_id[:12])[:60]
+
+        resolution = data.get("resolution", "—")
+        pnl_sign = "+" if pnl >= 0 else ""
+
+        text = (
+            f"<b>TRADE CLOSED</b>\n"
             f"Strategy: {strategy}\n"
-            f"Asset: {asset}\n"
-            f"Strike: {strike}\n"
-            f"Fair: {fair:.4f}\n"
-            f"Market: {market:.4f}\n"
-            f"Edge: {edge_bps:.0f}bps"
+            f"Market: {market}\n"
+            f"Resolution: {resolution}\n"
+            f"PnL: {pnl_sign}${pnl:.2f}\n"
+            f"ROI: {pnl_sign}{roi:.1f}%"
         )
+        self._fire(text)
 
-    @staticmethod
-    def format_risk(reason):
-        return (
-            f"<b>[RISK]</b>\n"
-            f"Order rejected\n"
-            f"Reason: {reason}"
-        )
-
-    @staticmethod
-    def format_engine(action, mode=""):
-        return (
-            f"<b>[ENGINE]</b>\n"
-            f"{action.upper()}\n"
-            f"Mode: {mode}"
-        )
+    def _find_trade(self, order_id):
+        if self._state:
+            for t in reversed(self._state.trades):
+                if t.order_id == order_id:
+                    return t
+        return None
