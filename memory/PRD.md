@@ -305,23 +305,18 @@ expired          → Expired on CLOB
 - **Frontend**: Forecast Quality tab in Global Analytics shows Auto-Resolver section with status, interval, run counts, pending
 - Testing: 22/22 backend + 100% frontend passed — `/app/test_reports/iteration_26.json`
 
-### P9 — Crypto Sniper Slug-based Classifier (Complete, 2026-03-16)
-- **Slug classification** (checked before question fallback):
-  - `{asset}-updown-{window}-{ts}` → updown market (strike=0 → use spot at eval time)
-  - `{asset}-up-or-down-{date}` → updown market (expiry from endDate)
-  - `{asset}-above-{price}-on-{date}` → threshold market (strike from slug)
-  - `will-{asset}-hit-{price}-by-{date}` → threshold market (strike from slug)
-- **Question fallback** (title-based, preserved backward compat):
-  - "Bitcoin above $X", "Ethereum hit $X", "BTC reach $X", "dip to $X"
-  - "Bitcoin Up or Down - March 17"
-  - "between $X and $Y" → range market (midpoint strike)
-- **Strike parsing**: handles "k" (×1000) and "m" (×1000000) suffixes
-- **MarketSnapshot**: added `slug`, `end_date` fields; stored from Gamma API
-- **Gamma API limit**: 100→500 to capture short-lived crypto markets
-- **SniperConfig**: `max_tte_seconds` default 28800 (8h) for updown windows
-- **Updown pricing**: strike=0 sentinel → uses current spot price at evaluation time
-- Current state: 1 classified (BTC $1M hit — rejected for tte=137d), 499 non-crypto correctly filtered. No short-term BTC/ETH updown markets currently active on Polymarket.
-- Testing: 64/64 backend + 7/7 frontend passed — `/app/test_reports/iteration_29.json`
+### P9 — Crypto Sniper Classifier + Dual-Layer Discovery (Complete, 2026-03-16)
+- **Slug classification**: `{asset}-updown-{window}-{ts}`, `{asset}-up-or-down-{date}`, `{asset}-above-{price}`, `will-{asset}-hit-{price}`
+- **Question fallback**: "hit/reach/dip", "above/below", "between X and Y", "Up or Down"
+- **Strike parsing**: "k" (x1000), "m" (x1M)
+- **Dual-Layer Discovery** (`market_data.py`):
+  - Layer 1 (Broad): `/markets?limit=500` every 60s
+  - Layer 2 (Targeted): `/events` paginated (3000) every 30s with CRYPTO_SLUG_PREFIXES filter
+  - CLOB midpoint enrichment for top-volume + crypto markets every 15s
+  - Expired market filtering by `end_date > now`
+  - Stats: `GET /api/health/discovery`
+- State: 500 broad + 3000 events scanned. 0 active crypto updown (all expired). When btc-updown-5m markets spawn, they will be discovered within 30s.
+- Testing: 18/18 + 41/42 unit + 5/5 frontend — `/app/test_reports/iteration_30.json`
 
 ### P10 — Future
 - Copy trading skeleton
