@@ -342,6 +342,20 @@ expired          → Expired on CLOB
   - Alert format: strategy, market, side/outcome, entry/exit price, PnL, ROI%, timestamp
 - Testing: 23/23 backend + 10/10 frontend visual — `/app/test_reports/iteration_35.json`
 
+### P9E — Analytics Pipeline Fix (Complete, 2026-03-16)
+- **Root Cause**: Dashboard stats (Daily P&L, Win Rate, Closed Trades) showed zero because:
+  1. `test/inject-trades` endpoint used `state.trades.append()` bypassing `state.add_trade()` — stats counters never incremented
+  2. `GlobalAnalyticsService.get_signal_timeseries()` included open trades (pnl=0) in cumulative PnL, flattening equity curves
+  3. Frontend relied solely on WebSocket for stats with no HTTP polling fallback (fixed in previous session)
+- **Fixes Applied**:
+  - `server.py`: inject-trades now calls `state.add_trade()` for each trade; clear-trades recomputes all counters from remaining trades
+  - `global_analytics_service.py`: `get_signal_timeseries()` filters to closed trades (pnl!=0) for cumulative PnL; signal frequency still uses all trades for volume tracking
+  - `server.py`: `/api/analytics/pnl-history` already filtered to pnl!=0 (previous session)
+  - `state.py`: `snapshot()` win_rate uses `close_count` (win+loss) denominator (previous session)
+  - `useApi.js` + `Overview.jsx`: HTTP polling fallback via `fetchStatus()` every 5s (previous session)
+- **Data Consistency Verified**: `/api/status`, `/api/analytics/global`, `/api/analytics/pnl-history` all return matching close_count, win_rate, realized_pnl
+- Testing: 10/10 backend + 100% frontend UI — `/app/test_reports/iteration_36.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
