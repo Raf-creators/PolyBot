@@ -57,7 +57,7 @@ expired          → Expired on CLOB
 10. Errors tracked and surfaced in health
 
 ## Remaining Before Real-Money Launch
-- Full CLOB WebSocket fill notifications (currently polling 5s)
+- ~~Full CLOB WebSocket fill notifications (currently polling 5s)~~ ✓ Done (P6)
 - Multi-wallet support
 - Rate limit awareness for CLOB API
 - Manual order entry (for ad-hoc trades)
@@ -242,7 +242,30 @@ expired          → Expired on CLOB
 - **Rejected signals**: `liquidity_too_low` rejections highlighted in orange
 - Testing: 20/20 backend API + all frontend UI tests (100%) + 12/12 liquidity unit tests + 3 rejection threshold tests — `/app/test_reports/iteration_23.json`
 
-### P6 — Future
-- CLOB WebSocket for real-time fill updates
+### P6 — CLOB WebSocket Fill Updates (Complete, 2026-03-16)
+- **ClobFillWsClient** (`/app/backend/engine/clob_fill_ws.py`): WebSocket client for Polymarket CLOB user/trade channel
+  - Connects to `wss://ws-subscriptions-clob.polymarket.com/ws/user` with API credentials
+  - Processes trade events: MATCHED, MINED, CONFIRMED, FAILED
+  - Heartbeat ping (10s), exponential backoff reconnect (2s base, 60s max)
+  - Market subscription management (subscribe/unsubscribe condition_ids)
+  - Graceful degradation: no credentials → not connected, no errors, system falls back to polling
+- **LiveAdapter integration** (`/app/backend/engine/live_adapter.py`):
+  - `set_fill_ws()` + `on_ws_fill()` callback for real-time fill processing
+  - Fill delta computation, position/trade updates, EventBus emission
+  - Dual fill method: `websocket+polling` when WS connected, `polling` when not
+  - Reduced polling interval when WS active (30s vs 5s)
+  - ws_fill_count / poll_fill_count tracking for observability
+- **ExecutionEngine** (`/app/backend/engine/execution.py`): `live_adapter_status` property exposes fill_ws_health, fill_update_method
+- **WeatherTrader**: Receives fill events via EventBus ORDER_UPDATE — works with both WS and polling sources
+- **API endpoints**:
+  - `GET /api/health/fill-ws` — Full health: connected, has_credentials, trade_events, confirmed_fills, etc.
+  - `GET /api/status` — stats.health includes fill_ws_connected, fill_ws_has_credentials, fill_ws_health, fill_update_method
+  - `GET /api/execution/status` — live_adapter includes fill_ws_health, fill_update_method, poll_interval_seconds
+- **WebSocket broadcast**: Includes fill WS health data in every snapshot (2s interval)
+- **Frontend Overview page**: System Status shows "Fill Updates: polling" and "Fill WS: no credentials/connected/disconnected"
+- Testing: 29/29 backend API + all frontend UI passed (100%) — `/app/test_reports/iteration_24.json`
+
+### P7 — Future
+- UI: Dedicated global analytics tab
 - Copy trading skeleton
 - Manual order entry

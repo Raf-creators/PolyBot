@@ -75,6 +75,14 @@ async def _ws_broadcast_loop():
         try:
             if ws_clients and state:
                 snapshot = state.snapshot()
+                # Inject fill WS + execution health (same as /api/status)
+                if clob_fill_ws_client:
+                    snapshot["stats"]["health"]["fill_ws_connected"] = clob_fill_ws_client._connected
+                    snapshot["stats"]["health"]["fill_ws_has_credentials"] = clob_fill_ws_client.has_credentials
+                    snapshot["stats"]["health"]["fill_ws_health"] = clob_fill_ws_client.health
+                if engine and engine.execution_engine:
+                    exec_status = engine.execution_engine.live_adapter_status
+                    snapshot["stats"]["health"]["fill_update_method"] = exec_status.get("fill_update_method", "polling")
                 dead = set()
                 for ws in ws_clients.copy():
                     try:
