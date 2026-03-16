@@ -265,7 +265,21 @@ expired          → Expired on CLOB
 - **Frontend Overview page**: System Status shows "Fill Updates: polling" and "Fill WS: no credentials/connected/disconnected"
 - Testing: 29/29 backend API + all frontend UI passed (100%) — `/app/test_reports/iteration_24.json`
 
-### P7 — Future
-- UI: Dedicated global analytics tab
+### P7 — Global Analytics Dashboard (Complete, 2026-03-16)
+- **GlobalAnalyticsService** (`/app/backend/services/global_analytics_service.py`): Aggregates shadow-mode strategy quality metrics
+  - Strategy performance: signals, executions, fills, win rate, PnL, per-strategy breakdown (weather, arb, sniper)
+  - Forecast quality: global MAE/bias, error distribution histogram, per-station metrics from MongoDB forecast_accuracy
+  - Liquidity insights: avg/min/max liquidity scores, rejection breakdown with percentages
+  - Timeseries: cumulative PnL curve, daily PnL, signal frequency by strategy
+- **API endpoint**: `GET /api/analytics/global` — returns full report with 4 sections
+- **Frontend**: `/global-analytics` page with 4 tabs:
+  - Performance: 6 stat cards + aggregate performance + per-strategy cards (weather, arb, sniper)
+  - Forecast Quality: MAE/bias/calibration stat cards + error distribution histogram (color-coded: green <=2F, yellow <=4F, red >4F) + station metrics table
+  - Liquidity: score cards + rejection breakdown with progress bars + horizontal bar chart
+  - Charts: cumulative PnL area chart + daily P&L bar chart + stacked signal frequency chart
+- **Navigation**: Globe icon in sidebar between Analytics and Risk
+- Testing: 25/25 backend + 100% frontend passed — `/app/test_reports/iteration_25.json`
+
+### P8 — Future
 - Copy trading skeleton
 - Manual order entry
