@@ -1305,6 +1305,22 @@ from services.analytics_service import (
 )
 
 
+@api_router.get("/analytics/global")
+async def get_global_analytics():
+    """Global analytics — shadow-mode strategy quality dashboard."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    from services.global_analytics_service import GlobalAnalyticsService
+    svc = GlobalAnalyticsService(
+        state=state,
+        weather_trader=weather_trader_ref,
+        arb_scanner=arb_scanner_ref,
+        crypto_sniper=crypto_sniper_ref,
+        forecast_accuracy_service=forecast_accuracy_service,
+    )
+    return await svc.get_full_report()
+
+
 @api_router.get("/analytics/summary")
 async def get_analytics_summary():
     """Portfolio-level analytics: PnL, drawdown, win rate, Sharpe, etc."""

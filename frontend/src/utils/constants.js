@@ -9,6 +9,7 @@ export const NAV_ITEMS = [
   { path: '/weather', label: 'Weather', icon: 'CloudSun' },
   { path: '/positions', label: 'Positions', icon: 'Layers' },
   { path: '/analytics', label: 'Analytics', icon: 'TrendingUp' },
+  { path: '/global-analytics', label: 'Global Analytics', icon: 'Globe' },
   { path: '/risk', label: 'Risk', icon: 'ShieldAlert' },
   { path: '/markets', label: 'Markets', icon: 'BarChart3' },
   { path: '/settings', label: 'Settings', icon: 'Settings' },
