@@ -263,6 +263,7 @@ async def get_status():
     if clob_fill_ws_client:
         snap["stats"]["health"]["fill_ws_connected"] = clob_fill_ws_client._connected
         snap["stats"]["health"]["fill_ws_has_credentials"] = clob_fill_ws_client.has_credentials
+        snap["stats"]["health"]["fill_ws_health"] = clob_fill_ws_client.health
     # Inject execution fill_update_method
     if engine and engine.execution_engine:
         exec_status = engine.execution_engine.live_adapter_status
