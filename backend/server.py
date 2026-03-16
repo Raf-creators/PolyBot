@@ -30,10 +30,12 @@ from services.live_order_service import LiveOrderService
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB
-mongo_url = os.environ['MONGO_URL']
+# MongoDB — support Railway's MONGO_URI alongside Emergent's MONGO_URL
+mongo_url = os.environ.get('MONGO_URI') or os.environ.get('MONGO_URL', '')
+if not mongo_url:
+    raise RuntimeError("Set MONGO_URI or MONGO_URL environment variable")
 mongo_client = AsyncIOMotorClient(mongo_url)
-db = mongo_client[os.environ['DB_NAME']]
+db = mongo_client[os.environ.get('DB_NAME', 'polymarket_edge')]
 
 # Logging
 logging.basicConfig(
@@ -238,6 +240,16 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Polymarket Edge OS initialized [{state.trading_mode.value}]")
 
+    # Auto-start engine so all services run without manual API calls
+    if not engine.is_running:
+        await engine.start()
+        # Wire fill WS to live adapter (same as POST /engine/start)
+        if clob_fill_ws_client and engine.execution_engine._live_adapter:
+            adapter = engine.execution_engine._live_adapter
+            adapter.set_fill_ws(clob_fill_ws_client)
+            clob_fill_ws_client._fill_callback = adapter.on_ws_fill
+        logger.info("Engine auto-started — all strategies and feeds active")
+
     yield
 
     # Shutdown — persist config before stopping
@@ -281,9 +293,28 @@ async def root():
 
 @api_router.get("/health")
 async def health():
+    """Comprehensive health check — also used by Railway via /health proxy."""
+    engine_running = engine is not None and engine.is_running
+    market_data_ok = (
+        engine is not None
+        and engine.market_data is not None
+        and engine.market_data.discovery_stats.get("last_broad_fetch") is not None
+    )
+    strategies_status = {}
+    if state:
+        for sid, s in state.strategies.items():
+            strategies_status[sid] = {"enabled": s.enabled}
+    resolver_ok = (
+        market_resolver_service is not None
+        and market_resolver_service.health.get("running", False)
+    )
+    healthy = engine_running and market_data_ok
     return {
-        "status": "healthy",
-        "engine": state.engine_status.value if state else "uninitialized",
+        "status": "healthy" if healthy else "starting",
+        "engine": "running" if engine_running else "stopped",
+        "market_feeds": "active" if market_data_ok else "initializing",
+        "strategies": strategies_status,
+        "resolver": "running" if resolver_ok else "stopped",
         "mode": state.trading_mode.value if state else "unknown",
     }
 
@@ -1909,6 +1940,12 @@ async def demo_execution_orders(limit: int = 50):
 
 app.include_router(api_router)
 
+
+@app.get("/health")
+async def railway_health_check():
+    """Root-level health check for Railway monitoring."""
+    return await health()
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1916,3 +1953,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
