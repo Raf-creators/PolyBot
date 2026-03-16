@@ -826,7 +826,9 @@ class CryptoSniper(BaseStrategy):
             signal.is_tradable = False
             signal.rejection_reason = f"risk: {reason}"
             self._m["signals_rejected"] += 1
-            self._m["rejection_reasons"]["risk"] = self._m["rejection_reasons"].get("risk", 0) + 1
+            # Track specific risk sub-reason for diagnostics
+            risk_bucket = f"risk:{reason.split('(')[0].strip()}"
+            self._m["rejection_reasons"][risk_bucket] = self._m["rejection_reasons"].get(risk_bucket, 0) + 1
             return
 
         execution = SniperExecution(
@@ -930,6 +932,7 @@ class CryptoSniper(BaseStrategy):
         return [e.model_dump() for e in self._completed_executions[-limit:]]
 
     def get_health(self) -> dict:
+        pnl = self._compute_pnl()
         return {
             **self._m,
             "config": self.config.model_dump(),
@@ -938,6 +941,37 @@ class CryptoSniper(BaseStrategy):
                 "BTC": len(self._price_history["BTC"]),
                 "ETH": len(self._price_history["ETH"]),
             },
+            "pnl": pnl,
+        }
+
+    def _compute_pnl(self) -> dict:
+        """Compute sniper PnL from filled executions + current market prices."""
+        if not self._state:
+            return {"realized": 0, "unrealized": 0, "total": 0, "positions": 0, "fills": 0}
+
+        fills = [e for e in self._completed_executions if e.status == SniperSignalStatus.FILLED]
+        unrealized = 0.0
+        positions = 0
+
+        for ex in fills:
+            if not ex.entry_price:
+                continue
+            # Find current market price for the token
+            cm = self._classified_cache.get(ex.condition_id)
+            if not cm:
+                continue
+            token_id = cm.yes_token_id if ex.side == "buy_yes" else cm.no_token_id
+            snap = self._state.get_market(token_id)
+            if snap and snap.mid_price and snap.mid_price > 0:
+                unrealized += (snap.mid_price - ex.entry_price) * ex.size
+                positions += 1
+
+        return {
+            "realized": 0,
+            "unrealized": round(unrealized, 4),
+            "total": round(unrealized, 4),
+            "positions": positions,
+            "fills": len(fills),
         }
 
     def get_config(self) -> StrategyConfig:

@@ -1,0 +1,77 @@
+{
+  "summary": "Crypto Sniper Execution & PnL Tracking - All 12 tests passed. Risk engine config updated (max_concurrent_positions: 30, max_market_exposure: 100), PnL tracking active with realized/unrealized/total/positions/fills fields, specific risk sub-reasons tracking working (e.g., 'risk:max concurrent positions' instead of generic 'risk').",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "sniper_execution_tests": [
+      "GET /api/strategies/sniper/health - signals_executed > 0 (14 executed)",
+      "GET /api/strategies/sniper/health - signals_filled > 0 (14 filled)",
+      "GET /api/strategies/sniper/health - pnl object exists with all required fields (realized, unrealized, total, positions, fills)",
+      "GET /api/strategies/sniper/health - pnl.fills matches signals_filled",
+      "GET /api/strategies/sniper/health - rejection_reasons has NO generic 'risk' key, uses specific sub-reasons",
+      "GET /api/config - risk.max_concurrent_positions = 30",
+      "GET /api/config - risk.max_market_exposure = 100",
+      "GET /api/strategies/sniper/executions - completed executions array has entries",
+      "GET /api/strategies/sniper/signals - tradable array structure valid",
+      "GET /api/health/discovery - crypto_markets_discovered > 0 (24 discovered)",
+      "GET /api/positions - total positions <= 30 (within risk limit)",
+      "GET /api/health - trading_mode = 'paper'"
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_crypto_sniper_execution_pnl.py",
+    "/app/test_reports/pytest/pytest_results_crypto_sniper_execution_pnl.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "crypto_sniper.py _execute_signal() (line 824-830): Correctly tracks specific risk sub-reasons with 'risk:{reason}' format",
+    "crypto_sniper.py get_health() (line 934): Correctly includes pnl object from _compute_pnl()",
+    "crypto_sniper.py _compute_pnl() (line 952): Properly computes unrealized PnL from filled executions + current market prices",
+    "risk.py check_order() (line 29-62): All risk checks return specific rejection reasons",
+    "models.py RiskConfig (line 131-140): max_concurrent_positions and max_market_exposure correctly defined"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_crypto_sniper_execution_pnl.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (12/12 tests passed)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Crypto Sniper Execution & PnL Tracking verified. Key findings: (1) signals_executed=14, signals_filled=14, (2) PnL tracking active: unrealized=-1.4121 (14 positions, 14 fills), (3) Risk config: max_concurrent_positions=30, max_market_exposure=100, (4) No generic 'risk' key in rejection_reasons - specific sub-reasons like 'risk:max concurrent positions' used, (5) crypto_markets_discovered=24 (12 BTC + 12 ETH). Engine must be started via POST /api/engine/start before testing. Vol warmup takes ~150s (30 samples @ 5s).",
+
+  "features_tested": {
+    "signals_executed_gt_0": "PASS - 14 signals executed",
+    "signals_filled_gt_0": "PASS - 14 signals filled",
+    "pnl_object_exists": "PASS - pnl with realized, unrealized, total, positions, fills",
+    "pnl_fills_match_signals_filled": "PASS - pnl.fills = 14 = signals_filled",
+    "specific_risk_subreasons": "PASS - No generic 'risk' key, uses 'risk:{reason}' format",
+    "max_concurrent_positions_30": "PASS - risk.max_concurrent_positions = 30",
+    "max_market_exposure_100": "PASS - risk.max_market_exposure = 100",
+    "completed_executions_exist": "PASS - 14 completed executions",
+    "discovery_crypto_gt_0": "PASS - 24 crypto markets discovered",
+    "positions_within_limit": "PASS - Positions within 30 limit",
+    "paper_mode": "PASS - trading_mode = paper"
+  }
+}
