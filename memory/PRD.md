@@ -15,7 +15,11 @@ Build a production-grade 24/7 automated trading platform for Polymarket markets.
 ### Phase 5A — Crypto Sniper Strategy (AUDITED)
 ### Phase 5B — Sniper Dashboard
 ### P&L Curve + Trade Ticker
-### Phase 6 — Telegram Alerts
+### Phase 6 — Telegram Alerts (Configured, 2026-03-16)
+- Credentials set in `backend/.env`, auto-enabled on startup
+- Alert pipeline: weather, execution/fill, system/risk, signal alerts
+- `POST /api/telegram/test` verified — message delivered
+- Settings page: Connected, trade alerts ON, signal alerts ON
 ### Phase 7 — Config Persistence (MongoDB)
 ### Phase 8 — Live Polymarket Execution Adapter
 ### Phase 8A — Order Lifecycle, Partial Fills, Wallet Visibility
