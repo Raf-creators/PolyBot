@@ -19,19 +19,21 @@ export default function Overview() {
   const positions = useDashboardStore((s) => s.positions);
   const trades = useDashboardStore((s) => s.trades);
   const pnlHistory = useDashboardStore((s) => s.pnlHistory);
-  const { fetchPositions, fetchTrades, fetchPnlHistory } = useApi();
+  const { fetchPositions, fetchTrades, fetchPnlHistory, fetchStatus } = useApi();
 
   useEffect(() => {
+    fetchStatus();
     fetchPositions();
     fetchTrades();
     fetchPnlHistory();
     const interval = setInterval(() => {
+      fetchStatus();
       fetchPositions();
       fetchTrades();
       fetchPnlHistory();
-    }, 10000);
+    }, 5000);
     return () => clearInterval(interval);
-  }, [fetchPositions, fetchTrades, fetchPnlHistory]);
+  }, [fetchStatus, fetchPositions, fetchTrades, fetchPnlHistory]);
 
   const health = stats.health || {};
   const spotPrices = stats.spot_prices || {};
@@ -72,8 +74,8 @@ export default function Overview() {
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <StatCard testId="stat-daily-pnl" label="Daily P&L" value={formatPnl(stats.daily_pnl)} format="pnl" />
         <StatCard testId="stat-balance" label="Paper Balance" value={`$${paperBalance.toFixed(2)}`} />
-        <StatCard testId="stat-win-rate" label="Win Rate" value={formatPercent(stats.win_rate)} sub={`${stats.win_count}W / ${stats.loss_count}L`} />
-        <StatCard testId="stat-total-trades" label="Total Trades" value={formatNumber(stats.total_trades)} />
+        <StatCard testId="stat-win-rate" label="Win Rate" value={formatPercent(stats.win_rate)} sub={`${stats.win_count || 0}W / ${stats.loss_count || 0}L`} />
+        <StatCard testId="stat-close-trades" label="Closed Trades" value={formatNumber(stats.close_count || 0)} />
         <StatCard testId="stat-open-positions" label="Open Positions" value={formatNumber(stats.open_positions)} sub={`of ${risk.max_concurrent_positions || 10} max`} />
         <StatCard testId="stat-markets" label="Markets Tracked" value={formatNumber(stats.markets_tracked)} />
       </div>

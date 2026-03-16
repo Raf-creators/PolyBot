@@ -36,6 +36,15 @@ export function useApi() {
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
   const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
   const applyDemoSnapshot = useDashboardStore((s) => s.applyDemoSnapshot);
+  const setWsSnapshot = useDashboardStore((s) => s.setWsSnapshot);
+
+  // Polling fallback for stats — works even when WebSocket is down
+  const fetchStatus = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/status`);
+      setWsSnapshot(data);
+    } catch {}
+  }, [prefix, setWsSnapshot]);
 
   const fetchPositions = useCallback(async () => {
     try {
@@ -211,6 +220,7 @@ export function useApi() {
   }, []);
 
   return {
+    fetchStatus,
     fetchPositions, fetchTrades, fetchOrders, fetchMarkets,
     fetchArbOpportunities, fetchArbExecutions, fetchArbHealth,
     fetchFeedHealth, fetchConfig,

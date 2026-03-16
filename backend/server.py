@@ -1504,17 +1504,18 @@ async def get_analytics_timeseries():
 
 @api_router.get("/analytics/pnl-history")
 async def get_pnl_history():
-    """Return cumulative P&L time series from trade history."""
+    """Return cumulative P&L time series from close trades only."""
     if not state:
         raise HTTPException(500, "Engine not initialized")
 
-    trades = state.trades[-500:]
+    # Only include close trades (non-zero PnL) for the equity curve
+    close_trades = [t for t in state.trades if t.pnl and t.pnl != 0]
     points = []
     cumulative = 0.0
     peak = 0.0
     trough = 0.0
 
-    for t in trades:
+    for t in close_trades:
         cumulative += t.pnl
         cumulative_r = round(cumulative, 4)
         peak = max(peak, cumulative_r)
@@ -1532,7 +1533,8 @@ async def get_pnl_history():
         "peak_pnl": round(peak, 4),
         "trough_pnl": round(trough, 4),
         "max_drawdown": round(peak - trough, 4) if peak > trough else 0.0,
-        "total_trades": len(trades),
+        "total_trades": len(state.trades),
+        "close_trades": len(close_trades),
     }
 
 

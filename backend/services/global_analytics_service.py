@@ -80,11 +80,12 @@ class GlobalAnalyticsService:
                 "active_executions": len(self._sniper.get_active_executions()),
             }
 
-        # Aggregate trades from state
+        # Aggregate trades from state — only count closes (non-zero PnL) for win/loss
         trades = self._state.trades
-        total_pnl = sum(t.pnl for t in trades)
-        wins = [t for t in trades if t.pnl > 0]
-        losses = [t for t in trades if t.pnl <= 0]
+        close_trades = [t for t in trades if t.pnl and t.pnl != 0]
+        total_pnl = sum(t.pnl for t in close_trades)
+        wins = [t for t in close_trades if t.pnl > 0]
+        losses = [t for t in close_trades if t.pnl < 0]
 
         total_signals = sum(s.get("total_signals", 0) for s in by_strategy.values())
         total_executed = sum(s.get("total_executed", 0) for s in by_strategy.values())
@@ -95,10 +96,11 @@ class GlobalAnalyticsService:
             "total_executions": total_executed,
             "total_filled": total_filled,
             "total_trades": len(trades),
+            "close_trades": len(close_trades),
             "realized_pnl": round(total_pnl, 4),
             "win_count": len(wins),
             "loss_count": len(losses),
-            "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0,
+            "win_rate": round(len(wins) / len(close_trades) * 100, 1) if close_trades else 0,
             "avg_win": round(sum(t.pnl for t in wins) / len(wins), 4) if wins else 0,
             "avg_loss": round(sum(t.pnl for t in losses) / len(losses), 4) if losses else 0,
             "by_strategy": by_strategy,

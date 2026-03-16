@@ -148,7 +148,8 @@ class StateManager:
 
     def snapshot(self) -> dict:
         uptime = time.time() - self.start_time if self.start_time else 0.0
-        win_rate = (self.win_count / self.total_trades * 100) if self.total_trades > 0 else 0.0
+        close_count = self.win_count + self.loss_count
+        win_rate = (self.win_count / close_count * 100) if close_count > 0 else 0.0
 
         return EngineStateResponse(
             status=self.engine_status.value,
@@ -162,6 +163,7 @@ class StateManager:
                 "total_trades": self.total_trades,
                 "win_count": self.win_count,
                 "loss_count": self.loss_count,
+                "close_count": close_count,
                 "win_rate": round(win_rate, 2),
                 "open_positions": len(self.positions),
                 "open_orders": len(self.get_open_orders()),
