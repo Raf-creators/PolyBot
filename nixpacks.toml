@@ -1,9 +1,11 @@
 [phases.setup]
-nixPkgs = ["nodejs-18_x", "yarn", "python311"]
+nixPkgs = ["python312", "nodejs_20"]
 
 [phases.install]
 cmds = [
+  "python -m pip install --upgrade pip",
   "pip install -r requirements.txt",
+  "npm install -g yarn",
   "cd frontend && yarn install --frozen-lockfile"
 ]
 
