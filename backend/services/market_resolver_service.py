@@ -101,13 +101,18 @@ class MarketResolverService:
         total_pnl = 0.0
         queried = 0
         already_checked = set()  # track condition_ids already queried this pass
+        skip_reasons = {"no_market": 0, "no_end_date": 0, "not_expired": 0, "already_checked": 0}
 
         for token_id, pos in positions:
             if not self._running:
                 break
 
             market = self._state.get_market(token_id)
-            if not market or not market.end_date:
+            if not market:
+                skip_reasons["no_market"] += 1
+                continue
+            if not market.end_date:
+                skip_reasons["no_end_date"] += 1
                 continue
 
             # Check if expired
@@ -116,13 +121,16 @@ class MarketResolverService:
                     market.end_date.replace("Z", "+00:00")
                 )
                 if end_dt > now:
+                    skip_reasons["not_expired"] += 1
                     continue  # not expired yet
             except (ValueError, TypeError):
+                skip_reasons["no_end_date"] += 1
                 continue
 
             # Skip if we already checked this token's condition this pass
             cid = market.condition_id or token_id
             if cid in already_checked:
+                skip_reasons["already_checked"] += 1
                 continue
             already_checked.add(cid)
 
@@ -206,6 +214,7 @@ class MarketResolverService:
         self._stats["positions_checked"] = len(positions)
         self._stats["markets_queried"] += queried
         self._stats["positions_resolved"] += resolved_count
+        self._stats["skip_reasons"] = skip_reasons
         self._stats["total_realized_pnl"] = round(
             self._stats["total_realized_pnl"] + total_pnl, 4
         )

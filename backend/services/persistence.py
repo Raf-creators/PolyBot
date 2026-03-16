@@ -22,10 +22,10 @@ class PersistenceService:
     async def load_state_from_db(self, state):
         """Reconstruct in-memory state from MongoDB on startup.
 
-        Loads all persisted trades and the last positions snapshot so that
-        after a Railway restart the dashboard immediately reflects historical
-        closed-trade analytics (PnL, win rate, close count).
+        Loads all persisted trades, positions snapshot, AND market snapshots
+        for those positions so the resolver can work immediately after restart.
         """
+        from models import MarketSnapshot
         # ---- Load trades ----
         try:
             cursor = self._db.trades.find(
@@ -75,6 +75,22 @@ class PersistenceService:
                 logger.info(
                     f"[PERSISTENCE] Loaded {len(state.positions)} positions from snapshot"
                 )
+                # Load associated market snapshots so the resolver has the data
+                # it needs (end_date, condition_id, complement_token_id)
+                markets_loaded = 0
+                for mdoc in snap_doc.get("markets", []):
+                    try:
+                        token_id = mdoc.get("token_id")
+                        if token_id and token_id not in state.markets:
+                            ms = MarketSnapshot(**mdoc)
+                            state.markets[token_id] = ms
+                            markets_loaded += 1
+                    except Exception as e:
+                        logger.warning(f"Skip malformed market doc: {e}")
+                if markets_loaded:
+                    logger.info(
+                        f"[PERSISTENCE] Loaded {markets_loaded} market snapshots for positions"
+                    )
         except Exception as e:
             logger.error(f"[PERSISTENCE] Position load error: {e}")
 
@@ -155,10 +171,22 @@ class PersistenceService:
         # ---- Positions snapshot ----
         if self._state.positions:
             snap = [p.model_dump() for p in self._state.positions.values()]
+            # Also persist market snapshots for open positions so the resolver
+            # can work immediately after restart (markets may not be re-discovered
+            # by the live data feed if they've been delisted from Polymarket).
+            market_snap = []
+            for token_id in self._state.positions:
+                m = self._state.get_market(token_id)
+                if m:
+                    market_snap.append(m.model_dump())
             try:
                 await self._db.positions_snapshots.update_one(
                     {"snapshot_type": "current"},
-                    {"$set": {"positions": snap, "timestamp": utc_now()}},
+                    {"$set": {
+                        "positions": snap,
+                        "markets": market_snap,
+                        "timestamp": utc_now(),
+                    }},
                     upsert=True,
                 )
             except Exception as e:

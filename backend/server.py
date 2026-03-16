@@ -413,6 +413,7 @@ async def get_diagnostics():
             "uptime_seconds": round(state.snapshot().get("uptime_seconds", 0), 1) if state else 0,
         },
         "has_persistence_reload": True,  # flag to confirm this code version has the fix
+        "resolver": market_resolver_service._stats if market_resolver_service else {},
     }
 
 
@@ -1636,6 +1637,8 @@ async def get_pnl_history():
         "max_drawdown": round(peak - trough, 4) if peak > trough else 0.0,
         "total_trades": len(state.trades),
         "close_trades": len(close_trades),
+        "latest_close_at": close_trades[-1].timestamp if close_trades else None,
+        "server_time": datetime.now(timezone.utc).isoformat(),
     }
 
 
