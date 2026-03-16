@@ -325,13 +325,22 @@ expired          → Expired on CLOB
 
 
 ### P9C — Railway Deployment Configuration (Complete, 2026-03-16)
-- **Deployment files**: `requirements.txt` (19 packages), `Procfile` (uvicorn with dynamic PORT), `railway.toml` (nixpacks, healthcheck)
-- **Auto-start engine**: All background services (Crypto Sniper, Weather Trader, Market Resolver, Market Data Feed, Arb Scanner, Risk Engine) start automatically during FastAPI lifespan — no manual `POST /api/engine/start` required
-- **Dynamic PORT**: `__main__` block reads `PORT` env var (default 8000) for Railway networking
+- **Deployment files**: `requirements.txt` (19 packages), `Procfile`, `railway.toml`, `nixpacks.toml`
+- **Auto-start engine**: All background services boot automatically during FastAPI lifespan
+- **Dynamic PORT**: `__main__` block reads `PORT` env var for Railway networking
 - **MONGO_URI support**: Checks `MONGO_URI` first (Railway), falls back to `MONGO_URL` (Emergent)
-- **Health endpoint**: `GET /health` and `GET /api/health` return comprehensive status: engine, market_feeds, strategies, resolver, mode
-- **No Emergent dependencies**: System runs independently as a server process
-- Testing: 28/28 backend — `/app/test_reports/iteration_34.json`
+- **Health endpoint**: `GET /health` and `GET /api/health` return `{status: "ok", engine, strategies, resolver, mode}`
+
+### P9D — Frontend on Railway + Telegram Cleanup (Complete, 2026-03-16)
+- **Frontend serving**: React build served by FastAPI with static mount + SPA catch-all (`index.html` for all non-API routes)
+- **Build config**: `railway.toml` buildCmd installs Node/yarn, builds frontend with `REACT_APP_BACKEND_URL=` (same-origin)
+- **SPA routing**: All 10 dashboard pages work with page refresh (Overview, Positions, Analytics, Global Analytics, Weather, Sniper, Arbitrage, Risk, Markets, Settings)
+- **Frontend API**: `constants.js` defaults `BACKEND_URL` to empty string → same-origin API calls
+- **Telegram cleanup**: Rewritten to ONLY send on trade close/resolution:
+  - Listens for: `ORDER_UPDATE` (status=closed), `SYSTEM_EVENT` (market_resolver)
+  - Ignores: signals, opens, scanner activity, diagnostics
+  - Alert format: strategy, market, side/outcome, entry/exit price, PnL, ROI%, timestamp
+- Testing: 23/23 backend + 10/10 frontend visual — `/app/test_reports/iteration_35.json`
 
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
