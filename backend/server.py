@@ -119,6 +119,10 @@ async def lifespan(app: FastAPI):
     engine.price_feeds = PriceFeedManager()
     engine.persistence = PersistenceService(db)
 
+    # Reconstruct in-memory state from MongoDB (trades, positions)
+    # This ensures after Railway restart the dashboard shows historical data
+    await engine.persistence.load_state_from_db(state)
+
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)

@@ -1,0 +1,97 @@
+{
+  "summary": "MongoDB persistence restart resilience verified. All 11 backend tests passed. Frontend shows correct historical analytics after restart: Daily P&L +$53.77, Win Rate 56.2% (200W/156L), Closed Trades 356, P&L Curve showing equity growth from $0 to ~$178. Global Analytics page correctly displays realized_pnl +$178.21, win_rate 56.2%, close_trades 356. load_state_from_db() successfully reconstructs trades, positions, and stats counters from MongoDB on startup.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_persistence_tests": [
+      "GET /api/health returns status=ok, engine=running - PASS",
+      "GET /api/status shows non-zero stats (total_trades=2246, close_count=356, win_count=200, loss_count=156, win_rate=56.18, daily_pnl=53.77) - PASS",
+      "GET /api/positions returns 37 positions loaded from MongoDB snapshot - PASS",
+      "GET /api/analytics/pnl-history returns 356+ points array from closed trades - PASS",
+      "GET /api/analytics/global strategy_performance shows realized_pnl=178.21, close_trades=356, win_rate=56.2 - PASS",
+      "GET /api/analytics/global timeseries.cumulative_pnl has non-zero last point with close_count field - PASS",
+      "Data consistency: close_count=356 matches across /api/status, /api/analytics/global, /api/analytics/pnl-history - PASS",
+      "GET /api/trades returns trade history including recent trades - PASS",
+      "Trade count stable (no duplication) - count stable between requests - PASS",
+      "Win rate calculation verified: win_rate = win_count/(win_count+loss_count)*100 = 56.18% - PASS",
+      "Engine status is 'running' after loading from MongoDB - PASS"
+    ],
+    "frontend_visual_tests": [
+      "Overview page: Daily P&L card shows +$53.77 (non-zero) - PASS",
+      "Overview page: Win Rate card shows 56.2% with 200W/156L sub-text - PASS",
+      "Overview page: Closed Trades card shows 356 - PASS",
+      "Overview page: P&L Curve chart shows actual equity growth ($0 to ~$178, peak $199.07) - PASS",
+      "Overview page: 40 Open Positions, 1,323 Markets Tracked - PASS",
+      "Analytics page Overview tab: Total P&L +$178.21, Win Rate 56.18%, Profit Factor 1.41 - PASS",
+      "Analytics page Charts tab: P&L Curve and Daily P&L bar chart with actual data - PASS",
+      "Global Analytics page Performance tab: Realized P&L +$178.21, Win Rate 56.2%, Total Trades 2,259 - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "Backend: Restart resilience - /api/status shows non-zero stats after restart": "PASS - total_trades=2246, close_count=356, win_count=200, loss_count=156, win_rate=56.18, daily_pnl=53.77",
+    "Backend: Data consistency after restart": "PASS - close_count=356 matches across all 3 endpoints",
+    "Backend: Positions loaded from MongoDB snapshot": "PASS - 37 positions loaded",
+    "Backend: PnL history after restart": "PASS - 356 closed trade points in array",
+    "Backend: Global analytics timeseries": "PASS - cumulative_pnl with close_count field in last point",
+    "Backend: No trade duplication": "PASS - trade count stable between requests",
+    "Backend: Trades endpoint": "PASS - returns historical trade data",
+    "Frontend: Overview page stat cards": "PASS - Daily P&L +$53.77, Win Rate 56.2% (200W/156L), Closed Trades 356",
+    "Frontend: Overview P&L Curve": "PASS - shows equity growth $0 to ~$178 (peak $199.07)",
+    "Frontend: Global Analytics page": "PASS - Performance tab shows realized_pnl +$178.21, win_rate 56.2%, close_trades 356"
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_persistence_restart.py",
+    "/app/test_reports/pytest/pytest_results_persistence_restart.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "persistence.py load_state_from_db(): Correctly loads trades from MongoDB, reconstructs win_count/loss_count/daily_pnl counters",
+    "persistence.py: Sets _last_trade_idx after loading to prevent re-persisting loaded trades (no duplication)",
+    "persistence.py: Loads positions_snapshots collection for position reconstruction",
+    "state.py add_trade(): Correctly increments win_count/loss_count based on pnl sign (Lines 128-135)",
+    "state.py snapshot(): Correctly computes close_count = win_count + loss_count, win_rate from counters (Lines 149-174)",
+    "server.py: Calls await engine.persistence.load_state_from_db(state) during lifespan startup (Line 124)",
+    "global_analytics_service.py get_signal_timeseries(): Filters closed trades (pnl!=0) for cumulative PnL curve (Lines 206-260)"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_persistence_restart.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (11/11 tests passed)",
+    "frontend": "100% (8/8 visual tests passed)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None - tested with existing MongoDB data (~2246 trades, 356 closed with pnl!=0, ~37 positions)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "MongoDB persistence restart resilience verified. The fix (load_state_from_db) correctly reconstructs: (1) trades from MongoDB with win/loss/daily_pnl counters, (2) positions from positions_snapshots collection, (3) sets _last_trade_idx to prevent trade duplication. After Railway restart, dashboard immediately shows historical analytics. Key data: 2246 total trades, 356 closed trades, 200 wins, 156 losses, 56.2% win rate, +$178.21 realized PnL, daily_pnl shows today's UTC closed trades only (~$53.77).",
+
+  "fix_summary": {
+    "root_cause": "All trade state was in-memory only (StateManager). PersistenceService wrote trades to MongoDB but never loaded them back on startup, causing dashboard to show 0 closed trades, 0 PnL, 0 win rate after restart.",
+    "fix_applied": [
+      "persistence.py: Added load_state_from_db() that reconstructs trades, positions, and stats counters from MongoDB on startup",
+      "server.py: Calls await engine.persistence.load_state_from_db(state) during lifespan startup (Line 124) before strategies register"
+    ],
+    "verification": "After restart, GET /api/status returns total_trades=2246, close_count=356, win_count=200, loss_count=156, win_rate=56.18, daily_pnl=53.77. Frontend Overview and Global Analytics pages display correct historical data."
+  }
+}
