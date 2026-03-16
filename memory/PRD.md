@@ -384,6 +384,14 @@ expired          → Expired on CLOB
 - **Result**: After restart, `no_market` skips reduced from 36→11 (25 market snapshots loaded from DB). Remaining 11 positions lack market data in both DB and live feed. 25 weather positions correctly skipped with `no_end_date` (handled by auto_resolver, not market_resolver).
 - Testing: 13/13 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_39.json`
 
+### P9H — Crypto Sniper Market Discovery Fix (Complete, 2026-03-17)
+- **Root Cause**: `RiskConfig.max_concurrent_positions` defaulted to 10. On Railway, 10 weather positions loaded from DB snapshot filled all 10 slots → risk engine rejected every crypto signal with `"max concurrent positions"`. Sniper discovered 25 markets and generated 505 signals but 0 executed.
+- **Fixes Applied**:
+  - `models.py`: Changed `max_concurrent_positions` default from 10 to 25 (allows 10 weather + 15 crypto)
+  - `config_service.py`: Added migration — if DB config has `max_concurrent_positions==10` (old default), auto-upgrades to new default of 25 on startup
+- **Result**: After fix + vol warmup (~4min), sniper generated 112 signals, opened 16 new crypto positions, resolver closed 4 expired positions in real-time. PnL curve updated with latest close at 23:50 UTC.
+- Testing: 14/14 backend + 5/5 frontend (100%) — `/app/test_reports/iteration_40.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
