@@ -35,6 +35,7 @@ export function useApi() {
   const setPnlHistory = useDashboardStore((s) => s.setPnlHistory);
   const setTickerFeed = useDashboardStore((s) => s.setTickerFeed);
   const setWalletStatus = useDashboardStore((s) => s.setWalletStatus);
+  const setDiagnostics = useDashboardStore((s) => s.setDiagnostics);
   const applyDemoSnapshot = useDashboardStore((s) => s.applyDemoSnapshot);
   const setWsSnapshot = useDashboardStore((s) => s.setWsSnapshot);
 
@@ -186,6 +187,13 @@ export function useApi() {
     } catch {}
   }, [prefix, setWalletStatus]);
 
+  const fetchDiagnostics = useCallback(async () => {
+    try {
+      const { data } = await api.get('/diagnostics');
+      setDiagnostics(data);
+    } catch {}
+  }, [setDiagnostics]);
+
   // Load the demo status snapshot (overrides WS-driven top-level state)
   const loadDemoSnapshot = useCallback(async () => {
     try {
@@ -227,6 +235,7 @@ export function useApi() {
     fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth,
     fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts,
     fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
+    fetchDiagnostics,
     loadDemoSnapshot,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,

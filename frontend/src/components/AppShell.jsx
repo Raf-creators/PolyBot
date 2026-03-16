@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { TradeTicker } from './TradeTicker';
+import { DiagnosticsFooter } from './DiagnosticsFooter';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useApi } from '../hooks/useApi';
 import { useDashboardStore } from '../state/dashboardStore';
@@ -96,11 +97,12 @@ export function AppShell() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopBar />
         <TradeTicker testId="trade-ticker" />
-        <main className="flex-1 overflow-y-auto p-5" data-testid="main-content">
+        <main className="flex-1 overflow-y-auto p-5 pb-10" data-testid="main-content">
           <Outlet />
         </main>
       </div>
       <Toaster position="bottom-right" theme="dark" />
+      <DiagnosticsFooter />
     </div>
   );
 }

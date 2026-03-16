@@ -43,6 +43,9 @@ export const useDashboardStore = create((set, get) => ({
   tickerFeed: [],
   walletStatus: { mode: 'paper', authenticated: false, balance_usdc: null, live_ready: false, warnings: [] },
 
+  // Diagnostics info (fetched from /api/diagnostics)
+  diagnostics: null,
+
   // Connection state
   wsConnected: false,
   lastWsUpdate: null,
@@ -92,6 +95,7 @@ export const useDashboardStore = create((set, get) => ({
   setPnlHistory: (data) => set({ pnlHistory: data }),
   setTickerFeed: (data) => set({ tickerFeed: data }),
   setWalletStatus: (data) => set({ walletStatus: data }),
+  setDiagnostics: (data) => set({ diagnostics: data }),
 
   // Apply a full demo snapshot to all state slices
   applyDemoSnapshot: (demoStatus) => set({
