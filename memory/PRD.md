@@ -280,6 +280,27 @@ expired          → Expired on CLOB
 - **Navigation**: Globe icon in sidebar between Analytics and Risk
 - Testing: 25/25 backend + 100% frontend passed — `/app/test_reports/iteration_25.json`
 
-### P8 — Future
+### P8 — Automated Forecast Resolution (Complete, 2026-03-16)
+- **AutoResolverService** (`/app/backend/services/auto_resolver_service.py`):
+  - Background job: first pass 30s after startup, then every 6h (configurable via `AUTO_RESOLVER_INTERVAL_HOURS`)
+  - Scans `forecast_accuracy` for unresolved records whose target_date <= yesterday (UTC)
+  - Groups by station → batch-fetches observed daily highs from Open-Meteo Archive API
+  - Resolves via existing `ForecastAccuracyService.resolve_forecast()` (computes error, abs_error, marks resolved)
+  - Triggers `RollingCalibrationService.run_rolling_calibration()` after resolving new records
+  - Safety: never overwrites resolved records, never fabricates data, graceful on API errors
+  - Rate-limited: 0.5s between station API calls
+- **Results on first run**: 9 records auto-resolved across 5 stations (KATL, KDFW, KLGA, KMIA, KORD)
+  - Global MAE improved from 4.3F → 1.7F
+  - Global Bias improved from -4.3F → -0.1F
+  - Error distribution now spans 9 bins (was 1)
+- **API endpoints**:
+  - `GET /api/health/auto-resolver` — health with running, interval, total_runs, pending_records, etc.
+  - `POST /api/auto-resolver/run` — manual trigger, returns {resolved, pending, skipped, errors}
+  - Weather health (`/api/strategies/weather/health`) now includes `auto_resolver` object
+  - Global analytics (`/api/analytics/global`) now includes `auto_resolver` object
+- **Frontend**: Forecast Quality tab in Global Analytics shows Auto-Resolver section with status, interval, run counts, pending
+- Testing: 22/22 backend + 100% frontend passed — `/app/test_reports/iteration_26.json`
+
+### P9 — Future
 - Copy trading skeleton
 - Manual order entry
