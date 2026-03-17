@@ -14,64 +14,60 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 
 ### Core Infrastructure
 - Engine with paper trading adapter, market discovery, price feeds
-- Position/trade persistence to MongoDB
-- Telegram notifications, risk management
+- Position/trade persistence to MongoDB, Telegram notifications, risk management
 
-### Dashboard Overhaul (Complete)
+### Dashboard Overhaul
 - Open positions with enriched strategy metadata
 - Realized vs Unrealized PnL breakdown
 
-### Weather V2 Strategy (Complete)
-- Overtrading filter (min_edge=500bps, min_confidence=0.55, position cap)
-- Explanation layer & quality score per signal
+### Weather V2 Strategy
+- Overtrading filter, explanation layer, quality score
 - Multi-market types: temperature, precipitation, snowfall, wind
 - Celsius market support
 
-### Realized PnL Fix (Complete — March 17, 2026)
-- Paper adapter records PnL on sell trades
-- Market resolver uses original strategy_id (not "resolver")
+### Realized PnL Fix (March 17)
+- Paper adapter records PnL on sell trades, resolver uses original strategy_id
 - Migration fixed 220 historical trades → Realized PnL: $142.70
 
-### Weather Asymmetric Mode (Complete — March 17, 2026)
-- Separate strategy: `weather_asymmetric`
-- Filters: market_price ≤ 0.25, model_prob ≥ 0.40, edge ≥ 0.15
-- Hold to resolution, no early flip, higher allocation ($5 default)
-- Separate PnL tracking, dedicated UI tab
+### Weather Asymmetric Mode (March 17)
+- Separate `weather_asymmetric` strategy: market_price ≤ 0.25, prob ≥ 0.40, edge ≥ 0.15
+- Hold to resolution, higher allocation, separate PnL, dedicated UI tab
 
-### Controlled Calibration & Overconfidence Fix (Complete — March 17, 2026)
-- **1.25x overconfidence multiplier**: All sigma values widened by 25% (temporary)
-- **Calibration guardrails**: ±25% cap on adjustments, 30-sample min threshold
-- **Brier score**: 1.064 (5 samples), 1σ coverage 40% (model overconfident)
-- **Segmentation**: By lead-hours bracket, market type, station
-- **Sigma trace**: Full pipeline visibility (default → base → OC-adjusted → final) in signal explanations
-- **UI**: Sigma Pipeline section, calibration metrics, calibration curve, sigma evolution
+### Controlled Calibration & Overconfidence Fix (March 17)
+- 1.25x global sigma widening (temporary, configurable)
+- ±25% calibration adjustment cap, 30-sample minimum threshold
+- Brier score, 1σ/2σ coverage, calibration curves, sigma evolution
+- Full sigma trace pipeline in signal explanations
+- Fixed non-temp sigma table bracket format mismatch
 
-### Performance by Weather Market Type (Complete — March 17, 2026)
-- `GET /api/analytics/weather-by-type`: PnL breakdown for temp/precip/snow/wind
-- Card-based UI with per-type realized/unrealized PnL, trade counts, win rates
+### Auto-Tuning Framework (March 17)
+- Disabled by default (`auto_tune_enabled=false`)
+- Computes recommended multiplier from coverage vs 68.27% target
+- Stepwise adjustments: 0.05 max change per step, capped 1.0-1.5x
+- Three modes: manual (operator), auto_pending (enabled but waiting), auto (active)
+- `GET /api/strategies/weather/calibration/auto-tune` — recommendation endpoint
+- `POST /api/strategies/weather/calibration/auto-tune/apply` — apply one step
+- UI: Split layout showing Current State vs Auto-Tune Recommendation
+
+### Performance by Weather Market Type (March 17)
+- `GET /api/analytics/weather-by-type` — PnL breakdown by temp/precip/snow/wind
+- Card-based UI with color-coded type cards
 
 ## Key Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
-| /api/analytics/summary | GET | Portfolio PnL, Sharpe |
+| /api/analytics/summary | GET | Portfolio PnL |
 | /api/analytics/strategies | GET | Per-strategy metrics |
 | /api/analytics/strategy-attribution | GET | Deep PnL breakdown |
 | /api/analytics/weather-by-type | GET | PnL by market type |
-| /api/positions/by-strategy | GET | Enriched positions |
-| /api/strategies/weather/health | GET | Weather health + sigma_pipeline |
+| /api/strategies/weather/health | GET | Weather health + sigma_pipeline + auto_tune |
 | /api/strategies/weather/calibration/metrics | GET | Brier, coverage, curves |
+| /api/strategies/weather/calibration/auto-tune | GET | Auto-tune recommendation |
+| /api/strategies/weather/calibration/auto-tune/apply | POST | Apply one step |
 | /api/strategies/weather-asymmetric/summary | GET | Asymmetric positions + PnL |
-| /api/admin/fix-resolver-trades | POST | Migrate trade strategy_ids |
 
 ## Prioritized Backlog
-
-### P1: Auto-Apply Sigma Recommendations
-- When calibration matures (≥30 samples), automatically update sigma from calibration data
-- Add toggle to enable/disable auto-apply
-
-### P2: Reduce Overconfidence Multiplier
-- As data accumulates and coverage approaches 68%, reduce multiplier toward 1.0
-
-### P3: Copy Trading Skeleton
-### P4: Manual Order Entry
-### P5: Live Trading Mode Integration
+### P1: Enable Auto-Tune (when 30+ samples collected)
+### P2: Copy Trading Skeleton
+### P3: Manual Order Entry
+### P4: Live Trading Mode Integration
