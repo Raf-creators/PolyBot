@@ -1011,6 +1011,43 @@ async def get_positions():
     return result
 
 
+
+import re as _re
+
+_WEATHER_Q_RE = _re.compile(
+    r"(?:highest|lowest)\s+temperature\s+in\s+(?P<city>[A-Za-z\s.'-]+?)\s+(?:be\s+)?(?P<bucket>\d+.*?)(?:\s+on|\s*\?)",
+    _re.IGNORECASE,
+)
+_SNIPER_Q_RE = _re.compile(
+    r"(?P<asset>Bitcoin|Ethereum|BTC|ETH)\s+(?P<direction>Up|Down)",
+    _re.IGNORECASE,
+)
+
+
+def _parse_weather_from_question(q: str) -> dict:
+    m = _WEATHER_Q_RE.search(q or "")
+    if m:
+        city = m.group("city").strip().rstrip(" be")
+        return {"station_id": city, "bucket_label": m.group("bucket").strip()}
+    # Simpler fallback: try to extract city from "temperature in <City>"
+    simple = _re.search(r"temperature\s+in\s+([A-Za-z\s.'-]+?)(?:\s+be|\s+will|\s*\?)", q or "", _re.IGNORECASE)
+    if simple:
+        return {"station_id": simple.group(1).strip().rstrip(" be"), "bucket_label": ""}
+    return {}
+
+
+def _parse_sniper_from_question(q: str) -> dict:
+    m = _SNIPER_Q_RE.search(q or "")
+    if m:
+        asset_norm = {"bitcoin": "BTC", "ethereum": "ETH", "btc": "BTC", "eth": "ETH"}
+        return {
+            "asset": asset_norm.get(m.group("asset").lower(), m.group("asset")),
+            "direction": m.group("direction").lower(),
+            "side": "buy_yes" if m.group("direction").lower() == "up" else "buy_no",
+        }
+    return {}
+
+
 @api_router.get("/positions/by-strategy")
 async def get_positions_by_strategy():
     """Strategy-filtered open positions with enriched metadata for dashboard display."""
@@ -1133,10 +1170,17 @@ async def get_positions_by_strategy():
         total_unrealized += d.get("unrealized_pnl", pos.unrealized_pnl)
 
         # Strategy-specific enrichment
-        if bucket == "weather" and pos.token_id in weather_exec_map:
-            d["weather"] = weather_exec_map[pos.token_id]
-        elif bucket == "crypto" and pos.token_id in sniper_exec_map:
-            d["sniper"] = sniper_exec_map[pos.token_id]
+        if bucket == "weather":
+            if pos.token_id in weather_exec_map:
+                d["weather"] = weather_exec_map[pos.token_id]
+            else:
+                # Fallback: parse city/bucket from market_question
+                d["weather"] = _parse_weather_from_question(d.get("market_question", ""))
+        elif bucket == "crypto":
+            if pos.token_id in sniper_exec_map:
+                d["sniper"] = sniper_exec_map[pos.token_id]
+            else:
+                d["sniper"] = _parse_sniper_from_question(d.get("market_question", ""))
 
         target = by_strategy.get(bucket, by_strategy["other"])
         target.append(d)

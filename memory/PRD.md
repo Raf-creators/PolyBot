@@ -1,106 +1,86 @@
 # Polymarket Edge OS — Product Requirements Document
 
 ## Original Problem Statement
-Full-stack Polymarket trading bot (FastAPI + React + MongoDB) on Railway with multiple strategies: Crypto Sniper, Weather Trader, Arb Scanner, Market Resolver.
+A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket paper trading with 3 strategies: crypto_sniper, weather_trader, arb_scanner. The user requested:
+1. Per-strategy analytics with realized/unrealized PnL tracking
+2. Strategy comparison UI
+3. Live-readiness controls (kill switch, max loss, max exposure)
+4. Dashboard upgrade to show open positions prominently
+5. Weather strategy upgrade (V2) for stronger alpha generation
 
 ## Architecture
 ```
-/app/backend/
-├── engine/
-│   ├── risk.py              # Per-strategy reserved slots (weather/crypto/arb)
-│   ├── core.py              # Engine core — fixed strategy status after start()
-│   ├── state.py             # In-memory state with strategy_id on positions
-│   ├── paper.py             # Paper adapter sets strategy_id
-│   └── strategies/
-│       ├── crypto_sniper.py # BTC/ETH crypto trading
-│       ├── weather_trader.py# Global weather trading (40+ cities)
-│       ├── weather_parser.py# Dynamic station discovery + Celsius support
-│       ├── weather_feeds.py # Gamma API global discovery
-│       ├── arb_scanner.py   # Multi-outcome + binary + cross-market arb
-│       └── arb_models.py
-├── services/
-│   ├── strategy_tracker.py  # Performance + watchdog (fixed 9999 bug)
-│   ├── telegram_notifier.py # [CRYPTO]/[WEATHER]/[ARB] format
-│   ├── market_resolver_service.py
-│   └── persistence.py
-├── server.py                # All endpoints
-└── models.py                # RiskConfig with per-strategy limits + sizing
-/app/frontend/src/
-├── pages/ (Overview, Arbitrage, Analytics, Sniper, Weather, etc.)
-├── hooks/ (useApi with arb diagnostics, signal quality, watchdog)
-├── state/ (dashboardStore with all diagnostic slices)
-└── components/ (HealthBadge supports 'active' status)
+/app
+├── backend/
+│   ├── engine/
+│   │   ├── risk.py           # Per-strategy position slots, live-readiness controls
+│   │   ├── state.py          # Global application state
+│   │   └── strategies/
+│   │       ├── arb_scanner.py    # Arbitrage strategy
+│   │       ├── crypto_sniper.py  # Crypto binary option sniper
+│   │       ├── sniper_models.py  # Sniper data models
+│   │       ├── weather_trader.py # Weather strategy
+│   │       ├── weather_feeds.py  # Weather data feeds
+│   │       ├── weather_parser.py # Market classification
+│   │       ├── weather_pricing.py # Probability modeling
+│   │       └── weather_models.py  # Weather data models
+│   ├── models.py             # Core data models
+│   ├── services/
+│   │   ├── strategy_tracker.py # Performance tracking + attribution
+│   │   └── telegram_notifier.py
+│   └── server.py             # FastAPI endpoints
+└── frontend/
+    └── src/
+        ├── hooks/useApi.js
+        ├── state/dashboardStore.js
+        └── pages/
+            ├── Weather.jsx   # Weather trading console
+            ├── Sniper.jsx    # Crypto sniper console
+            └── Analytics.jsx # Strategy comparison + controls
 ```
-
-## What's Implemented
-
-### Phase 1 (Sessions 1-4): Core Platform
-- Full trading engine with paper adapter
-- Multiple strategies, PnL tracking, analytics pipeline
-- WebSocket real-time data, Telegram notifications
-- Deployment diagnostics, state persistence
-
-### Phase 2 (Session 5): Production Optimizations
-1. Dashboard auto-refresh (5s polling + WS trade_closed)
-2. Arb scanner: multi-outcome detection (67 groups, 575+ raw edges)
-3. Weather global expansion (40+ cities: London, Tokyo, Seoul, Paris, etc.)
-4. Signal quality + rejection visibility API + UI
-5. Market freshness filter (120s staleness, 500bps spread, 25% liquidity)
-6. Discovery watchdog with Telegram alerts
-
-### Phase 3 (Session 6): Strategy Isolation & Refinement
-1. **Per-strategy reserved slots**: weather=25, crypto=20, arb=20, global=65
-   - Each strategy has RESERVED capacity
-   - Arb bypasses global limit when it has headroom
-   - No strategy can block another
-2. **Duration prioritization**: estimate_time_to_resolution() scoring
-   - Short-duration markets preferred for faster capital turnover
-3. **Capital allocation per strategy**: crypto=$5, weather=$3, arb=$2
-   - Configurable via risk config, exposed in API + UI
-4. **Telegram format fix**: [CRYPTO]/[WEATHER]/[ARB] labels
-   - Consistent format: Market, Side, Entry, Exit, PnL, ROI, Time
-5. **Watchdog bug fix**: No more 9999 values
-   - None for unrecorded events, per-condition dedup, uptime tracking
-6. **Arb priority execution**: Reserved 20 slots
-   - Arb headroom=15 while global headroom=0 (confirmed working)
-7. **Overview status fix**: Strategies show "active" not "stopped"
 
 ## Key API Endpoints
-- `GET /api/status` — Engine + strategy status (active/stopped)
-- `GET /api/analytics/strategy-tracker` — Full diagnostics
-- `GET /api/analytics/signal-quality` — Per-strategy rejection breakdown
-- `GET /api/analytics/watchdog` — Activity timestamps + uptime
-- `GET /api/strategies/arb/diagnostics` — Raw edges, rejection log, multi-outcome
-- `GET /api/strategies/weather/health` — Global classification stats
-- `PUT /api/config` — Live risk config modification
+- `GET /api/positions/by-strategy` — Strategy-filtered positions with enriched metadata, summaries
+- `GET /api/analytics/strategy-attribution` — Per-strategy PnL attribution
+- `GET /api/controls` — Live-readiness controls (kill switch, limits)
+- `GET /api/diagnostics` — Runtime diagnostics
+- `GET /api/config/strategies` — Strategy config/status
 
-## Risk Config (Current Production)
-```json
-{
-  "max_concurrent_positions": 65,
-  "max_weather_positions": 25,
-  "max_crypto_positions": 20,
-  "max_arb_positions": 20,
-  "crypto_position_size": 5.0,
-  "weather_position_size": 3.0,
-  "arb_position_size": 2.0,
-  "min_market_freshness_seconds": 120,
-  "max_spread_bps": 500,
-  "max_size_to_liquidity_ratio": 0.25
-}
-```
+## What's Been Implemented
 
-## Testing Status
-- iteration_42: 29/29 backend, all frontend — 100%
-- iteration_43: 17/17 backend, all frontend — 100%
+### Phase 1-4 (Prior sessions)
+- Core trading engine with 3 strategies
+- WebSocket real-time updates
+- Telegram notifications
+- Strategy isolation with reserved position slots
+- Per-strategy analytics (attribution endpoint)
+- Live-readiness controls (max daily loss, exposure, kill switch)
+- PAPER MODE indicator
 
-## P1 Backlog
-- Reduce weather classification failures (26 remaining global markets)
-- Advanced duration scoring integration with signal selection
-- Copy Trading skeleton (backend models + API)
-- Manual Order Entry (UI + API)
+### Phase 5 — Open Positions Visibility (Current session, 2026-03-17)
+- **NEW endpoint** `GET /api/positions/by-strategy` — returns positions grouped by weather/crypto/arb with:
+  - Market enrichment (current mark, hours to resolution, unrealized PnL %)
+  - Weather enrichment (city, bucket parsed from market question)
+  - Sniper enrichment (asset, direction, side parsed from market question)
+  - Strategy summaries with realized/unrealized/total PnL
+- **Weather page rewrite** — Open Positions (54) as primary tab with city, bucket, entry, mark, unrealized PnL. PnL summary bar. Tabs: Positions > Signals > Executions > Rejected > Forecasts > Calibration > Health
+- **Sniper page rewrite** — Open Positions (11) as primary tab with asset, side, entry, mark, unrealized PnL. Same PnL bar. Tabs: Positions > Signals > Rejected > Executions > Health
+- **Analytics update** — Strategy Comparison cards show Total/Realized/Unrealized breakdown using live mark-to-market data. Removed RESOLVER bucket, shows CRYPTO/WEATHER/ARB only
+- **Dashboard cleanup** — Focused stat cards (Open Positions, Tradable Signals, Executed, Filled, Coverage, Latency). De-emphasized low-value metrics into Health tab
 
-## P2 Future
+## Prioritized Backlog
+
+### P0 — Weather Strategy V2 (Phase 3, incremental)
+1. Expand parser for precipitation/snow/wind contracts
+2. Multi-source weather feeds (OpenWeatherMap secondary)
+3. Improved probability modeling for non-temperature contracts
+4. Better signal filtering with configurable thresholds
+5. Self-improvement loop via calibration integration
+6. Explanation layer on every signal/execution
+
+### P1 — Future
+- Copy Trading skeleton
+- Manual Order Entry
 - Live trading mode integration
-- Position force-close feature for stale positions
+- Position force-close for stale positions
 - Advanced portfolio rebalancing
