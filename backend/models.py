@@ -134,9 +134,10 @@ class RiskConfig(BaseModel):
     max_loss_per_strategy: float = 50.0
     max_position_size: float = 25.0
     max_market_exposure: float = 150.0
-    max_concurrent_positions: int = 55          # global safety cap
-    max_weather_positions: int = 25             # per-strategy bucket
-    max_nonweather_positions: int = 25          # crypto + arb bucket
+    max_concurrent_positions: int = 65          # global safety cap
+    max_weather_positions: int = 25             # weather reserved slots
+    max_crypto_positions: int = 20              # crypto sniper reserved slots
+    max_arb_positions: int = 20                 # arb scanner reserved slots
     max_order_size: float = 10.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0
@@ -144,6 +145,10 @@ class RiskConfig(BaseModel):
     min_market_freshness_seconds: int = 120     # reject markets older than this
     max_spread_bps: float = 500.0               # reject if bid-ask spread > 5%
     max_size_to_liquidity_ratio: float = 0.25   # reject if order > 25% of book depth
+    # Per-strategy position sizing
+    crypto_position_size: float = 5.0
+    weather_position_size: float = 3.0
+    arb_position_size: float = 2.0
 
 
 class StrategyConfig(BaseModel):

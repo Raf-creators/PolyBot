@@ -531,7 +531,8 @@ class ArbScanner(BaseStrategy):
             logger.warning("No execution context; skipping arb")
             return
 
-        size = opp.recommended_size
+        # Use risk-engine-configured arb position size
+        size = self._risk_engine.get_strategy_position_size(self.strategy_id) if self._risk_engine else opp.recommended_size
 
         yes_order = OrderRecord(
             token_id=opp.yes_token_id,

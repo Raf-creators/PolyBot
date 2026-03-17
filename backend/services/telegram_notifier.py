@@ -1,10 +1,14 @@
-"""Telegram notification service for Polymarket Edge OS.
+"""Telegram notification service — all strategies, clear formatting.
 
-Sends alerts for ALL trade closures across ALL strategies:
-- crypto_sniper
-- weather_trader
-- arb_scanner
-- resolver (market resolution)
+Format every closed trade as:
+[CRYPTO] / [WEATHER] / [ARB]
+Market: ...
+Side: YES/NO
+Entry: X
+Exit: X
+PnL: $X
+ROI: X%
+Time: X
 """
 
 import asyncio
@@ -21,6 +25,26 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 MAX_MSGS_PER_MINUTE = 20
 
+# Map strategy IDs and keywords to short labels
+_STRATEGY_LABELS = {
+    "crypto_sniper": "CRYPTO",
+    "weather_trader": "WEATHER",
+    "arb_scanner": "ARB",
+    "resolver": "RESOLVER",
+}
+
+_WEATHER_KW = ("temperature", "highest temp", "weather", "°f", "°c")
+_CRYPTO_KW = ("btc", "bitcoin", "eth", "ethereum", "up or down")
+
+
+def _label_from_question(q: str) -> str:
+    ql = q.lower()
+    if any(kw in ql for kw in _WEATHER_KW):
+        return "WEATHER"
+    if any(kw in ql for kw in _CRYPTO_KW):
+        return "CRYPTO"
+    return "UNKNOWN"
+
 
 class TelegramNotifier:
     def __init__(self):
@@ -34,7 +58,6 @@ class TelegramNotifier:
         self._send_times: list = []
         self._total_sent = 0
         self._total_failed = 0
-        self._last_trade_count = 0  # track trades to detect new closes
 
     @property
     def configured(self) -> bool:
@@ -71,11 +94,8 @@ class TelegramNotifier:
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
         bus.on(EventType.SYSTEM_EVENT, self._on_system_event)
 
-        # Initialize trade count so we don't re-send for loaded trades
-        self._last_trade_count = len(state.trades) if state else 0
-
         status = "enabled" if self.configured else "disabled (no credentials)"
-        logger.info(f"Telegram notifier started [{status}] — all-strategy alerts")
+        logger.info(f"Telegram notifier started [{status}]")
 
     async def stop(self):
         if self._bus:
@@ -84,7 +104,6 @@ class TelegramNotifier:
             self._bus.off(EventType.SYSTEM_EVENT, self._on_system_event)
         if self._client:
             await self._client.aclose()
-        logger.info("Telegram notifier stopped")
 
     # ---- Rate limiter ----
 
@@ -99,7 +118,7 @@ class TelegramNotifier:
         if not self.configured:
             return False
         if not self._rate_ok():
-            logger.warning("Telegram rate limit hit, dropping message")
+            logger.warning("Telegram rate limit hit")
             return False
 
         url = TELEGRAM_API.format(token=self._token)
@@ -117,7 +136,7 @@ class TelegramNotifier:
                 self._total_sent += 1
                 return True
             else:
-                logger.warning(f"Telegram API error {resp.status_code}: {resp.text[:200]}")
+                logger.warning(f"Telegram API {resp.status_code}")
                 self._total_failed += 1
                 return False
         except Exception as e:
@@ -131,14 +150,12 @@ class TelegramNotifier:
     # ---- Event Handlers ----
 
     async def _on_order_update(self, event):
-        """React to 'closed' status from any strategy."""
         if not self.enabled:
             return
         if event.data.get("status") == "closed":
             self._send_trade_closed(event.data)
 
     async def _on_system_event(self, event):
-        """Handle resolver-generated closes — send per-trade notifications."""
         if not self.enabled:
             return
         if event.source == "market_resolver" and event.data.get("action") == "positions_resolved":
@@ -146,34 +163,40 @@ class TelegramNotifier:
             if count > 0:
                 self._send_resolver_trades(count)
 
-    def _send_trade_closed(self, data: dict):
-        order_id = data.get("order_id", "?")
-        trade = self._find_trade(order_id)
+    # ---- Trade Close Notifications ----
 
-        strategy = (data.get("strategy_id") or "unknown").replace("_", " ").upper()
-        market = (data.get("market_question") or order_id[:16])[:60]
-        side = data.get("side", "?")
-        outcome = data.get("outcome", side)
+    def _resolve_label(self, strategy_id: str, market_question: str) -> str:
+        """Get [CRYPTO] / [WEATHER] / [ARB] label."""
+        label = _STRATEGY_LABELS.get(strategy_id or "")
+        if label and label != "RESOLVER":
+            return label
+        # For resolver or unknown, infer from question
+        return _label_from_question(market_question or "")
+
+    def _send_trade_closed(self, data: dict):
+        trade = self._find_trade(data.get("order_id", ""))
+
+        strategy_id = data.get("strategy_id") or ""
+        market = (data.get("market_question") or "")[:80]
+        outcome = data.get("outcome", data.get("side", "?"))
         entry_price = data.get("entry_price", 0)
         exit_price = data.get("exit_price", data.get("fill_price", 0))
         pnl = data.get("pnl", 0)
         size = data.get("size", 1)
 
         if trade:
-            strategy = (trade.strategy_id or "unknown").replace("_", " ").upper()
-            market = (trade.market_question or order_id[:16])[:60]
+            strategy_id = trade.strategy_id or strategy_id
+            market = (trade.market_question or market)[:80]
             outcome = trade.outcome or trade.side.value
-            if not entry_price:
-                entry_price = trade.price
-            if not exit_price:
-                exit_price = trade.price
+            entry_price = entry_price or trade.price
+            exit_price = exit_price or trade.price
             pnl = trade.pnl if trade.pnl else pnl
             size = trade.size
 
-        self._send_formatted_close(strategy, market, outcome, entry_price, exit_price, pnl, size)
+        label = self._resolve_label(strategy_id, market)
+        self._send_formatted(label, market, outcome, entry_price, exit_price, pnl, size)
 
     def _send_resolver_trades(self, count: int):
-        """Send individual Telegram messages for each resolver trade."""
         if not self._state:
             return
 
@@ -185,35 +208,18 @@ class TelegramNotifier:
                     break
 
         for t in resolver_trades:
-            # Determine the original strategy that opened this position
-            # The resolver trade's signal_reason contains the winning outcome
-            strategy = "RESOLVER"
-            market = (t.market_question or "?")[:60]
-
-            # Infer original strategy from market question
-            q = (t.market_question or "").lower()
-            if any(kw in q for kw in ("temperature", "highest temp", "weather", "°f")):
-                strategy = "WEATHER TRADER"
-            elif any(kw in q for kw in ("btc", "bitcoin", "eth", "ethereum", "up or down")):
-                strategy = "CRYPTO SNIPER"
-            elif "arb" in q:
-                strategy = "ARB SCANNER"
-
+            market = (t.market_question or "?")[:80]
+            label = self._resolve_label("resolver", market)
             outcome = t.outcome or "?"
-            entry_price = 0
-            exit_price = t.price  # settlement price (0 or 1)
+            exit_price = t.price
             pnl = t.pnl or 0
             size = t.size
+            entry_price = round(exit_price - (pnl / size), 4) if size else 0
+            self._send_formatted(label, market, outcome, entry_price, exit_price, pnl, size)
 
-            # Try to reconstruct entry price from PnL
-            if size > 0 and exit_price is not None:
-                entry_price = round(exit_price - (pnl / size), 4) if size != 0 else 0
-
-            self._send_formatted_close(strategy, market, outcome, entry_price, exit_price, pnl, size)
-
-    def _send_formatted_close(self, strategy, market, outcome, entry_price, exit_price, pnl, size):
-        """Send a consistently formatted trade close notification."""
-        cost = entry_price * size if entry_price and size else 0
+    def _send_formatted(self, label, market, outcome, entry_price, exit_price, pnl, size):
+        """Structured Telegram message with clear strategy label."""
+        cost = abs(entry_price * size) if entry_price and size else 0
         roi = (pnl / cost * 100) if cost > 0 else 0
         pnl_sign = "+" if pnl >= 0 else ""
         roi_sign = "+" if roi >= 0 else ""
@@ -221,8 +227,8 @@ class TelegramNotifier:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         text = (
-            f"<b>TRADE CLOSED {emoji}</b>\n"
-            f"Strategy: {strategy}\n"
+            f"<b>[{label}] TRADE CLOSED {emoji}</b>\n"
+            f"\n"
             f"Market: {market}\n"
             f"Side: {outcome}\n"
             f"Entry: {entry_price:.4f}\n"

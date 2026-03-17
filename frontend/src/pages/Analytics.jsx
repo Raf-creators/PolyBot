@@ -365,46 +365,33 @@ function SignalQualitySection({ signalQuality, strategyTracker }) {
       {/* Position Slots */}
       {stSlots.by_strategy && (
         <SectionCard title="Position Slots" testId="section-position-slots">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-            <div className="space-y-2">
-              <div className="text-zinc-500 font-medium">Weather Bucket</div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Active</span>
-                <span className="text-zinc-300 font-mono">{stSlots.weather_count || 0} / {stSlots.limits?.max_weather || '—'}</span>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+            {[
+              { name: 'Weather', count: stSlots.weather_count, limit: stSlots.limits?.max_weather, headroom: stSlots.headroom?.weather, size: stSlots.sizing?.weather },
+              { name: 'Crypto', count: stSlots.crypto_count, limit: stSlots.limits?.max_crypto, headroom: stSlots.headroom?.crypto, size: stSlots.sizing?.crypto },
+              { name: 'Arb', count: stSlots.arb_count, limit: stSlots.limits?.max_arb, headroom: stSlots.headroom?.arb, size: stSlots.sizing?.arb },
+              { name: 'Global', count: stSlots.total, limit: stSlots.limits?.max_global, headroom: stSlots.headroom?.global, size: null },
+            ].map((b) => (
+              <div key={b.name} className="space-y-2">
+                <div className="text-zinc-500 font-medium">{b.name}</div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Active</span>
+                  <span className="text-zinc-300 font-mono">{b.count || 0} / {b.limit ?? '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Headroom</span>
+                  <span className={`font-mono ${(b.headroom || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {b.headroom || 0}
+                  </span>
+                </div>
+                {b.size != null && (
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Size</span>
+                    <span className="text-zinc-300 font-mono">${b.size}</span>
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Headroom</span>
-                <span className={`font-mono ${(stSlots.headroom?.weather || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {stSlots.headroom?.weather || 0}
-                </span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-zinc-500 font-medium">Non-Weather Bucket</div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Active</span>
-                <span className="text-zinc-300 font-mono">{stSlots.nonweather_count || 0} / {stSlots.limits?.max_nonweather || '—'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Headroom</span>
-                <span className={`font-mono ${(stSlots.headroom?.nonweather || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {stSlots.headroom?.nonweather || 0}
-                </span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="text-zinc-500 font-medium">Global</div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Total</span>
-                <span className="text-zinc-300 font-mono">{stSlots.total || 0} / {stSlots.limits?.max_global || '—'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Headroom</span>
-                <span className={`font-mono ${(stSlots.headroom?.global || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {stSlots.headroom?.global || 0}
-                </span>
-              </div>
-            </div>
+            ))}
           </div>
           {stSlots.by_strategy && Object.keys(stSlots.by_strategy).length > 0 && (
             <div className="mt-4 pt-3 border-t border-zinc-800">

@@ -475,25 +475,26 @@ async def get_strategy_tracker():
     if engine and engine.risk_engine:
         data["position_slots"] = engine.risk_engine.get_slot_diagnostics()
     elif state:
-        from engine.risk import _is_weather_position
-        weather_count = 0
-        nonweather_count = 0
+        from engine.risk import classify_strategy
+        counts = {"weather": 0, "crypto": 0, "arb": 0, "unknown": 0}
         by_strategy = {}
         for pos in state.positions.values():
             sid = getattr(pos, "strategy_id", "unknown") or "unknown"
             by_strategy[sid] = by_strategy.get(sid, 0) + 1
-            if _is_weather_position(pos):
-                weather_count += 1
-            else:
-                nonweather_count += 1
+            bucket = classify_strategy(pos)
+            counts[bucket] = counts.get(bucket, 0) + 1
+        total = sum(counts.values())
         data["position_slots"] = {
-            "weather_count": weather_count,
-            "nonweather_count": nonweather_count,
-            "total": weather_count + nonweather_count,
+            "weather_count": counts["weather"],
+            "crypto_count": counts["crypto"],
+            "arb_count": counts["arb"],
+            "unknown_count": counts.get("unknown", 0),
+            "total": total,
             "by_strategy": by_strategy,
             "limits": {
                 "max_weather": state.risk_config.max_weather_positions,
-                "max_nonweather": state.risk_config.max_nonweather_positions,
+                "max_crypto": state.risk_config.max_crypto_positions,
+                "max_arb": state.risk_config.max_arb_positions,
                 "max_global": state.risk_config.max_concurrent_positions,
             },
         }

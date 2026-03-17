@@ -17,6 +17,7 @@ export const NAV_ITEMS = [
 
 export const ENGINE_STATUS_COLORS = {
   running: 'text-emerald-400',
+  active: 'text-emerald-400',
   stopped: 'text-zinc-500',
   starting: 'text-amber-400',
   stopping: 'text-amber-400',

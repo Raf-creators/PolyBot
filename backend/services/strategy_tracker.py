@@ -7,7 +7,6 @@ drops below thresholds.
 
 import asyncio
 import logging
-import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -34,14 +33,15 @@ class StrategyTracker:
             "last_trade_at": None,
         })
 
-        # Signal rejection tracking (per-strategy -> reason -> count)
+        # Signal rejection tracking
         self._rejections = defaultdict(lambda: defaultdict(int))
-        self._rejection_log = []  # last 200 detailed entries
+        self._rejection_log = []
 
-        # Signals generated per strategy
+        # Signals per strategy
         self._signals = defaultdict(int)
 
-        # Discovery watchdog
+        # Discovery watchdog — timestamps initialised to None,
+        # populated on first event; watchdog ignores None timestamps
         self._watchdog = {
             "last_new_market_at": None,
             "last_trade_opened_at": None,
@@ -49,22 +49,25 @@ class StrategyTracker:
             "no_market_alert_minutes": 30,
             "no_trade_open_alert_minutes": 60,
             "no_trade_close_alert_minutes": 120,
-            "last_alert_sent_at": None,
         }
+
+        # Per-condition dedup: condition → last_alert_time
+        self._alert_dedup = {}
         self._watchdog_task = None
+        self._started_at = None
 
     async def start(self, state, bus, telegram=None):
         self._state = state
         self._bus = bus
         self._telegram = telegram
         self._running = True
+        self._started_at = datetime.now(timezone.utc)
         self._watchdog_task = asyncio.create_task(self._watchdog_loop())
 
         bus.on(EventType.SIGNAL, self._on_signal)
         bus.on(EventType.RISK_ALERT, self._on_risk_alert)
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
 
-        # Rebuild from existing state
         self._rebuild_from_state()
         logger.info("StrategyTracker started with watchdog")
 
@@ -83,7 +86,6 @@ class StrategyTracker:
         logger.info("StrategyTracker stopped")
 
     def _rebuild_from_state(self):
-        """Reconstruct performance counters from existing trades in state."""
         if not self._state:
             return
         for trade in self._state.trades:
@@ -95,7 +97,7 @@ class StrategyTracker:
             elif trade.pnl < 0:
                 self._performance[sid]["losses"] += 1
 
-    # ---- Public Recording API ----
+    # ---- Recording API ----
 
     def record_signal(self, strategy_id: str, accepted: bool = True, rejection_reason: str = None):
         self._signals[strategy_id] += 1
@@ -142,7 +144,6 @@ class StrategyTracker:
     async def _on_risk_alert(self, event: Event):
         reason = event.data.get("reason", "unknown")
         order_id = event.data.get("order_id", "")
-        # Try to identify strategy from the rejected order
         strategy = "unknown"
         if self._state and order_id in self._state.orders:
             strategy = self._state.orders[order_id].strategy_id or "unknown"
@@ -155,7 +156,7 @@ class StrategyTracker:
     # ---- Discovery Watchdog ----
 
     async def _watchdog_loop(self):
-        await asyncio.sleep(60)  # initial settling
+        await asyncio.sleep(120)  # wait 2 min after start before first check
         while self._running:
             try:
                 await self._check_watchdog()
@@ -163,43 +164,62 @@ class StrategyTracker:
                 break
             except Exception as e:
                 logger.error(f"Watchdog error: {e}")
-            await asyncio.sleep(300)  # check every 5 mins
+            await asyncio.sleep(300)  # check every 5 min
 
     async def _check_watchdog(self):
         now = datetime.now(timezone.utc)
         alerts = []
 
         def _minutes_since(iso_str):
+            """Returns minutes since timestamp, or None if not yet recorded."""
             if not iso_str:
-                return 9999  # never happened
+                return None
             try:
-                ts = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+                ts = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
                 return (now - ts).total_seconds() / 60
             except Exception:
-                return 9999
+                return None
 
-        no_market_mins = _minutes_since(self._watchdog["last_new_market_at"])
-        no_open_mins = _minutes_since(self._watchdog["last_trade_opened_at"])
-        no_close_mins = _minutes_since(self._watchdog["last_trade_closed_at"])
+        checks = [
+            ("no_markets", self._watchdog["last_new_market_at"],
+             self._watchdog["no_market_alert_minutes"],
+             "No new markets discovered"),
+            ("no_trade_open", self._watchdog["last_trade_opened_at"],
+             self._watchdog["no_trade_open_alert_minutes"],
+             "No trades opened"),
+            ("no_trade_close", self._watchdog["last_trade_closed_at"],
+             self._watchdog["no_trade_close_alert_minutes"],
+             "No trades closed"),
+        ]
 
-        if no_market_mins > self._watchdog["no_market_alert_minutes"]:
-            alerts.append(f"No new markets discovered in {no_market_mins:.0f} minutes")
-        if no_open_mins > self._watchdog["no_trade_open_alert_minutes"]:
-            alerts.append(f"No trades opened in {no_open_mins:.0f} minutes")
-        if no_close_mins > self._watchdog["no_trade_close_alert_minutes"]:
-            alerts.append(f"No trades closed in {no_close_mins:.0f} minutes")
+        for condition_key, ts_str, threshold, message in checks:
+            mins = _minutes_since(ts_str)
+
+            # Skip if never recorded AND service started < threshold minutes ago
+            if mins is None:
+                uptime_mins = (now - self._started_at).total_seconds() / 60 if self._started_at else 0
+                if uptime_mins < threshold:
+                    continue  # too early to alert
+                mins = uptime_mins  # use uptime as elapsed time
+
+            if mins <= threshold:
+                # Condition cleared — reset dedup so next breach triggers alert
+                self._alert_dedup.pop(condition_key, None)
+                continue
+
+            # Check dedup — only alert once per condition until it clears
+            last_alert = self._alert_dedup.get(condition_key)
+            if last_alert:
+                since_last = (now - last_alert).total_seconds() / 60
+                if since_last < 30:  # don't re-alert within 30 min
+                    continue
+
+            alerts.append(f"{message} in {mins:.0f} min (threshold: {threshold} min)")
+            self._alert_dedup[condition_key] = now
 
         if alerts and self._telegram and self._telegram.enabled:
-            # Only alert every 30 minutes max
-            last = self._watchdog.get("last_alert_sent_at")
-            if last:
-                mins_since_last = _minutes_since(last)
-                if mins_since_last < 30:
-                    return
-
             text = "<b>WATCHDOG ALERT</b>\n" + "\n".join(f"- {a}" for a in alerts)
             await self._telegram.send_message(text)
-            self._watchdog["last_alert_sent_at"] = now.isoformat()
             logger.warning(f"Watchdog alerts: {alerts}")
 
     # ---- Data Access ----
@@ -223,10 +243,7 @@ class StrategyTracker:
         return result
 
     def get_rejections(self) -> dict:
-        result = {}
-        for sid, reasons in self._rejections.items():
-            result[sid] = dict(reasons)
-        return result
+        return {sid: dict(reasons) for sid, reasons in self._rejections.items()}
 
     def get_rejection_log(self, limit: int = 50) -> list:
         return self._rejection_log[-limit:]
@@ -241,7 +258,7 @@ class StrategyTracker:
             if not iso_str:
                 return None
             try:
-                ts = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+                ts = datetime.fromisoformat(str(iso_str).replace("Z", "+00:00"))
                 return round((now - ts).total_seconds() / 60, 1)
             except Exception:
                 return None
@@ -258,10 +275,10 @@ class StrategyTracker:
                 "no_trade_open_alert_minutes": self._watchdog["no_trade_open_alert_minutes"],
                 "no_trade_close_alert_minutes": self._watchdog["no_trade_close_alert_minutes"],
             },
+            "uptime_minutes": round((now - self._started_at).total_seconds() / 60, 1) if self._started_at else 0,
         }
 
     def get_signal_quality(self) -> dict:
-        """Full signal quality report: generated, rejected, by reason."""
         result = {}
         all_strategies = set(list(self._signals.keys()) + list(self._rejections.keys()))
         for sid in all_strategies:

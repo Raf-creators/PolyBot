@@ -86,6 +86,8 @@ class TradingEngine:
                     if hasattr(strategy, 'set_execution_context'):
                         strategy.set_execution_context(self.risk_engine, self.execution_engine)
                     self.state.update_component(strategy.name, "running")
+                    # Refresh stored config so status endpoint reflects running state
+                    self.state.strategies[strategy.strategy_id] = strategy.get_config()
                 else:
                     self.state.register_component(strategy.name, "disabled")
 
