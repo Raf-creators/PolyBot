@@ -1,13 +1,7 @@
 # Polymarket Edge OS — Product Requirements Document
 
 ## Original Problem Statement
-A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket paper trading with 3 strategies: crypto_sniper, weather_trader, arb_scanner. The user requested:
-1. Per-strategy analytics with realized/unrealized PnL tracking
-2. Strategy comparison UI
-3. Live-readiness controls (kill switch, max loss, max exposure)
-4. Dashboard upgrade to show open positions prominently
-5. Weather strategy upgrade (V2) for stronger alpha generation
-6. Stricter trade filtering for higher-quality weather trades
+A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket paper trading with 3 strategies: crypto_sniper, weather_trader, arb_scanner. Ongoing incremental upgrades to improve weather strategy alpha quality and dashboard observability for paper testing.
 
 ## Architecture
 ```
@@ -17,35 +11,24 @@ A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket pa
 │   │   ├── risk.py
 │   │   ├── state.py
 │   │   └── strategies/
-│   │       ├── arb_scanner.py
-│   │       ├── crypto_sniper.py
-│   │       ├── sniper_models.py
-│   │       ├── weather_trader.py  # MODIFIED: edge-sorted execution, position cap check
-│   │       ├── weather_feeds.py
-│   │       ├── weather_parser.py
-│   │       ├── weather_pricing.py
-│   │       └── weather_models.py  # MODIFIED: stricter thresholds, max_weather_positions
+│   │       ├── weather_trader.py  # Signal sorting by quality_score, position cap, thesis builder
+│   │       ├── weather_models.py  # WeatherSignal: explanation dict, quality_score float
+│   │       ├── weather_feeds.py, weather_parser.py, weather_pricing.py
+│   │       ├── crypto_sniper.py, sniper_models.py
+│   │       └── arb_scanner.py
 │   ├── models.py
-│   ├── services/
-│   │   ├── strategy_tracker.py
-│   │   └── telegram_notifier.py
-│   └── server.py                  # MODIFIED: positions/by-strategy endpoint, question parsers
-└── frontend/
-    └── src/
-        ├── hooks/useApi.js        # MODIFIED: fetchStrategyPositions
-        ├── state/dashboardStore.js # MODIFIED: strategyPositions slice
-        └── pages/
-            ├── Weather.jsx        # REWRITTEN: open positions + cleaner layout
-            ├── Sniper.jsx         # REWRITTEN: open positions + cleaner layout
-            └── Analytics.jsx      # MODIFIED: merged PnL data, 3 strategy cards
+│   ├── services/ (strategy_tracker.py, telegram_notifier.py, config_service.py)
+│   └── server.py               # /positions/by-strategy, /positions/weather/breakdown
+└── frontend/src/
+    ├── hooks/useApi.js, state/dashboardStore.js
+    └── pages/ (Weather.jsx, Sniper.jsx, Analytics.jsx)
 ```
 
 ## Key Config (Weather Strategy)
-- min_edge_bps: 500 (5% minimum edge, was 300/3%)
-- min_confidence: 0.55 (55% floor, was 0.40)
-- max_weather_positions: 25 (hard cap, new)
-- max_concurrent_signals: 8
-- Signal execution: sorted by edge descending (highest quality first)
+- min_edge_bps: 500 (5% minimum edge)
+- min_confidence: 0.55 (55% floor)
+- max_weather_positions: 25 (hard cap)
+- Signal execution: sorted by quality_score descending
 
 ## What's Been Implemented
 
@@ -53,25 +36,31 @@ A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket pa
 - Core trading engine, WebSocket, Telegram, strategy isolation, attribution, live-readiness controls
 
 ### Phase 5 — Open Positions & Dashboard (2026-03-17)
-- New endpoint GET /api/positions/by-strategy with enriched metadata
-- Weather/Sniper pages rewritten with Open Positions as primary tab
-- Analytics strategy comparison updated with merged mark-to-market data
+- GET /api/positions/by-strategy with enriched metadata (city, bucket, asset, side parsing)
+- Weather/Sniper pages rewritten with Open Positions as primary tab, PnL bars
+- Analytics strategy comparison with merged mark-to-market data
 
 ### Phase 6 — Overtrading Filter (2026-03-17)
-- min_edge_bps raised 300→500 (71 rejections at 500bps threshold in first scan)
-- min_confidence raised 0.40→0.55
-- max_weather_positions=25 hard cap (blocks new trades when 54 positions open)
-- Signals sorted by edge descending before execution (highest quality first)
-- Persisted to MongoDB config, visible in Health tab UI
+- Raised min_edge 300→500, min_confidence 0.40→0.55
+- max_weather_positions=25 hard cap
+- Signals sorted by quality_score descending (highest quality first)
+
+### Phase 7 — Explanation Layer & Quality Score (2026-03-17)
+- **Explanation layer**: Every signal (tradable + rejected) carries structured explanation dict:
+  - market, location, contract_type, bucket, forecast_summary, model_probability, market_price, edge, confidence, liquidity_score, quality_score, thesis (tradable), rejection_reason (rejected)
+- **Signal Quality Score**: Composite 0-1 metric = edge(50%) + confidence(30%) + liquidity(20%)
+- **Best Signal per Scan**: Tracked in health endpoint with station, date, bucket, edge, quality, thesis
+- **Thesis Builder**: Human-readable explanation of why a contract is mispriced
+- **Position Breakdown**: GET /api/positions/weather/breakdown — by resolution date, biggest winners/losers, oldest open, stale positions
+- **UI**: BEST SIGNAL banner on Signals tab, Quality/Thesis columns, color-coded rejection reasons, Context column, Position Breakdown section
 
 ## Prioritized Backlog
 
-### P0 — Weather Strategy V2 (incremental)
+### P0 — Weather Strategy V2 (incremental, next steps)
 1. Expand parser for precipitation/snow/wind contracts
-2. Multi-source weather feeds (OpenWeatherMap secondary)
-3. Improved probability modeling for non-temperature contracts
-4. Self-improvement loop via calibration integration
-5. Explanation layer on every signal/execution
+2. Improve probability modeling for non-temperature contracts
+3. Self-improvement loop: use resolved outcomes to adjust source weighting and sigma
+4. Multi-source weather feeds (OpenWeatherMap as secondary)
 
 ### P1 — Future
 - Copy Trading skeleton
