@@ -1,84 +1,77 @@
 # Polymarket Edge OS — Product Requirements
 
 ## Problem Statement
-A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes paper trades across crypto, weather, and arbitrage strategies. The bot runs on Railway with Telegram notifications and a real-time dashboard.
+A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes paper trades across crypto, weather, and arbitrage strategies with real-time dashboards.
 
 ## Architecture
 - **Backend**: FastAPI (port 8001), Motor/MongoDB
-- **Frontend**: React (port 3000), Recharts, Shadcn UI
+- **Frontend**: React (port 3000), Shadcn UI
 - **DB**: MongoDB (`test_database`)
 - **Strategies**: `crypto_sniper`, `weather_trader`, `weather_asymmetric`, `arb_scanner`
 - **3rd Party**: Polymarket Gamma/CLOB APIs, Open-Meteo, Telegram
 
-## What's Been Implemented
+## Completed Work
 
-### Core Infrastructure (Complete)
-- Engine with paper trading adapter
-- Market discovery, price feeds (Binance WS, Polymarket CLOB WS)
+### Core Infrastructure
+- Engine with paper trading adapter, market discovery, price feeds
 - Position/trade persistence to MongoDB
-- Telegram notifications for signals/trades
-- Risk management with kill switch
+- Telegram notifications, risk management
 
-### Phase 1-2: Dashboard Overhaul (Complete)
-- `GET /api/positions/by-strategy` — enriched position data
-- `GET /api/weather/positions-breakdown` — weather position age/PnL breakdown
-- Rewrote Analytics, Weather, Sniper pages for open positions + PnL breakdown
+### Dashboard Overhaul (Complete)
+- Open positions with enriched strategy metadata
+- Realized vs Unrealized PnL breakdown
 
-### Weather V2 Features (Complete)
-- **Overtrading Filter**: min_edge=500bps, min_confidence=0.55, max_weather_positions cap
-- **Explanation Layer**: Human-readable thesis + quality score per signal
-- **Multi-Market Types**: Temperature, precipitation, snowfall, wind markets
+### Weather V2 Strategy (Complete)
+- Overtrading filter (min_edge=500bps, min_confidence=0.55, position cap)
+- Explanation layer & quality score per signal
+- Multi-market types: temperature, precipitation, snowfall, wind
+- Celsius market support
 
 ### Realized PnL Fix (Complete — March 17, 2026)
-- **Paper adapter** now sets `pnl` on sell trades: `(fill_price - avg_cost) * size`
-- **Market resolver** uses original position's `strategy_id` instead of "resolver"
-- **Migration endpoint** `POST /api/admin/fix-resolver-trades` — retroactively fixed 220 trades
-- **Result**: Realized PnL went from $0 to $142.70 across all strategies
+- Paper adapter records PnL on sell trades
+- Market resolver uses original strategy_id (not "resolver")
+- Migration fixed 220 historical trades → Realized PnL: $142.70
 
 ### Weather Asymmetric Mode (Complete — March 17, 2026)
-- Separate strategy mode: `weather_asymmetric`
+- Separate strategy: `weather_asymmetric`
 - Filters: market_price ≤ 0.25, model_prob ≥ 0.40, edge ≥ 0.15
-- Hold to resolution, no early flip
-- Higher allocation: $5 default size, 0.35 Kelly scale
-- Separate PnL tracking and UI tab
-- `GET /api/strategies/weather-asymmetric/summary`
+- Hold to resolution, no early flip, higher allocation ($5 default)
+- Separate PnL tracking, dedicated UI tab
 
-### Calibration & Self-Improvement (Complete — March 17, 2026)
-- **Brier Score**: Measures sigma calibration accuracy (current: 1.06)
-- **1σ Coverage**: 40% (ideal 68.3%) — model is overconfident
-- **Segmented by**: lead-hours bracket, market type, station
-- **Calibration curve**: Predicted sigma vs actual error visualization
-- **Sigma evolution**: Time-ordered tracking of z-scores
-- **Sigma recommendations**: Per-bracket adjustment suggestions
-- `GET /api/strategies/weather/calibration/metrics`
+### Controlled Calibration & Overconfidence Fix (Complete — March 17, 2026)
+- **1.25x overconfidence multiplier**: All sigma values widened by 25% (temporary)
+- **Calibration guardrails**: ±25% cap on adjustments, 30-sample min threshold
+- **Brier score**: 1.064 (5 samples), 1σ coverage 40% (model overconfident)
+- **Segmentation**: By lead-hours bracket, market type, station
+- **Sigma trace**: Full pipeline visibility (default → base → OC-adjusted → final) in signal explanations
+- **UI**: Sigma Pipeline section, calibration metrics, calibration curve, sigma evolution
 
-## Prioritized Backlog
-
-### P1: Track Performance by Weather Market Type
-- Backend + frontend PnL breakdown by temp/precip/snow/wind
-
-### P2: Apply Sigma Recommendations Automatically
-- Use calibration metrics to auto-adjust sigma values
-- Dynamic sigma update during scan loop based on recent calibration
-
-### P3: Copy Trading Skeleton
-### P4: Manual Order Entry
-### P5: Live Trading Mode Integration
+### Performance by Weather Market Type (Complete — March 17, 2026)
+- `GET /api/analytics/weather-by-type`: PnL breakdown for temp/precip/snow/wind
+- Card-based UI with per-type realized/unrealized PnL, trade counts, win rates
 
 ## Key Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
-| /api/analytics/summary | GET | Portfolio-level PnL, win rate, Sharpe |
-| /api/analytics/strategies | GET | Per-strategy trade metrics |
-| /api/analytics/strategy-attribution | GET | Deep per-strategy PnL breakdown |
-| /api/positions/by-strategy | GET | Open positions enriched |
+| /api/analytics/summary | GET | Portfolio PnL, Sharpe |
+| /api/analytics/strategies | GET | Per-strategy metrics |
+| /api/analytics/strategy-attribution | GET | Deep PnL breakdown |
+| /api/analytics/weather-by-type | GET | PnL by market type |
+| /api/positions/by-strategy | GET | Enriched positions |
+| /api/strategies/weather/health | GET | Weather health + sigma_pipeline |
+| /api/strategies/weather/calibration/metrics | GET | Brier, coverage, curves |
 | /api/strategies/weather-asymmetric/summary | GET | Asymmetric positions + PnL |
-| /api/strategies/weather/calibration/metrics | GET | Brier score, calibration curves |
-| /api/admin/fix-resolver-trades | POST | Migrate resolver trade strategy_ids |
+| /api/admin/fix-resolver-trades | POST | Migrate trade strategy_ids |
 
-## Key DB Collections
-- **trades**: All trade records (buy/sell) with pnl, strategy_id
-- **positions_snapshots**: Periodic position snapshots
-- **configs**: Engine configuration (`_id: "engine_config"`)
-- **forecast_accuracy**: Resolved forecast vs actual data
-- **weather_rolling_calibration**: Rolling sigma calibration per station
+## Prioritized Backlog
+
+### P1: Auto-Apply Sigma Recommendations
+- When calibration matures (≥30 samples), automatically update sigma from calibration data
+- Add toggle to enable/disable auto-apply
+
+### P2: Reduce Overconfidence Multiplier
+- As data accumulates and coverage approaches 68%, reduce multiplier toward 1.0
+
+### P3: Copy Trading Skeleton
+### P4: Manual Order Entry
+### P5: Live Trading Mode Integration
