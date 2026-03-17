@@ -43,13 +43,14 @@ export default function Weather() {
   const [calMetrics, setCalMetrics] = useState(null);
   const [weatherByType, setWeatherByType] = useState(null);
   const [autoTune, setAutoTune] = useState(null);
+  const [lifecycleDash, setLifecycleDash] = useState(null);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt, at] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt, at, lcd] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
@@ -60,6 +61,7 @@ export default function Weather() {
         axios.get(`${API_BASE}/strategies/weather/calibration/metrics`),
         axios.get(`${API_BASE}/analytics/weather-by-type`),
         axios.get(`${API_BASE}/strategies/weather/calibration/auto-tune`),
+        axios.get(`${API_BASE}/positions/weather/lifecycle/dashboard`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
@@ -72,6 +74,7 @@ export default function Weather() {
       setCalMetrics(cm.data);
       setWeatherByType(wbt.data);
       setAutoTune(at.data);
+      setLifecycleDash(lcd.data);
     } catch {}
   }, [demoMode]);
 
@@ -449,6 +452,9 @@ export default function Weather() {
           <TabsTrigger data-testid="tab-market-types" value="market-types" className="text-xs data-[state=active]:bg-zinc-800">
             By Type
           </TabsTrigger>
+          <TabsTrigger data-testid="tab-lifecycle" value="lifecycle" className="text-xs data-[state=active]:bg-amber-900/40">
+            Lifecycle {exitCandidateCount > 0 ? `(${exitCandidateCount})` : ''}
+          </TabsTrigger>
           <TabsTrigger data-testid="tab-health" value="health" className="text-xs data-[state=active]:bg-zinc-800">
             Health
           </TabsTrigger>
@@ -636,6 +642,11 @@ export default function Weather() {
         {/* Market Types Tab */}
         <TabsContent value="market-types" className="mt-4 space-y-5">
           <WeatherByTypeSection data={weatherByType} />
+        </TabsContent>
+
+        {/* Lifecycle Dashboard Tab */}
+        <TabsContent value="lifecycle" className="mt-4 space-y-5">
+          <LifecycleDashboard data={lifecycleDash} formatPnl={formatPnl} />
         </TabsContent>
 
         {/* Health Tab */}
@@ -1549,6 +1560,329 @@ function WeatherByTypeSection({ data }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+
+function LifecycleDashboard({ data, formatPnl }) {
+  if (!data) return <div className="text-zinc-600 text-xs text-center py-8">Loading lifecycle data...</div>;
+
+  const { summary, reason_distribution, time_buckets, shadow_exits, sold_vs_held, sold_vs_held_by_reason, profit_distribution, config } = data;
+
+  const REASON_COLORS = {
+    profit_capture: { bg: 'bg-emerald-950/30', border: 'border-emerald-500/30', text: 'text-emerald-400', bar: 'bg-emerald-500' },
+    negative_edge: { bg: 'bg-red-950/30', border: 'border-red-500/30', text: 'text-red-400', bar: 'bg-red-500' },
+    edge_decay: { bg: 'bg-amber-950/30', border: 'border-amber-500/30', text: 'text-amber-400', bar: 'bg-amber-500' },
+    time_inefficiency: { bg: 'bg-orange-950/30', border: 'border-orange-500/30', text: 'text-orange-400', bar: 'bg-orange-500' },
+    model_shift: { bg: 'bg-violet-950/30', border: 'border-violet-500/30', text: 'text-violet-400', bar: 'bg-violet-500' },
+  };
+  const REASON_LABELS = { profit_capture: 'Profit Capture', negative_edge: 'Negative Edge', edge_decay: 'Edge Decay', time_inefficiency: 'Time Inefficient', model_shift: 'Model Shift' };
+  const ALL_REASONS = ['profit_capture', 'negative_edge', 'edge_decay', 'time_inefficiency', 'model_shift'];
+  const totalCandidates = summary?.total_exit_candidates || 0;
+
+  return (
+    <div data-testid="lifecycle-dashboard" className="space-y-5">
+      {/* Mode + Config Banner */}
+      <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-zinc-900/80 border border-zinc-800/50">
+        <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Mode</span>
+        <Badge data-testid="lifecycle-dash-mode" variant="outline" className={`text-[9px] font-mono ${
+          config?.lifecycle_mode === 'tag_only' ? 'border-blue-500/40 text-blue-400' :
+          config?.lifecycle_mode === 'shadow_exit' ? 'border-amber-500/40 text-amber-400' :
+          config?.lifecycle_mode === 'auto_exit' ? 'border-red-500/40 text-red-400' : 'border-zinc-700 text-zinc-500'
+        }`}>
+          {(config?.lifecycle_mode || 'off').toUpperCase().replace('_', ' ')}
+        </Badge>
+        <span className="text-zinc-800">|</span>
+        <span className="text-[10px] text-zinc-600">Profit: <span className="text-zinc-400 font-mono">{config?.profit_capture_threshold}x</span></span>
+        <span className="text-[10px] text-zinc-600">Neg Edge: <span className="text-zinc-400 font-mono">{config?.max_negative_edge_bps}bp</span></span>
+        <span className="text-[10px] text-zinc-600">Decay: <span className="text-zinc-400 font-mono">{(config?.edge_decay_exit_pct * 100)}%</span></span>
+        <span className="text-[10px] text-zinc-600">Time: <span className="text-zinc-400 font-mono">{config?.time_inefficiency_hours}h/{config?.time_inefficiency_min_edge_bps}bp</span></span>
+      </div>
+
+      {/* Section 1: Summary Cards */}
+      <div data-testid="lifecycle-summary-cards" className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Exit Candidates</div>
+          <div data-testid="lifecycle-total-candidates" className={`text-2xl font-mono font-bold ${totalCandidates > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>
+            {totalCandidates}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">of {summary?.total_positions_evaluated || 0} evaluated</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Avg Profit Multiple</div>
+          <div data-testid="lifecycle-avg-mult" className={`text-2xl font-mono font-bold ${
+            (summary?.avg_profit_multiple || 0) >= 2 ? 'text-emerald-400' :
+            (summary?.avg_profit_multiple || 0) >= 1 ? 'text-zinc-200' : 'text-red-400'
+          }`}>
+            {(summary?.avg_profit_multiple || 0).toFixed(2)}x
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">across exit candidates</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Avg Current Edge</div>
+          <div data-testid="lifecycle-avg-edge" className={`text-2xl font-mono font-bold ${
+            (summary?.avg_current_edge_bps || 0) > 0 ? 'text-emerald-400' : 'text-red-400'
+          }`}>
+            {(summary?.avg_current_edge_bps || 0) > 0 ? '+' : ''}{(summary?.avg_current_edge_bps || 0).toFixed(0)}bp
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">model edge on candidates</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Avg Edge Decay</div>
+          <div data-testid="lifecycle-avg-decay" className={`text-2xl font-mono font-bold ${
+            (summary?.avg_edge_decay_pct || 0) >= 0.6 ? 'text-red-400' :
+            (summary?.avg_edge_decay_pct || 0) >= 0.3 ? 'text-amber-400' : 'text-emerald-400'
+          }`}>
+            {((summary?.avg_edge_decay_pct || 0) * 100).toFixed(0)}%
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">avg decay from entry edge</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Section 2: Exit Reason Distribution */}
+        <div data-testid="lifecycle-reason-distribution" className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-4">
+          <div className="text-sm font-medium text-zinc-300 mb-3">Exit Reason Distribution</div>
+          <div className="space-y-2.5">
+            {ALL_REASONS.map(reason => {
+              const rd = reason_distribution?.[reason];
+              const count = rd?.count || 0;
+              const pct = totalCandidates > 0 ? (count / totalCandidates * 100) : 0;
+              const rc = REASON_COLORS[reason] || {};
+              return (
+                <div key={reason} data-testid={`reason-${reason}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-xs font-mono ${rc.text || 'text-zinc-400'}`}>{REASON_LABELS[reason]}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-zinc-500 font-mono">
+                        {rd ? `${rd.avg_profit_mult?.toFixed(2)}x avg` : '—'}
+                      </span>
+                      <span className={`text-xs font-mono font-bold ${count > 0 ? (rc.text || 'text-zinc-300') : 'text-zinc-700'}`}>
+                        {count}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-zinc-900 overflow-hidden">
+                    <div className={`h-full rounded-full transition-all duration-500 ${rc.bar || 'bg-zinc-700'}`}
+                      style={{ width: `${Math.max(pct, count > 0 ? 4 : 0)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {totalCandidates === 0 && (
+            <div className="text-zinc-700 text-xs text-center py-3 mt-2">No exit candidates currently flagged</div>
+          )}
+        </div>
+
+        {/* Section 3: Time Bucket Breakdown */}
+        <div data-testid="lifecycle-time-buckets" className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-4">
+          <div className="text-sm font-medium text-zinc-300 mb-3">Resolution Time Breakdown</div>
+          <div className="space-y-3">
+            {['<6h', '6-24h', '>24h', 'unknown'].map(bucket => {
+              const tb = time_buckets?.[bucket] || {};
+              const total = tb.total || 0;
+              const exits = tb.exit_candidates || 0;
+              const avgMult = tb.avg_profit_mult || 0;
+              const exitRate = total > 0 ? (exits / total * 100) : 0;
+              const bucketColors = { '<6h': 'text-red-400', '6-24h': 'text-amber-400', '>24h': 'text-zinc-400', 'unknown': 'text-zinc-600' };
+              return (
+                <div key={bucket} data-testid={`time-bucket-${bucket}`} className="flex items-center gap-3">
+                  <span className={`text-xs font-mono font-medium w-14 ${bucketColors[bucket]}`}>{bucket}</span>
+                  <div className="flex-1">
+                    <div className="flex justify-between text-[10px] mb-0.5">
+                      <span className="text-zinc-500">{total} positions</span>
+                      <span className={exits > 0 ? 'text-amber-400' : 'text-zinc-700'}>{exits} exit{exits !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-zinc-900 overflow-hidden flex">
+                      <div className="h-full bg-zinc-700 transition-all" style={{ width: `${total > 0 ? Math.max(((total - exits) / (summary?.total_positions_evaluated || 1)) * 100, 2) : 0}%` }} />
+                      <div className="h-full bg-amber-500 transition-all" style={{ width: `${exits > 0 ? Math.max((exits / (summary?.total_positions_evaluated || 1)) * 100, 2) : 0}%` }} />
+                    </div>
+                  </div>
+                  <div className="text-right w-20">
+                    <div className="text-[10px] text-zinc-400 font-mono">{avgMult.toFixed(2)}x avg</div>
+                    <div className="text-[10px] text-zinc-600 font-mono">{exitRate.toFixed(0)}% exit</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Profit Distribution */}
+          <div className="mt-5 pt-3 border-t border-zinc-800/50">
+            <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Price Multiple Distribution</div>
+            <div className="flex items-end gap-1 h-16">
+              {Object.entries(profit_distribution || {}).map(([range, count]) => {
+                const maxCount = Math.max(...Object.values(profit_distribution || {}), 1);
+                const height = (count / maxCount) * 100;
+                const isExit = range === '>2.0x';
+                return (
+                  <div key={range} className="flex-1 flex flex-col items-center gap-0.5" data-testid={`profit-dist-${range}`}>
+                    <span className="text-[8px] text-zinc-500 font-mono">{count}</span>
+                    <div className={`w-full rounded-t transition-all ${isExit ? 'bg-amber-500/70' : 'bg-zinc-700'}`}
+                      style={{ height: `${Math.max(height, 3)}%` }} />
+                    <span className="text-[7px] text-zinc-600 font-mono">{range}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 4: Shadow Exit Timeline */}
+      <div data-testid="lifecycle-shadow-exits" className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-4">
+        <div className="text-sm font-medium text-zinc-300 mb-3">
+          Shadow Exit Timeline
+          <span className="text-[10px] text-zinc-600 ml-2">
+            {config?.lifecycle_mode === 'shadow_exit' ? 'Recording simulated exits' : 'Enable SHADOW_EXIT mode to record'}
+          </span>
+        </div>
+        {shadow_exits && shadow_exits.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10px] text-zinc-500 uppercase border-b border-zinc-800/50">
+                  <th className="text-left py-1.5 px-2">Time</th>
+                  <th className="text-left py-1.5 px-2">Market</th>
+                  <th className="text-left py-1.5 px-2">Reason</th>
+                  <th className="text-right py-1.5 px-2">Exit Price</th>
+                  <th className="text-right py-1.5 px-2">Multiple</th>
+                  <th className="text-right py-1.5 px-2">Edge</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shadow_exits.slice().reverse().map((se, i) => {
+                  const rc = REASON_COLORS[se.reason] || {};
+                  return (
+                    <tr key={i} className="border-b border-zinc-900/50 hover:bg-zinc-900/30">
+                      <td className="py-1.5 px-2 text-zinc-500 font-mono text-[10px]">{se.timestamp ? new Date(se.timestamp).toLocaleString() : '—'}</td>
+                      <td className="py-1.5 px-2 text-zinc-300 max-w-[200px] truncate">{(se.market_question || se.token_id || '').slice(0, 50)}</td>
+                      <td className="py-1.5 px-2">
+                        <Badge variant="outline" className={`text-[8px] font-mono ${rc.border || ''} ${rc.text || ''} ${rc.bg || ''}`}>
+                          {REASON_LABELS[se.reason] || se.reason}
+                        </Badge>
+                      </td>
+                      <td className="py-1.5 px-2 text-right font-mono text-zinc-300">{se.would_sell_at?.toFixed(4)}</td>
+                      <td className="py-1.5 px-2 text-right font-mono text-emerald-400">{se.profit_multiple?.toFixed(2)}x</td>
+                      <td className="py-1.5 px-2 text-right font-mono text-zinc-400">{(se.current_edge_bps || 0) > 0 ? '+' : ''}{(se.current_edge_bps || 0).toFixed(0)}bp</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-6 text-zinc-700 text-xs">
+            {config?.lifecycle_mode === 'shadow_exit'
+              ? 'No shadow exits recorded yet — waiting for next scan cycle'
+              : 'Switch to SHADOW_EXIT mode to start recording simulated exit decisions'}
+          </div>
+        )}
+      </div>
+
+      {/* Section 5: Would Have Sold vs Held — THE KEY VALIDATION TABLE */}
+      <div data-testid="lifecycle-sold-vs-held" className="rounded-lg border border-amber-500/20 bg-zinc-950 p-4">
+        <div className="text-sm font-medium text-zinc-300 mb-1">Would Have Sold vs Held</div>
+        <div className="text-[10px] text-zinc-600 mb-3">Compare simulated exit PnL at flag time vs current held PnL — positive delta means holding was better</div>
+
+        {sold_vs_held && sold_vs_held.length > 0 ? (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[10px] text-zinc-500 uppercase border-b border-zinc-800/50">
+                    <th className="text-left py-1.5 px-2">Market</th>
+                    <th className="text-left py-1.5 px-2">Reason</th>
+                    <th className="text-right py-1.5 px-2">Flag Price</th>
+                    <th className="text-right py-1.5 px-2">Now</th>
+                    <th className="text-right py-1.5 px-2">Sim Exit PnL</th>
+                    <th className="text-right py-1.5 px-2">Held PnL</th>
+                    <th className="text-right py-1.5 px-2">Delta</th>
+                    <th className="text-center py-1.5 px-2">Verdict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sold_vs_held.map((entry, i) => {
+                    const rc = REASON_COLORS[entry.reason] || {};
+                    const deltaColor = entry.delta > 0.001 ? 'text-emerald-400' : entry.delta < -0.001 ? 'text-red-400' : 'text-zinc-500';
+                    const verdictBg = entry.delta_direction === 'hold_better' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30'
+                      : entry.delta_direction === 'sell_better' ? 'bg-red-950/40 text-red-400 border-red-500/30'
+                      : 'bg-zinc-900 text-zinc-500 border-zinc-700';
+                    return (
+                      <tr key={i} data-testid={`svh-row-${i}`} className="border-b border-zinc-900/50 hover:bg-zinc-900/30">
+                        <td className="py-1.5 px-2 text-zinc-300 max-w-[180px] truncate">{entry.market_question || entry.token_id}</td>
+                        <td className="py-1.5 px-2">
+                          <Badge variant="outline" className={`text-[8px] font-mono ${rc.border || ''} ${rc.text || ''}`}>
+                            {REASON_LABELS[entry.reason] || entry.reason}
+                          </Badge>
+                        </td>
+                        <td className="py-1.5 px-2 text-right font-mono text-zinc-400">{entry.flagged_price?.toFixed(4)}</td>
+                        <td className="py-1.5 px-2 text-right font-mono text-zinc-300">{entry.current_price?.toFixed(4)}</td>
+                        <td className="py-1.5 px-2 text-right font-mono text-zinc-300">{formatPnl(entry.sim_exit_pnl)}</td>
+                        <td className="py-1.5 px-2 text-right font-mono text-zinc-300">{formatPnl(entry.held_pnl)}</td>
+                        <td className={`py-1.5 px-2 text-right font-mono font-bold ${deltaColor}`}>
+                          {entry.delta > 0 ? '+' : ''}{formatPnl(entry.delta)}
+                        </td>
+                        <td className="py-1.5 px-2 text-center">
+                          <Badge variant="outline" className={`text-[8px] font-mono ${verdictBg}`}>
+                            {entry.delta_direction === 'hold_better' ? 'HOLD' : entry.delta_direction === 'sell_better' ? 'SELL' : 'EVEN'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Aggregate by reason */}
+            {Object.keys(sold_vs_held_by_reason || {}).length > 0 && (
+              <div className="mt-4 pt-3 border-t border-zinc-800/50">
+                <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Aggregate by Exit Reason</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {Object.entries(sold_vs_held_by_reason).map(([reason, agg]) => {
+                    const rc = REASON_COLORS[reason] || {};
+                    const verdictColor = agg.verdict === 'hold_better' ? 'text-emerald-400' : agg.verdict === 'sell_better' ? 'text-red-400' : 'text-zinc-500';
+                    return (
+                      <div key={reason} data-testid={`svh-agg-${reason}`}
+                        className={`rounded-lg border ${rc.border || 'border-zinc-800'} ${rc.bg || 'bg-zinc-900/50'} p-3`}>
+                        <div className={`text-xs font-mono font-medium ${rc.text || 'text-zinc-400'} mb-2`}>
+                          {REASON_LABELS[reason] || reason} ({agg.count})
+                        </div>
+                        <div className="grid grid-cols-3 gap-1 text-[10px]">
+                          <div>
+                            <div className="text-zinc-600">Sim Exit</div>
+                            <div className="text-zinc-300 font-mono">{formatPnl(agg.total_sim_exit_pnl)}</div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-600">Held</div>
+                            <div className="text-zinc-300 font-mono">{formatPnl(agg.total_held_pnl)}</div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-600">Delta</div>
+                            <div className={`font-mono font-bold ${verdictColor}`}>
+                              {agg.total_delta > 0 ? '+' : ''}{formatPnl(agg.total_delta)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className={`text-[9px] font-mono mt-1.5 ${verdictColor}`}>
+                          {agg.verdict === 'hold_better' ? 'Holding was better' : agg.verdict === 'sell_better' ? 'Should have sold' : 'No difference'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="text-center py-8 text-zinc-700 text-xs">
+            No exit candidates flagged yet — lifecycle engine will populate this after scanning positions with active edge
+          </div>
+        )}
       </div>
     </div>
   );

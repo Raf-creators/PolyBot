@@ -1372,6 +1372,23 @@ async def get_weather_lifecycle_status():
     }
 
 
+@api_router.get("/positions/weather/lifecycle/dashboard")
+async def get_weather_lifecycle_dashboard():
+    """Lifecycle dashboard data for threshold validation and exit-decision quality."""
+    if not weather_trader_ref:
+        return {
+            "summary": {"total_positions_evaluated": 0, "total_exit_candidates": 0},
+            "reason_distribution": {},
+            "time_buckets": {},
+            "shadow_exits": [],
+            "sold_vs_held": [],
+            "sold_vs_held_by_reason": {},
+            "profit_distribution": {},
+            "config": {},
+        }
+    return weather_trader_ref.get_lifecycle_dashboard()
+
+
 @api_router.get("/positions/weather/breakdown")
 async def get_weather_position_breakdown():
     """Age/resolution breakdown for open weather positions."""

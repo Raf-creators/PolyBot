@@ -1,0 +1,148 @@
+{
+  "summary": "Iteration 53: Lifecycle Dashboard Tab fully verified. All 16 backend API tests pass (100%). Frontend UI verified: Lifecycle (2) tab visible with candidate count, MODE TAG ONLY badge with threshold config shown, 4 summary cards (Exit Candidates=2, Avg Profit Multiple=5.51x, Avg Current Edge=0bp, Avg Edge Decay=0%), Exit Reason Distribution bars for all 5 reasons (profit_capture showing 2), Resolution Time Breakdown showing 54 positions in 'unknown' with 2 exits, Price Multiple Distribution histogram visible, Shadow Exit Timeline placeholder for tag_only mode, Would Have Sold vs Held table with 2 rows and correct columns, Aggregate by Exit Reason card for profit_capture.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/positions/weather/lifecycle/dashboard returns 200 - PASS",
+      "Dashboard has all 8 required sections (summary, reason_distribution, time_buckets, shadow_exits, sold_vs_held, sold_vs_held_by_reason, profit_distribution, config) - PASS",
+      "Summary contains total_positions_evaluated, total_exit_candidates, avg_profit_multiple, avg_current_edge_bps, avg_edge_decay_pct - PASS",
+      "reason_distribution contains profit_capture entries with count and avg_profit_mult - PASS",
+      "time_buckets contains keys <6h, 6-24h, >24h, unknown with total, exit_candidates, avg_profit_mult - PASS",
+      "sold_vs_held entries contain sim_exit_pnl, held_pnl, delta, delta_direction - PASS",
+      "sold_vs_held_by_reason aggregates correctly with count, total_sim_exit_pnl, total_held_pnl, total_delta, verdict - PASS",
+      "profit_distribution contains ranges <0.5x through >2.0x - PASS",
+      "config contains all lifecycle thresholds (lifecycle_mode, profit_capture_threshold, max_negative_edge_bps, edge_decay_exit_pct, time_inefficiency_hours, time_inefficiency_min_edge_bps) - PASS",
+      "shadow_exits is list (empty in tag_only mode) - PASS",
+      "Data integrity: exit_candidate_counts match sum of reason_distribution counts - PASS",
+      "Data integrity: time_bucket totals match positions_evaluated - PASS",
+      "Data integrity: profit_distribution total matches positions_evaluated - PASS",
+      "Regression: exit-candidates endpoint still returns 200 - PASS",
+      "Regression: lifecycle endpoint still returns 200 - PASS",
+      "Regression: positions/by-strategy weather positions have lifecycle data - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Lifecycle tab visible in tab bar between 'By Type' and 'Health' - PASS",
+      "Lifecycle tab shows candidate count (2) in label - PASS",
+      "MODE TAG ONLY badge visible with threshold config (Profit: 2x, Neg Edge: -100bp, Decay: 60%, Time: 18h/300bp) - PASS",
+      "4 summary cards present: Exit Candidates=2, Avg Profit Multiple=5.51x, Avg Current Edge=0bp, Avg Edge Decay=0% - PASS",
+      "Exit Reason Distribution shows bars for all 5 reasons (profit_capture, negative_edge, edge_decay, time_inefficiency, model_shift) - PASS",
+      "Profit Capture bar shows count=2 with 5.51x avg - PASS",
+      "Resolution Time Breakdown shows all 4 buckets (<6h, 6-24h, >24h, unknown) - PASS",
+      "unknown bucket shows 54 positions with 2 exits (4% exit rate) - PASS",
+      "Price Multiple Distribution histogram visible with all ranges - PASS",
+      "Shadow Exit Timeline section shows placeholder 'Switch to SHADOW_EXIT mode to start recording' - PASS",
+      "Would Have Sold vs Held table present with correct columns (Market, Reason, Flag Price, Now, Sim Exit PnL, Held PnL, Delta, Verdict) - PASS",
+      "Table shows 2 comparison rows for Chicago positions - PASS",
+      "Aggregate by Exit Reason shows Profit Capture (2) card with Sim Exit/Held/Delta values - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "lifecycle_dashboard_api": {
+      "status": "PASS",
+      "details": [
+        "GET /api/positions/weather/lifecycle/dashboard returns all required sections",
+        "summary: total_positions_evaluated=54, total_exit_candidates=2, avg_profit_multiple=5.51x",
+        "reason_distribution: profit_capture has count=2, avg_profit_mult=5.51",
+        "time_buckets: unknown has 54 positions with 2 exit candidates",
+        "sold_vs_held: 2 entries with sim_exit_pnl, held_pnl, delta comparison",
+        "sold_vs_held_by_reason: profit_capture aggregated with verdict='neutral'",
+        "profit_distribution: shows distribution across all 6 ranges",
+        "config: all lifecycle thresholds included"
+      ]
+    },
+    "frontend_lifecycle_tab": {
+      "status": "PASS",
+      "details": [
+        "Tab visible with Lifecycle (2) showing candidate count",
+        "MODE TAG ONLY badge with threshold config inline",
+        "4 summary cards with correct values and styling",
+        "Exit Reason Distribution bars for all 5 reasons",
+        "Resolution Time Breakdown with position counts and exit rates",
+        "Price Multiple Distribution histogram",
+        "Shadow Exit Timeline placeholder for tag_only mode",
+        "Would Have Sold vs Held table with comparison data",
+        "Aggregate by Exit Reason cards"
+      ]
+    },
+    "previous_lifecycle_features": {
+      "status": "PASS",
+      "details": [
+        "exit-candidates endpoint: returns mode=tag_only, candidates=2, total_evaluated=54",
+        "lifecycle endpoint: returns mode=tag_only, evaluations=54, metrics",
+        "positions/by-strategy: weather positions enriched with lifecycle data"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "lifecycle_dashboard_response": {
+      "summary": {
+        "total_positions_evaluated": 54,
+        "total_exit_candidates": 2,
+        "avg_profit_multiple": 5.51,
+        "avg_current_edge_bps": 0,
+        "avg_edge_decay_pct": 0
+      },
+      "reason_distribution": {
+        "profit_capture": {"count": 2, "avg_profit_mult": 5.51}
+      },
+      "time_buckets": {
+        "<6h": {"total": 0, "exit_candidates": 0},
+        "6-24h": {"total": 0, "exit_candidates": 0},
+        ">24h": {"total": 0, "exit_candidates": 0},
+        "unknown": {"total": 54, "exit_candidates": 2}
+      },
+      "sold_vs_held_count": 2,
+      "profit_distribution": {
+        "<0.5x": 24, "0.5-0.8x": 16, "0.8-1.0x": 4, "1.0-1.5x": 7, "1.5-2.0x": 1, ">2.0x": 2
+      },
+      "config": {
+        "lifecycle_mode": "tag_only",
+        "profit_capture_threshold": 2.0,
+        "max_negative_edge_bps": -100,
+        "edge_decay_exit_pct": 0.6,
+        "time_inefficiency_hours": 18,
+        "time_inefficiency_min_edge_bps": 300
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration53_lifecycle_dashboard.py",
+    "/app/test_reports/pytest/pytest_results_iteration53.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration53_lifecycle_dashboard.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (16/16 tests passed)",
+    "frontend": "100% (All 13 UI features verified)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 open weather positions, 2 exit candidates)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 53 verified Lifecycle Dashboard Tab for weather strategies. Key findings: (1) Dashboard at /api/positions/weather/lifecycle/dashboard returns 8 sections: summary, reason_distribution, time_buckets, shadow_exits, sold_vs_held, sold_vs_held_by_reason, profit_distribution, config. (2) Currently 54 weather positions evaluated with 2 exit candidates (both profit_capture at 5.51x avg). (3) All 54 positions are in 'unknown' time bucket because they are legacy positions without resolution timestamps. (4) Shadow exits list is empty because mode is tag_only (not shadow_exit). (5) sold_vs_held table shows comparison data with Flag Price, Now, Sim Exit PnL, Held PnL, Delta, Verdict columns. (6) Aggregate by Exit Reason aggregates the comparison by reason type. (7) Frontend tab shows candidate count in label, MODE badge with inline threshold config. (8) Previous lifecycle features still work: exit-candidates, lifecycle, positions/by-strategy enrichment."
+}

@@ -96,6 +96,9 @@ class WeatherTrader(BaseStrategy):
         # Position lifecycle evaluations: token_id → PositionLifecycleEval
         self._lifecycle_evals: Dict[str, PositionLifecycleEval] = {}
         self._lifecycle_shadow_exits: List[dict] = []  # log of shadow exit decisions
+        # Snapshots of when positions were first flagged as exit candidates
+        # token_id → {first_flagged_at, flagged_price, avg_cost, size, reason, market_question}
+        self._exit_candidate_snapshots: Dict[str, dict] = {}
 
         # Metrics
         self._m: Dict = {
@@ -1449,6 +1452,18 @@ class WeatherTrader(BaseStrategy):
                     f"held={time_held_hours:.1f}h mode={mode}"
                 )
 
+                # Record first-flagged snapshot (only once per position)
+                if token_id not in self._exit_candidate_snapshots:
+                    self._exit_candidate_snapshots[token_id] = {
+                        "first_flagged_at": utc_now(),
+                        "flagged_price": current_price,
+                        "avg_cost": avg_cost,
+                        "size": pos.size,
+                        "reason": exit_reason,
+                        "profit_multiple_at_flag": profit_multiple,
+                        "market_question": getattr(pos, 'market_question', ''),
+                    }
+
                 # Shadow exit: log but don't sell
                 if mode == "shadow_exit":
                     shadow_entry = {
@@ -1459,6 +1474,9 @@ class WeatherTrader(BaseStrategy):
                         "current_edge_bps": round(current_edge_bps, 2),
                         "time_held_hours": time_held_hours,
                         "would_sell_at": current_price,
+                        "avg_cost": avg_cost,
+                        "size": pos.size,
+                        "market_question": getattr(pos, 'market_question', ''),
                         "timestamp": utc_now(),
                     }
                     self._lifecycle_shadow_exits.append(shadow_entry)
@@ -1477,6 +1495,12 @@ class WeatherTrader(BaseStrategy):
         self._m["lifecycle"]["exit_candidates"] = candidates
         self._m["lifecycle"]["shadow_exits"] += shadow_exits_this_scan
         self._m["lifecycle"]["last_eval_time"] = utc_now()
+
+        # Clean up snapshots for positions that no longer exist
+        active_tokens = set(new_evals.keys())
+        stale = [t for t in self._exit_candidate_snapshots if t not in active_tokens]
+        for t in stale:
+            del self._exit_candidate_snapshots[t]
 
     async def _auto_exit_position(self, pos, exit_reason: str, exit_detail: str):
         """Execute a sell order to exit a standard weather position."""
@@ -1531,6 +1555,167 @@ class WeatherTrader(BaseStrategy):
     def get_lifecycle_shadow_exits(self, limit: int = 50) -> List[dict]:
         """Return recent shadow exit log entries."""
         return self._lifecycle_shadow_exits[-limit:]
+
+    def get_lifecycle_dashboard(self) -> dict:
+        """Compute lifecycle dashboard data for threshold validation."""
+        evals = self._lifecycle_evals
+        candidates = {tid: ev for tid, ev in evals.items() if ev.is_exit_candidate}
+
+        # ---- Summary cards ----
+        if candidates:
+            avg_profit_mult = round(sum(e.profit_multiple for e in candidates.values()) / len(candidates), 4)
+            avg_current_edge = round(sum(e.current_edge_bps for e in candidates.values()) / len(candidates), 2)
+            avg_edge_decay = round(sum(e.edge_decay_pct for e in candidates.values()) / len(candidates), 4)
+            avg_time_held = round(sum(e.time_held_hours for e in candidates.values()) / len(candidates), 1)
+        else:
+            avg_profit_mult = avg_current_edge = avg_edge_decay = avg_time_held = 0.0
+
+        summary = {
+            "total_positions_evaluated": len(evals),
+            "total_exit_candidates": len(candidates),
+            "avg_profit_multiple": avg_profit_mult,
+            "avg_current_edge_bps": avg_current_edge,
+            "avg_edge_decay_pct": avg_edge_decay,
+            "avg_time_held_hours": avg_time_held,
+        }
+
+        # ---- Exit reason distribution ----
+        reason_dist = {}
+        for ev in candidates.values():
+            r = ev.exit_reason or "unknown"
+            if r not in reason_dist:
+                reason_dist[r] = {"count": 0, "avg_profit_mult": 0, "avg_edge": 0, "tokens": []}
+            reason_dist[r]["count"] += 1
+            reason_dist[r]["tokens"].append(ev.token_id[:12])
+        # Compute averages per reason
+        for r, data in reason_dist.items():
+            bucket_evs = [ev for ev in candidates.values() if (ev.exit_reason or "unknown") == r]
+            if bucket_evs:
+                data["avg_profit_mult"] = round(sum(e.profit_multiple for e in bucket_evs) / len(bucket_evs), 4)
+                data["avg_edge"] = round(sum(e.current_edge_bps for e in bucket_evs) / len(bucket_evs), 2)
+
+        # ---- Time bucket breakdown ----
+        time_buckets = {"<6h": {"total": 0, "exit_candidates": 0, "avg_profit_mult": 0},
+                        "6-24h": {"total": 0, "exit_candidates": 0, "avg_profit_mult": 0},
+                        ">24h": {"total": 0, "exit_candidates": 0, "avg_profit_mult": 0},
+                        "unknown": {"total": 0, "exit_candidates": 0, "avg_profit_mult": 0}}
+        for ev in evals.values():
+            h = ev.hours_to_resolution
+            if h is None:
+                b = "unknown"
+            elif h <= 6:
+                b = "<6h"
+            elif h <= 24:
+                b = "6-24h"
+            else:
+                b = ">24h"
+            time_buckets[b]["total"] += 1
+            if ev.is_exit_candidate:
+                time_buckets[b]["exit_candidates"] += 1
+        # Compute avg profit mult per time bucket
+        for bk in time_buckets:
+            bucket_evs = [ev for ev in evals.values()
+                          if self._classify_time_bucket(ev.hours_to_resolution) == bk]
+            if bucket_evs:
+                time_buckets[bk]["avg_profit_mult"] = round(
+                    sum(e.profit_multiple for e in bucket_evs) / len(bucket_evs), 4)
+
+        # ---- Would Have Sold vs Held comparison ----
+        sold_vs_held = []
+        for tid, snap in self._exit_candidate_snapshots.items():
+            ev = evals.get(tid)
+            if not ev:
+                continue
+            pos = self._state.positions.get(tid)
+            if not pos:
+                continue
+            market = self._state.get_market(tid)
+            current_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+            avg_cost = snap["avg_cost"]
+            size = snap["size"]
+            flagged_price = snap["flagged_price"]
+
+            # Simulated exit PnL (if we had sold at flag time)
+            sim_exit_pnl = round((flagged_price - avg_cost) * size, 4) if avg_cost > 0 else 0
+            # Current held PnL
+            held_pnl = round((current_price - avg_cost) * size, 4) if avg_cost > 0 else 0
+            # Delta: positive = holding was better, negative = should have sold
+            delta = round(held_pnl - sim_exit_pnl, 4)
+
+            sold_vs_held.append({
+                "token_id": tid[:16],
+                "market_question": snap.get("market_question", "")[:60],
+                "reason": snap["reason"],
+                "first_flagged_at": snap["first_flagged_at"],
+                "flagged_price": round(flagged_price, 4),
+                "current_price": round(current_price, 4),
+                "avg_cost": round(avg_cost, 4),
+                "size": size,
+                "sim_exit_pnl": sim_exit_pnl,
+                "held_pnl": held_pnl,
+                "delta": delta,
+                "delta_direction": "hold_better" if delta > 0 else "sell_better" if delta < 0 else "neutral",
+                "profit_mult_at_flag": snap.get("profit_multiple_at_flag", 0),
+                "profit_mult_now": ev.profit_multiple,
+            })
+
+        # Aggregate sold-vs-held by reason
+        reason_comparison = {}
+        for entry in sold_vs_held:
+            r = entry["reason"]
+            if r not in reason_comparison:
+                reason_comparison[r] = {"count": 0, "total_sim_exit_pnl": 0, "total_held_pnl": 0, "total_delta": 0}
+            reason_comparison[r]["count"] += 1
+            reason_comparison[r]["total_sim_exit_pnl"] = round(reason_comparison[r]["total_sim_exit_pnl"] + entry["sim_exit_pnl"], 4)
+            reason_comparison[r]["total_held_pnl"] = round(reason_comparison[r]["total_held_pnl"] + entry["held_pnl"], 4)
+            reason_comparison[r]["total_delta"] = round(reason_comparison[r]["total_delta"] + entry["delta"], 4)
+        for r, data in reason_comparison.items():
+            data["verdict"] = "hold_better" if data["total_delta"] > 0 else "sell_better" if data["total_delta"] < 0 else "neutral"
+
+        # ---- All positions profit distribution (for context) ----
+        profit_distribution = {"<0.5x": 0, "0.5-0.8x": 0, "0.8-1.0x": 0, "1.0-1.5x": 0, "1.5-2.0x": 0, ">2.0x": 0}
+        for ev in evals.values():
+            pm = ev.profit_multiple
+            if pm < 0.5:
+                profit_distribution["<0.5x"] += 1
+            elif pm < 0.8:
+                profit_distribution["0.5-0.8x"] += 1
+            elif pm < 1.0:
+                profit_distribution["0.8-1.0x"] += 1
+            elif pm < 1.5:
+                profit_distribution["1.0-1.5x"] += 1
+            elif pm < 2.0:
+                profit_distribution["1.5-2.0x"] += 1
+            else:
+                profit_distribution[">2.0x"] += 1
+
+        return {
+            "summary": summary,
+            "reason_distribution": reason_dist,
+            "time_buckets": time_buckets,
+            "shadow_exits": self._lifecycle_shadow_exits[-30:],
+            "sold_vs_held": sold_vs_held,
+            "sold_vs_held_by_reason": reason_comparison,
+            "profit_distribution": profit_distribution,
+            "config": {
+                "lifecycle_mode": self.config.lifecycle_mode,
+                "profit_capture_threshold": self.config.profit_capture_threshold,
+                "max_negative_edge_bps": self.config.max_negative_edge_bps,
+                "edge_decay_exit_pct": self.config.edge_decay_exit_pct,
+                "time_inefficiency_hours": self.config.time_inefficiency_hours,
+                "time_inefficiency_min_edge_bps": self.config.time_inefficiency_min_edge_bps,
+            },
+        }
+
+    @staticmethod
+    def _classify_time_bucket(hours_to_resolution) -> str:
+        if hours_to_resolution is None:
+            return "unknown"
+        if hours_to_resolution <= 6:
+            return "<6h"
+        if hours_to_resolution <= 24:
+            return "6-24h"
+        return ">24h"
 
     # ---- Forecast Accuracy Recording ----
 
