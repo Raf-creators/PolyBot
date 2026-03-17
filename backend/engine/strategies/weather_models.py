@@ -91,6 +91,17 @@ class WeatherConfig(BaseModel):
     # Liquidity score filter
     min_liquidity_score: float = 35.0                       # 0-100, skip buckets scoring below this
 
+    # Asymmetric mode settings
+    asymmetric_enabled: bool = True
+    asymmetric_max_market_price: float = 0.25               # only trade contracts priced ≤ 25¢
+    asymmetric_min_model_prob: float = 0.40                 # model must assign ≥ 40% probability
+    asymmetric_min_edge: float = 0.15                       # edge = model_prob - market_price ≥ 0.15
+    asymmetric_default_size: float = 5.0                    # slightly larger allocation
+    asymmetric_max_size: float = 12.0
+    asymmetric_max_positions: int = 10                      # cap on concurrent asymmetric positions
+    asymmetric_kelly_scale: float = 0.35                    # more aggressive than standard
+    asymmetric_min_confidence: float = 0.45                 # lower confidence floor (asymmetric is high-edge)
+
 
 # ---- Station Info ----
 
@@ -251,6 +262,7 @@ class WeatherSignal(BaseModel):
     liquidity_score: float = 0.0
     quality_score: float = 0.0
     market_type: str = "temperature"
+    is_asymmetric: bool = False
     explanation: Dict[str, Any] = Field(default_factory=dict)
     detected_at: str = Field(default_factory=utc_now)
 

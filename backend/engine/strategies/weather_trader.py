@@ -120,6 +120,13 @@ class WeatherTrader(BaseStrategy):
                 "snowfall": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
                 "wind": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
             },
+            # Asymmetric mode metrics
+            "asymmetric": {
+                "signals_generated": 0,
+                "signals_executed": 0,
+                "active_positions": 0,
+                "best_signal_this_scan": None,
+            },
         }
 
     # ---- Lifecycle ----
@@ -291,15 +298,21 @@ class WeatherTrader(BaseStrategy):
                 signals = await self._evaluate_all()
 
                 # Stage 5: Execute eligible signals — sorted by edge (highest first)
-                eligible = sorted(
-                    [s for s in signals if s.is_tradable],
+                # Separate standard and asymmetric signals
+                standard_eligible = sorted(
+                    [s for s in signals if s.is_tradable and not s.is_asymmetric],
                     key=lambda s: s.quality_score,
                     reverse=True,
                 )
+                asymmetric_eligible = sorted(
+                    [s for s in signals if s.is_tradable and s.is_asymmetric],
+                    key=lambda s: s.edge_bps,
+                    reverse=True,
+                )
 
-                # Track best opportunity this scan
-                if eligible:
-                    best = eligible[0]
+                # Track best standard signal
+                if standard_eligible:
+                    best = standard_eligible[0]
                     self._m["best_signal_this_scan"] = {
                         "station": best.station_id,
                         "date": best.target_date,
@@ -318,10 +331,31 @@ class WeatherTrader(BaseStrategy):
                 else:
                     self._m["best_signal_this_scan"] = None
 
-                for sig in eligible:
+                # Track best asymmetric signal
+                if asymmetric_eligible:
+                    best_asym = asymmetric_eligible[0]
+                    self._m["asymmetric"]["best_signal_this_scan"] = {
+                        "station": best_asym.station_id,
+                        "date": best_asym.target_date,
+                        "bucket": best_asym.bucket_label,
+                        "market_price": round(best_asym.market_price, 4),
+                        "model_prob": round(best_asym.model_prob, 4),
+                        "edge": round(best_asym.model_prob - best_asym.market_price, 4),
+                        "expected_payoff": round((1.0 / best_asym.market_price - 1) * 100, 1) if best_asym.market_price > 0 else 0,
+                        "thesis": best_asym.explanation.get("thesis", ""),
+                    }
+                    logger.info(
+                        f"[WEATHER-ASYM] Best: {best_asym.station_id} {best_asym.target_date} "
+                        f"bucket={best_asym.bucket_label} price={best_asym.market_price:.4f} "
+                        f"prob={best_asym.model_prob:.4f} edge={best_asym.model_prob - best_asym.market_price:.4f}"
+                    )
+                else:
+                    self._m["asymmetric"]["best_signal_this_scan"] = None
+
+                # Execute standard signals
+                for sig in standard_eligible:
                     if len(self._active_executions) >= self.config.max_concurrent_signals:
                         break
-                    # Check total open weather positions (active execs + existing positions)
                     open_weather = self._count_open_weather_positions()
                     if open_weather >= self.config.max_weather_positions:
                         logger.info(
@@ -330,6 +364,17 @@ class WeatherTrader(BaseStrategy):
                         )
                         break
                     await self._execute_signal(sig)
+
+                # Execute asymmetric signals (separate position cap)
+                open_asym = self._count_asymmetric_positions()
+                self._m["asymmetric"]["active_positions"] = open_asym
+                for sig in asymmetric_eligible:
+                    if open_asym >= self.config.asymmetric_max_positions:
+                        break
+                    if len(self._active_executions) >= self.config.max_concurrent_signals:
+                        break
+                    await self._execute_signal(sig)
+                    open_asym += 1
 
                 # Stage 6: Record forecast accuracy entries for new classifications
                 await self._record_forecast_accuracy(signals)
@@ -503,6 +548,13 @@ class WeatherTrader(BaseStrategy):
             if classify_strategy(pos) == "weather"
         )
         return state_count
+
+    def _count_asymmetric_positions(self) -> int:
+        """Count open positions tagged as weather_asymmetric."""
+        return sum(
+            1 for pos in self._state.positions.values()
+            if getattr(pos, 'strategy_id', '') == 'weather_asymmetric'
+        )
 
 
     def _evaluate_market(
@@ -694,6 +746,71 @@ class WeatherTrader(BaseStrategy):
 
             # --- Edge threshold ---
             if edge_bps < self.config.min_edge_bps:
+                # Check asymmetric opportunity before rejecting
+                raw_edge = prob - market_price
+                if (self.config.asymmetric_enabled
+                    and market_price <= self.config.asymmetric_max_market_price
+                    and prob >= self.config.asymmetric_min_model_prob
+                    and raw_edge >= self.config.asymmetric_min_edge
+                    and bucket_confidence >= self.config.asymmetric_min_confidence
+                    and cooldown_key not in self._cooldown
+                    and not self._state.risk_config.kill_switch_active):
+                    # Asymmetric signal — hold-to-resolution play
+                    asym_size = kelly_size(
+                        model_prob=prob,
+                        market_price=market_price,
+                        base_size=self.config.asymmetric_default_size,
+                        kelly_scale=self.config.asymmetric_kelly_scale,
+                        max_size=self.config.asymmetric_max_size,
+                    )
+                    if asym_size > 0:
+                        expected_payoff = round((1.0 / market_price - 1) * 100, 1) if market_price > 0 else 0
+                        city_name = self._get_city(cm.station_id)
+                        asym_explanation = {
+                            "market": cm.question[:120],
+                            "location": city_name or cm.station_id,
+                            "contract_type": "asymmetric_weather",
+                            "market_type": mtype_str,
+                            "bucket": bucket.label,
+                            "forecast_summary": f"Forecast {mu:.1f} (sigma {sigma:.1f}, lead {lead_hours:.0f}h)",
+                            "model_probability": round(prob, 4),
+                            "market_price": round(market_price, 4),
+                            "raw_edge": round(raw_edge, 4),
+                            "expected_payoff_pct": expected_payoff,
+                            "risk_reward": f"Risk ${asym_size * market_price:.2f} for potential ${asym_size * (1.0 - market_price):.2f}",
+                            "confidence": round(bucket_confidence, 3),
+                            "thesis": f"Asymmetric: Market prices {bucket.label} at {market_price:.0%} but model says {prob:.0%}. "
+                                      f"If correct, {expected_payoff:.0f}% return. Hold to resolution.",
+                        }
+                        asym_signal = WeatherSignal(
+                            condition_id=cm.condition_id,
+                            station_id=cm.station_id,
+                            target_date=cm.target_date,
+                            bucket_label=bucket.label,
+                            token_id=bucket.token_id,
+                            forecast_high_f=round(mu, 1),
+                            sigma=round(sigma, 2),
+                            lead_hours=round(lead_hours, 1),
+                            model_prob=round(prob, 6),
+                            market_price=round(market_price, 6),
+                            edge_bps=edge_bps,
+                            confidence=bucket_confidence,
+                            recommended_size=asym_size,
+                            is_tradable=True,
+                            is_asymmetric=True,
+                            liquidity_score=round(liq_score, 1),
+                            quality_score=round(raw_edge, 4),  # for asymmetric, raw edge is the quality
+                            market_type=mtype_str,
+                            explanation=asym_explanation,
+                        )
+                        signals.append(asym_signal)
+                        self._m["asymmetric"]["signals_generated"] += 1
+                        logger.info(
+                            f"[WEATHER-ASYM] Signal: {cm.station_id} {cm.target_date} "
+                            f"bucket={bucket.label} price={market_price:.4f} prob={prob:.4f} "
+                            f"edge={raw_edge:.4f} payoff={expected_payoff:.0f}% size={asym_size}"
+                        )
+                        continue
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     f"edge {edge_bps:.0f}bps < {self.config.min_edge_bps:.0f}bps",
@@ -704,6 +821,64 @@ class WeatherTrader(BaseStrategy):
             # --- Confidence ---
             confidence = bucket_confidence
             if confidence < self.config.min_confidence:
+                # Also check asymmetric for confidence-rejected buckets
+                raw_edge = prob - market_price
+                if (self.config.asymmetric_enabled
+                    and market_price <= self.config.asymmetric_max_market_price
+                    and prob >= self.config.asymmetric_min_model_prob
+                    and raw_edge >= self.config.asymmetric_min_edge
+                    and bucket_confidence >= self.config.asymmetric_min_confidence
+                    and cooldown_key not in self._cooldown
+                    and not self._state.risk_config.kill_switch_active):
+                    asym_size = kelly_size(
+                        model_prob=prob,
+                        market_price=market_price,
+                        base_size=self.config.asymmetric_default_size,
+                        kelly_scale=self.config.asymmetric_kelly_scale,
+                        max_size=self.config.asymmetric_max_size,
+                    )
+                    if asym_size > 0:
+                        expected_payoff = round((1.0 / market_price - 1) * 100, 1) if market_price > 0 else 0
+                        city_name = self._get_city(cm.station_id)
+                        asym_explanation = {
+                            "market": cm.question[:120],
+                            "location": city_name or cm.station_id,
+                            "contract_type": "asymmetric_weather",
+                            "market_type": mtype_str,
+                            "bucket": bucket.label,
+                            "forecast_summary": f"Forecast {mu:.1f} (sigma {sigma:.1f}, lead {lead_hours:.0f}h)",
+                            "model_probability": round(prob, 4),
+                            "market_price": round(market_price, 4),
+                            "raw_edge": round(raw_edge, 4),
+                            "expected_payoff_pct": expected_payoff,
+                            "confidence": round(bucket_confidence, 3),
+                            "thesis": f"Asymmetric: Market prices {bucket.label} at {market_price:.0%} but model says {prob:.0%}. "
+                                      f"If correct, {expected_payoff:.0f}% return. Hold to resolution.",
+                        }
+                        asym_signal = WeatherSignal(
+                            condition_id=cm.condition_id,
+                            station_id=cm.station_id,
+                            target_date=cm.target_date,
+                            bucket_label=bucket.label,
+                            token_id=bucket.token_id,
+                            forecast_high_f=round(mu, 1),
+                            sigma=round(sigma, 2),
+                            lead_hours=round(lead_hours, 1),
+                            model_prob=round(prob, 6),
+                            market_price=round(market_price, 6),
+                            edge_bps=edge_bps,
+                            confidence=bucket_confidence,
+                            recommended_size=asym_size,
+                            is_tradable=True,
+                            is_asymmetric=True,
+                            liquidity_score=round(liq_score, 1),
+                            quality_score=round(raw_edge, 4),
+                            market_type=mtype_str,
+                            explanation=asym_explanation,
+                        )
+                        signals.append(asym_signal)
+                        self._m["asymmetric"]["signals_generated"] += 1
+                        continue
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     f"confidence {confidence:.3f} < {self.config.min_confidence}",
@@ -910,12 +1085,15 @@ class WeatherTrader(BaseStrategy):
             logger.warning("No execution context; skipping weather signal")
             return
 
+        # Asymmetric signals use a separate strategy_id for independent PnL tracking
+        strategy_tag = "weather_asymmetric" if signal.is_asymmetric else self.strategy_id
+
         order = OrderRecord(
             token_id=signal.token_id,
             side=OrderSide.BUY,
             price=signal.market_price,
             size=signal.recommended_size,
-            strategy_id=self.strategy_id,
+            strategy_id=strategy_tag,
         )
 
         ok, reason = self._risk_engine.check_order(order)
@@ -943,13 +1121,17 @@ class WeatherTrader(BaseStrategy):
         self._cooldown[cooldown_key] = time.time()
         self._m["signals_executed"] += 1
         self._m["active_executions"] = len(self._active_executions)
+        if signal.is_asymmetric:
+            self._m["asymmetric"]["signals_executed"] += 1
 
         # Emit signal event for Telegram / analytics
+        strategy_label = "WEATHER-ASYM" if signal.is_asymmetric else "WEATHER"
+        expected_payoff = round((1.0 / signal.market_price - 1) * 100, 1) if signal.is_asymmetric and signal.market_price > 0 else None
         await self._bus.emit(Event(
             type=EventType.SIGNAL,
-            source=self.strategy_id,
+            source=strategy_tag,
             data={
-                "strategy": "WEATHER",
+                "strategy": strategy_label,
                 "asset": signal.station_id,
                 "strike": signal.bucket_label,
                 "fair_price": signal.model_prob,
@@ -959,6 +1141,8 @@ class WeatherTrader(BaseStrategy):
                 "forecast_high": signal.forecast_high_f,
                 "sigma": signal.sigma,
                 "lead_hours": signal.lead_hours,
+                "is_asymmetric": signal.is_asymmetric,
+                "expected_payoff_pct": expected_payoff,
             },
         ))
 

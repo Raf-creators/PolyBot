@@ -1540,6 +1540,63 @@ async def get_weather_health():
     return health
 
 
+@api_router.get("/strategies/weather-asymmetric/summary")
+async def get_weather_asymmetric_summary():
+    """Return asymmetric weather strategy positions, PnL, and metrics."""
+    if not weather_trader_ref:
+        raise HTTPException(500, "Weather trader not initialized")
+
+    health = weather_trader_ref.get_health()
+    asym_metrics = health.get("metrics", {}).get("asymmetric", {})
+
+    # Get open asymmetric positions
+    asym_positions = []
+    for pos in state.positions.values():
+        if getattr(pos, "strategy_id", "") == "weather_asymmetric":
+            snap = state.get_market(pos.token_id)
+            current_price = snap.mid_price if snap else pos.current_price
+            unrealized = round((current_price - pos.avg_cost) * pos.size, 4) if current_price else 0
+            expected_payoff = round((1.0 / pos.avg_cost - 1) * 100, 1) if pos.avg_cost > 0 else 0
+            asym_positions.append({
+                "token_id": pos.token_id,
+                "market_question": pos.market_question,
+                "outcome": pos.outcome,
+                "size": pos.size,
+                "avg_cost": round(pos.avg_cost, 4),
+                "current_price": round(current_price, 4) if current_price else None,
+                "unrealized_pnl": unrealized,
+                "expected_payoff_pct": expected_payoff,
+                "risk": round(pos.avg_cost * pos.size, 2),
+                "max_reward": round((1.0 - pos.avg_cost) * pos.size, 2),
+            })
+
+    # Closed asymmetric trades
+    asym_trades = [t for t in state.trades if t.strategy_id == "weather_asymmetric" and t.side.value == "sell"]
+    realized_pnl = sum(t.pnl for t in asym_trades)
+    wins = sum(1 for t in asym_trades if t.pnl > 0)
+    losses = sum(1 for t in asym_trades if t.pnl < 0)
+
+    return {
+        "open_positions": asym_positions,
+        "position_count": len(asym_positions),
+        "realized_pnl": round(realized_pnl, 4),
+        "unrealized_pnl": round(sum(p["unrealized_pnl"] for p in asym_positions), 4),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(wins / max(wins + losses, 1) * 100, 1),
+        "metrics": asym_metrics,
+        "config": {
+            "enabled": weather_trader_ref.config.asymmetric_enabled,
+            "max_market_price": weather_trader_ref.config.asymmetric_max_market_price,
+            "min_model_prob": weather_trader_ref.config.asymmetric_min_model_prob,
+            "min_edge": weather_trader_ref.config.asymmetric_min_edge,
+            "default_size": weather_trader_ref.config.asymmetric_default_size,
+            "max_positions": weather_trader_ref.config.asymmetric_max_positions,
+        },
+    }
+
+
+
 @api_router.get("/strategies/weather/config")
 async def get_weather_config():
     if not weather_trader_ref:
@@ -1731,6 +1788,17 @@ async def get_calibration_status():
     return await calibration_service.get_status()
 
 
+@api_router.get("/strategies/weather/calibration/metrics")
+async def get_calibration_metrics():
+    """Compute and return Brier score, calibration error, sigma evolution.
+
+    Segmented by lead-hours bracket, station, and market type.
+    """
+    if not rolling_calibration_service:
+        raise HTTPException(500, "Rolling calibration service not initialized")
+    return await rolling_calibration_service.compute_calibration_metrics()
+
+
 @api_router.get("/strategies/weather/calibration/{station_id}")
 async def get_station_calibration(station_id: str):
     """Get calibration data for a specific station."""
@@ -1796,7 +1864,6 @@ async def reload_rolling_calibrations():
     await rolling_calibration_service.load_cached()
     result = await weather_trader_ref.reload_rolling_calibrations()
     return result
-
 
 
 @api_router.post("/test/inject-weather-market")
@@ -2258,6 +2325,77 @@ async def clear_test_trades():
     state.loss_count = sum(1 for t in remaining if t.pnl < 0)
     state.daily_pnl = sum(t.pnl for t in remaining)
     return {"status": "cleared"}
+
+
+
+# ---- Data Migration: Fix historical resolver trades ----
+
+@api_router.post("/admin/fix-resolver-trades")
+async def fix_resolver_trades():
+    """Retroactively fix strategy_id on historical 'resolver' trades.
+
+    For each trade with strategy_id='resolver', find the matching BUY trade
+    (same token_id) and assign its strategy_id. This fixes PnL attribution.
+    Also updates the in-memory state.
+    """
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    db = engine.persistence._db if engine and engine.persistence else None
+    if db is None:
+        raise HTTPException(500, "DB not available")
+
+    # Build a lookup: token_id -> original strategy_id from buy trades
+    token_strategy_map = {}
+    for t in state.trades:
+        if t.side.value == "buy" and t.strategy_id and t.strategy_id != "resolver":
+            token_strategy_map[t.token_id] = t.strategy_id
+
+    fixed_count = 0
+    fixed_details = []
+
+    for i, t in enumerate(state.trades):
+        if t.strategy_id == "resolver" and t.token_id in token_strategy_map:
+            original_strategy = token_strategy_map[t.token_id]
+            # Update in-memory
+            state.trades[i] = TradeRecord(
+                id=t.id,
+                order_id=t.order_id,
+                token_id=t.token_id,
+                market_question=t.market_question,
+                outcome=t.outcome,
+                side=t.side,
+                price=t.price,
+                size=t.size,
+                fees=t.fees,
+                pnl=t.pnl,
+                strategy_id=original_strategy,
+                signal_reason=t.signal_reason,
+                timestamp=t.timestamp,
+            )
+            # Update in MongoDB
+            await db.trades.update_one(
+                {"id": t.id},
+                {"$set": {"strategy_id": original_strategy}},
+            )
+            fixed_count += 1
+            fixed_details.append({
+                "trade_id": t.id[:12],
+                "token_id": t.token_id[:16],
+                "pnl": t.pnl,
+                "old_strategy": "resolver",
+                "new_strategy": original_strategy,
+            })
+
+    # Recompute win/loss counters
+    state.win_count = sum(1 for t in state.trades if t.pnl > 0)
+    state.loss_count = sum(1 for t in state.trades if t.pnl < 0)
+
+    return {
+        "status": "completed",
+        "trades_fixed": fixed_count,
+        "details": fixed_details[:50],
+    }
 
 
 

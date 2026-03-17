@@ -39,19 +39,23 @@ export default function Weather() {
   const [calRunning, setCalRunning] = useState(false);
   const [rollingCalRunning, setRollingCalRunning] = useState(false);
   const [posBreakdown, setPosBreakdown] = useState(null);
+  const [asymSummary, setAsymSummary] = useState(null);
+  const [calMetrics, setCalMetrics] = useState(null);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal, rolCal, bk] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
         axios.get(`${API_BASE}/strategies/weather/calibration/status`),
         axios.get(`${API_BASE}/strategies/weather/calibration/rolling/status`),
         axios.get(`${API_BASE}/positions/weather/breakdown`),
+        axios.get(`${API_BASE}/strategies/weather-asymmetric/summary`),
+        axios.get(`${API_BASE}/strategies/weather/calibration/metrics`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
@@ -60,6 +64,8 @@ export default function Weather() {
       setSigmaCalStatus(sigCal.data);
       setRollingCalStatus(rolCal.data);
       setPosBreakdown(bk.data);
+      setAsymSummary(asym.data);
+      setCalMetrics(cm.data);
     } catch {}
   }, [demoMode]);
 
@@ -296,6 +302,9 @@ export default function Weather() {
           <TabsTrigger data-testid="tab-calibration" value="calibration" className="text-xs data-[state=active]:bg-zinc-800">
             Calibration
           </TabsTrigger>
+          <TabsTrigger data-testid="tab-asymmetric" value="asymmetric" className="text-xs data-[state=active]:bg-rose-900/40">
+            Asymmetric
+          </TabsTrigger>
           <TabsTrigger data-testid="tab-health" value="health" className="text-xs data-[state=active]:bg-zinc-800">
             Health
           </TabsTrigger>
@@ -364,6 +373,7 @@ export default function Weather() {
         {/* Calibration Tab */}
         <TabsContent value="calibration" className="mt-4">
           <div className="space-y-5">
+            <CalibrationMetricsSection metrics={calMetrics} />
             <ShadowSummarySection summary={shadowSummary} config={config} isShadow={isShadow} execMode={execMode} />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               <CalibrationHealthSection health={calibrationHealth} />
@@ -401,6 +411,11 @@ export default function Weather() {
                 emptyMessage="No forecast accuracy records yet" testId="accuracy-log-table" />
             </SectionCard>
           </div>
+        </TabsContent>
+
+        {/* Asymmetric Mode Tab */}
+        <TabsContent value="asymmetric" className="mt-4 space-y-5">
+          <AsymmetricSection data={asymSummary} asymMetrics={health.asymmetric} bestAsymSignal={health.asymmetric?.best_signal_this_scan} />
         </TabsContent>
 
         {/* Health Tab */}
@@ -719,6 +734,316 @@ function PositionBreakdownSection({ data }) {
           ))}
         </div>
       </SectionCard>
+    </div>
+  );
+}
+
+
+function AsymmetricSection({ data, asymMetrics, bestAsymSignal }) {
+  const d = data || {};
+  const positions = d.open_positions || [];
+  const config = d.config || {};
+  const metrics = asymMetrics || d.metrics || {};
+
+  const posColumns = [
+    { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[180px] truncate block">{truncate(v, 45)}</span> },
+    { key: 'outcome', label: 'Outcome', render: (v) => <span className="text-zinc-300 font-medium">{v}</span> },
+    { key: 'avg_cost', label: 'Entry', align: 'right', render: (v) => <span className="font-mono text-rose-300">{formatPrice(v)}</span> },
+    { key: 'current_price', label: 'Mark', align: 'right', render: (v) => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '—'}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{formatNumber(v, 2)}</span> },
+    { key: 'risk', label: 'Risk', align: 'right', render: (v) => <span className="font-mono text-red-400">${v?.toFixed(2)}</span> },
+    { key: 'max_reward', label: 'Max Reward', align: 'right', render: (v) => <span className="font-mono text-emerald-400">${v?.toFixed(2)}</span> },
+    { key: 'expected_payoff_pct', label: 'Payoff', align: 'right', render: (v) => <span className="font-mono text-rose-300">{v}%</span> },
+    { key: 'unrealized_pnl', label: 'Unrl P&L', align: 'right', render: (v) => (
+      <span className={`font-mono font-medium ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{formatPnl(v)}</span>
+    )},
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Asymmetric Summary */}
+      <div data-testid="asymmetric-summary" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <StatCard testId="stat-asym-positions" label="Open Positions" value={d.position_count || 0} />
+        <StatCard testId="stat-asym-realized" label="Realized PnL" value={formatPnl(d.realized_pnl || 0)} />
+        <StatCard testId="stat-asym-unrealized" label="Unrealized PnL" value={formatPnl(d.unrealized_pnl || 0)} />
+        <StatCard testId="stat-asym-signals" label="Signals Generated" value={metrics.signals_generated || 0} />
+        <StatCard testId="stat-asym-executed" label="Executed" value={metrics.signals_executed || 0} />
+        <StatCard testId="stat-asym-winrate" label="Win Rate" value={d.win_rate != null ? `${d.win_rate}%` : '—'} />
+      </div>
+
+      {/* Config */}
+      <SectionCard title="Asymmetric Mode Configuration" testId="section-asym-config">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+          <div>
+            <span className="text-zinc-500 block">Status</span>
+            <Badge variant="outline" className={`text-[10px] mt-1 ${config.enabled ? 'border-emerald-500/30 text-emerald-400' : 'border-red-500/30 text-red-400'}`}>
+              {config.enabled ? 'ENABLED' : 'DISABLED'}
+            </Badge>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Max Price</span>
+            <span className="text-rose-300 font-mono">{config.max_market_price ? `${(config.max_market_price * 100).toFixed(0)}¢` : '—'}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Min Model Prob</span>
+            <span className="text-zinc-300 font-mono">{config.min_model_prob ? `${(config.min_model_prob * 100).toFixed(0)}%` : '—'}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Min Edge</span>
+            <span className="text-zinc-300 font-mono">{config.min_edge ? `${(config.min_edge * 100).toFixed(0)}%` : '—'}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Default Size</span>
+            <span className="text-zinc-300 font-mono">${config.default_size || '—'}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Max Positions</span>
+            <span className="text-zinc-300 font-mono">{config.max_positions || '—'}</span>
+          </div>
+        </div>
+        <div className="mt-3 text-[10px] text-zinc-600">
+          Targets contracts priced ≤ {config.max_market_price ? `${(config.max_market_price * 100).toFixed(0)}¢` : '25¢'} where the model sees ≥ {config.min_model_prob ? `${(config.min_model_prob * 100).toFixed(0)}%` : '40%'} probability. Holds to resolution for maximum asymmetric payoff.
+        </div>
+      </SectionCard>
+
+      {/* Best Asymmetric Signal */}
+      {bestAsymSignal && (
+        <div data-testid="best-asym-signal" className="px-4 py-3 bg-rose-950/30 border border-rose-800/30 rounded-lg">
+          <div className="flex items-center gap-3 text-xs flex-wrap">
+            <span className="text-rose-400 font-semibold">BEST ASYMMETRIC</span>
+            <span className="text-cyan-400 font-mono">{bestAsymSignal.station}</span>
+            <span className="text-zinc-400">{bestAsymSignal.date}</span>
+            <span className="text-zinc-200 font-medium">{bestAsymSignal.bucket}</span>
+            <span className="text-rose-300 font-mono">Price: {formatPrice(bestAsymSignal.market_price)}</span>
+            <span className="text-emerald-400 font-mono">Model: {(bestAsymSignal.model_prob * 100).toFixed(0)}%</span>
+            <span className="text-amber-400 font-mono">Edge: {(bestAsymSignal.edge * 100).toFixed(0)}%</span>
+            <span className="text-emerald-400 font-mono">Payoff: +{bestAsymSignal.expected_payoff}%</span>
+          </div>
+          {bestAsymSignal.thesis && (
+            <div className="text-zinc-500 text-[10px] mt-1">{bestAsymSignal.thesis}</div>
+          )}
+        </div>
+      )}
+
+      {/* Open Asymmetric Positions */}
+      <SectionCard title="Open Asymmetric Positions" testId="section-asym-positions">
+        <DataTable columns={posColumns} data={positions}
+          emptyMessage="No open asymmetric positions — waiting for low-priced, high-conviction signals"
+          testId="asym-positions-table" />
+      </SectionCard>
+
+      {/* PnL Summary */}
+      <SectionCard title="Asymmetric Performance" testId="section-asym-perf">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+          <div>
+            <span className="text-zinc-500 block">Realized PnL</span>
+            <span className={`font-mono font-medium ${(d.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {formatPnl(d.realized_pnl || 0)}
+            </span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Unrealized PnL</span>
+            <span className={`font-mono font-medium ${(d.unrealized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {formatPnl(d.unrealized_pnl || 0)}
+            </span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Win / Loss</span>
+            <span className="text-zinc-300 font-mono">{d.wins || 0} / {d.losses || 0}</span>
+          </div>
+          <div>
+            <span className="text-zinc-500 block">Win Rate</span>
+            <span className="text-zinc-300 font-mono">{d.win_rate > 0 ? `${d.win_rate}%` : '—'}</span>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+
+function CalibrationMetricsSection({ metrics }) {
+  const m = metrics || {};
+  if (!m.brier_score && m.brier_score !== 0) {
+    return (
+      <SectionCard title="Calibration Metrics" testId="section-cal-metrics">
+        <div className="text-zinc-600 text-sm text-center py-4">
+          {m.status === 'no_data' ? 'No resolved forecast data yet' : 'Collecting data...'}
+        </div>
+      </SectionCard>
+    );
+  }
+
+  const byLead = m.by_lead_bracket || {};
+  const byType = m.by_market_type || {};
+  const calCurve = m.calibration_curve || [];
+  const sigmaEvo = m.sigma_evolution || [];
+
+  const coverageColor = (cov) => {
+    const diff = Math.abs(cov - 0.6827);
+    if (diff < 0.05) return 'text-emerald-400';
+    if (diff < 0.15) return 'text-amber-400';
+    return 'text-red-400';
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Overall Metrics */}
+      <div data-testid="cal-metrics-overview" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <StatCard testId="stat-brier" label="Brier Score" value={m.brier_score?.toFixed(3)}
+          sub="Lower = better. 0 = perfect" />
+        <StatCard testId="stat-coverage-1s" label="1σ Coverage" value={`${(m.coverage_1sigma * 100).toFixed(1)}%`}
+          sub={`Target: 68.3%`} />
+        <StatCard testId="stat-coverage-2s" label="2σ Coverage" value={`${(m.coverage_2sigma * 100).toFixed(1)}%`}
+          sub="Target: 95.5%" />
+        <StatCard testId="stat-cal-error" label="Calibration Error" value={m.calibration_error?.toFixed(3)}
+          sub="0 = perfect" />
+        <StatCard testId="stat-overconfident" label="Over-confident" value={`${(m.over_confident_pct * 100).toFixed(0)}%`}
+          sub="Error > 1.5σ" />
+        <StatCard testId="stat-underconfident" label="Under-confident" value={`${(m.under_confident_pct * 100).toFixed(0)}%`}
+          sub="Error < 0.25σ" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* By Lead Time */}
+        <SectionCard title="Calibration by Forecast Horizon" testId="section-cal-by-lead">
+          <div className="space-y-3 text-xs">
+            {Object.entries(byLead).map(([bracket, data]) => (
+              <div key={bracket} className="space-y-1 border-b border-zinc-800/50 pb-2 last:border-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-200 font-mono font-medium">{bracket.replace('_', '-')}h</span>
+                  <span className="text-zinc-500">n={data.count}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Avg Error</span>
+                  <span className="text-zinc-300 font-mono">{data.avg_error}°F</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Avg Sigma</span>
+                  <span className="text-zinc-300 font-mono">{data.avg_sigma}°F</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">1σ Coverage</span>
+                  <span className={`font-mono ${coverageColor(data.coverage_1sigma)}`}>{(data.coverage_1sigma * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Sigma Rec.</span>
+                  <span className="text-amber-400 font-mono">{data.sigma_recommendation}°F</span>
+                </div>
+                {data.is_overconfident && <Badge variant="outline" className="text-[9px] border-red-500/30 text-red-400">OVERCONFIDENT</Badge>}
+                {data.is_underconfident && <Badge variant="outline" className="text-[9px] border-blue-500/30 text-blue-400">UNDERCONFIDENT</Badge>}
+              </div>
+            ))}
+            {Object.keys(byLead).length === 0 && <div className="text-zinc-600 text-center py-2">No lead-time data yet</div>}
+          </div>
+        </SectionCard>
+
+        {/* By Market Type */}
+        <SectionCard title="Calibration by Market Type" testId="section-cal-by-type">
+          <div className="space-y-3 text-xs">
+            {Object.entries(byType).map(([type, data]) => {
+              const colors = { temperature: 'text-amber-400', precipitation: 'text-blue-400', snowfall: 'text-cyan-300', wind: 'text-teal-400' };
+              return (
+                <div key={type} className="space-y-1 border-b border-zinc-800/50 pb-2 last:border-0">
+                  <div className="flex justify-between items-center">
+                    <span className={`font-mono font-medium uppercase ${colors[type] || 'text-zinc-400'}`}>{type}</span>
+                    <span className="text-zinc-500">n={data.count}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Avg Error</span>
+                    <span className="text-zinc-300 font-mono">{data.avg_error}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">1σ Coverage</span>
+                    <span className={`font-mono ${coverageColor(data.coverage_1sigma)}`}>{(data.coverage_1sigma * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Brier Score</span>
+                    <span className="text-zinc-300 font-mono">{data.brier_score}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Sigma Rec.</span>
+                    <span className="text-amber-400 font-mono">{data.sigma_recommendation}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {Object.keys(byType).length === 0 && <div className="text-zinc-600 text-center py-2">No market type data yet</div>}
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Calibration Curve */}
+      {calCurve.length > 0 && (
+        <SectionCard title="Calibration Curve (Predicted σ vs Actual Error)" testId="section-cal-curve">
+          <div className="space-y-2 text-xs">
+            <div className="flex items-center gap-4 text-zinc-500 border-b border-zinc-800/50 pb-1.5">
+              <span className="w-24">Pred. Sigma</span>
+              <span className="w-24">Actual Error</span>
+              <span className="w-16">Ratio</span>
+              <span className="w-12">N</span>
+              <span className="flex-1">Visual</span>
+            </div>
+            {calCurve.map((p, i) => {
+              const ratio = p.ratio || 0;
+              const barWidth = Math.min(ratio * 50, 100);
+              const barColor = ratio > 1.3 ? 'bg-red-500' : ratio > 0.8 ? 'bg-emerald-500' : 'bg-blue-500';
+              return (
+                <div key={i} className="flex items-center gap-4">
+                  <span className="w-24 text-zinc-300 font-mono">{p.predicted_sigma}°F</span>
+                  <span className="w-24 text-zinc-300 font-mono">{p.actual_error}°F</span>
+                  <span className={`w-16 font-mono ${ratio > 1.3 ? 'text-red-400' : ratio > 0.8 ? 'text-emerald-400' : 'text-blue-400'}`}>
+                    {ratio.toFixed(2)}x
+                  </span>
+                  <span className="w-12 text-zinc-500">{p.count}</span>
+                  <div className="flex-1 bg-zinc-800 rounded-full h-2">
+                    <div className={`h-2 rounded-full ${barColor}`} style={{ width: `${barWidth}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <div className="text-zinc-600 text-[10px] mt-2">
+              Ratio = Actual Error / Predicted Sigma. 1.0x = perfectly calibrated. {'>'} 1.3x = overconfident. {'<'} 0.8x = underconfident.
+            </div>
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Sigma Evolution (last 100 forecasts) */}
+      {sigmaEvo.length > 0 && (
+        <SectionCard title="Sigma Evolution (Recent)" testId="section-sigma-evo">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-500 border-b border-zinc-800">
+                  <th className="text-left py-1 px-2">Date</th>
+                  <th className="text-left py-1 px-2">Station</th>
+                  <th className="text-right py-1 px-2">σ Used</th>
+                  <th className="text-right py-1 px-2">Actual Error</th>
+                  <th className="text-right py-1 px-2">Z-Score</th>
+                  <th className="text-right py-1 px-2">Lead</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sigmaEvo.slice(-20).map((row, i) => (
+                  <tr key={i} className="border-b border-zinc-800/30">
+                    <td className="py-1 px-2 text-zinc-400">{row.date}</td>
+                    <td className="py-1 px-2 text-cyan-400 font-mono">{row.station}</td>
+                    <td className="py-1 px-2 text-right text-zinc-300 font-mono">{row.sigma_used}°F</td>
+                    <td className="py-1 px-2 text-right font-mono">
+                      <span className={row.actual_error > row.sigma_used ? 'text-red-400' : 'text-emerald-400'}>{row.actual_error}°F</span>
+                    </td>
+                    <td className="py-1 px-2 text-right font-mono">
+                      <span className={row.z_score > 2 ? 'text-red-400' : row.z_score > 1 ? 'text-amber-400' : 'text-emerald-400'}>{row.z_score}</span>
+                    </td>
+                    <td className="py-1 px-2 text-right text-zinc-400 font-mono">{row.lead_hours?.toFixed(0)}h</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
     </div>
   );
 }

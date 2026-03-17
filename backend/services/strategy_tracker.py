@@ -412,7 +412,8 @@ def _trade_to_bucket(strategy_id: str) -> str:
     mapping = {
         "crypto_sniper": "crypto",
         "weather_trader": "weather",
+        "weather_asymmetric": "weather_asymmetric",
         "arb_scanner": "arb",
         "resolver": "resolver",
     }
-    return mapping.get(strategy_id, "resolver")
+    return mapping.get(strategy_id, "other")

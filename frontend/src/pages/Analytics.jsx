@@ -526,6 +526,7 @@ function WatchdogSection({ watchdog, strategyTracker }) {
 const STRATEGY_COLORS = {
   crypto: { bg: 'bg-sky-950/50', border: 'border-sky-800/40', accent: 'text-sky-400', label: 'CRYPTO' },
   weather: { bg: 'bg-amber-950/50', border: 'border-amber-800/40', accent: 'text-amber-400', label: 'WEATHER' },
+  weather_asymmetric: { bg: 'bg-rose-950/50', border: 'border-rose-800/40', accent: 'text-rose-400', label: 'WEATHER ASYM' },
   arb: { bg: 'bg-violet-950/50', border: 'border-violet-800/40', accent: 'text-violet-400', label: 'ARB' },
   resolver: { bg: 'bg-zinc-900/50', border: 'border-zinc-800/40', accent: 'text-zinc-400', label: 'RESOLVER' },
 };
@@ -533,7 +534,7 @@ const STRATEGY_COLORS = {
 function StrategyComparisonSection({ attribution, strategyTracker, positionSummaries }) {
   const attr = attribution || {};
   const posSums = positionSummaries || {};
-  const displayBuckets = ['crypto', 'weather', 'arb'];
+  const displayBuckets = ['crypto', 'weather', 'weather_asymmetric', 'arb'];
 
   // Merge: prefer positionSummaries for unrealized/total as it uses live mark-to-market
   const merged = {};

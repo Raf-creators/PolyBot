@@ -40,9 +40,15 @@ class PaperAdapter:
             updated_at=utc_now(),
         )
 
-        # Record trade
+        # Record trade + update position
         mkt_question = market.question if market else ""
         mkt_outcome = market.outcome if market else ""
+        existing = self._state.get_position(order.token_id)
+
+        # Compute PnL for sell trades BEFORE creating the trade record
+        trade_pnl = 0.0
+        if order.side.value == "sell" and existing and existing.size >= order.size:
+            trade_pnl = round((fill_price - existing.avg_cost) * order.size, 4)
 
         trade = TradeRecord(
             id=new_id(),
@@ -54,14 +60,13 @@ class PaperAdapter:
             price=fill_price,
             size=order.size,
             fees=round(order.size * fill_price * 0.002, 4),
+            pnl=trade_pnl,
             strategy_id=order.strategy_id,
             signal_reason="paper_fill",
         )
         self._state.add_trade(trade)
 
         # Update position
-        existing = self._state.get_position(order.token_id)
-
         if order.side.value == "buy":
             if existing:
                 new_size = existing.size + order.size
@@ -90,7 +95,6 @@ class PaperAdapter:
         else:
             if existing and existing.size >= order.size:
                 new_size = round(existing.size - order.size, 4)
-                pnl = round((fill_price - existing.avg_cost) * order.size, 4)
                 self._state.update_position(order.token_id, Position(
                     token_id=order.token_id,
                     market_question=existing.market_question,
@@ -100,7 +104,7 @@ class PaperAdapter:
                     avg_cost=existing.avg_cost,
                     current_price=fill_price,
                     unrealized_pnl=0.0,
-                    realized_pnl=round(existing.realized_pnl + pnl, 4),
+                    realized_pnl=round(existing.realized_pnl + trade_pnl, 4),
                 ))
 
         latency_ms = round((time.time() - t_start) * 1000, 2)

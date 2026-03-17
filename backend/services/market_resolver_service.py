@@ -163,6 +163,9 @@ class MarketResolverService:
                 pnl = round((settlement_price - sib_pos.avg_cost) * sib_pos.size, 4)
                 total_pnl += pnl
 
+                # Use the original strategy that opened the position
+                original_strategy = getattr(sib_pos, "strategy_id", "") or "unknown"
+
                 trade = TradeRecord(
                     id=new_id(),
                     order_id="resolution",
@@ -174,13 +177,10 @@ class MarketResolverService:
                     size=sib_pos.size,
                     fees=0.0,
                     pnl=pnl,
-                    strategy_id="resolver",
+                    strategy_id=original_strategy,
                     signal_reason=f"market_resolved:{winning_outcome}",
                 )
                 self._state.add_trade(trade)
-
-                # Track per-strategy close for the ORIGINAL strategy that opened this position
-                original_strategy = getattr(sib_pos, "strategy_id", "unknown") or "resolver"
                 if self._tracker:
                     self._tracker.record_close(original_strategy, pnl)
 

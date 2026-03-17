@@ -1,0 +1,159 @@
+{
+  "summary": "Iteration 48: Realized PnL Fix + Weather Asymmetric Mode + Calibration Metrics. All 25 backend API tests passed. All frontend UI elements verified via Playwright. P1 (Realized PnL tracking), P2 (Weather Asymmetric Mode), and P3 (Calibration Self-Improvement) features all working correctly.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/analytics/summary returns 200 with realized_pnl=$142.70 - PASS",
+      "GET /api/analytics/strategies returns 200 with per-strategy data - PASS",
+      "GET /api/analytics/strategy-attribution returns 200 with crypto, weather, arb buckets - PASS",
+      "Strategy attribution has realized_pnl, unrealized_pnl, total_pnl, trade_count, wins, losses per bucket - PASS",
+      "POST /api/admin/fix-resolver-trades returns 200 with status=completed - PASS",
+      "GET /api/trades returns trades with strategy_id set - PASS",
+      "GET /api/strategies/weather-asymmetric/summary returns 200 - PASS",
+      "Asymmetric config has correct values: max_market_price=0.25, min_model_prob=0.40, min_edge=0.15, default_size=5.0, max_positions=10 - PASS",
+      "Asymmetric summary has open_positions list, position_count, realized_pnl, unrealized_pnl - PASS",
+      "GET /api/strategies/weather/health includes 'asymmetric' metrics - PASS",
+      "GET /api/strategies/weather/config has all asymmetric_* settings - PASS",
+      "GET /api/strategies/weather/calibration/metrics returns 200 with brier_score, coverage_1sigma, coverage_2sigma - PASS",
+      "Calibration metrics has by_lead_bracket breakdown (0_24: count=5, coverage=40.0%) - PASS",
+      "Calibration metrics has by_market_type breakdown (temperature: count=5) - PASS",
+      "Calibration metrics has calibration_curve array - PASS",
+      "Calibration metrics has sigma_evolution array (5 recent forecasts) - PASS",
+      "GET /api/strategies/weather/calibration/rolling/status returns 200 - PASS",
+      "GET /api/strategies/weather/accuracy/history returns list of forecast records - PASS",
+      "GET /api/health returns status=ok - PASS",
+      "GET /api/status returns stats and positions - PASS",
+      "GET /api/controls returns mode and limits - PASS",
+      "GET /api/positions/by-strategy returns positions and summaries - PASS",
+      "GET /api/analytics/strategy-tracker returns performance data - PASS",
+      "GET /api/trades shows trades with non-zero PnL (sell trades have realized PnL recorded) - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Analytics page loads with data-testid='analytics-page' - PASS",
+      "Analytics Strategy Comparison shows 4 strategy cards: CRYPTO, WEATHER, WEATHER ASYM, ARB - PASS",
+      "CRYPTO card shows Realized +$64.65, 11 Open, 1963 Closed, 166/163 W/L, 50.5% Win Rate - PASS",
+      "WEATHER card shows $0.00 Realized, -$1.65 Unrealized, 54 Open, 778 Closed - PASS",
+      "WEATHER ASYM card visible with $0.00 Total (no asymmetric positions yet) - PASS",
+      "ARB card shows +$82.23 Total, +$80.90 Realized, 21 Open, 157 Closed, 67/34 W/L, 66.3% Win Rate, TOP badge - PASS",
+      "Strategy Comparison table shows all metrics per strategy - PASS",
+      "Weather page loads correctly with stats grid and PnL bar - PASS",
+      "Weather Asymmetric tab accessible and shows config (ENABLED, 25¢, 40%, 15%, $5, 10) - PASS",
+      "Weather Asymmetric tab shows Open Positions table and Performance section - PASS",
+      "Weather Calibration tab shows Brier Score 1.064, 1σ Coverage 40.0%, 2σ Coverage 80.0% - PASS",
+      "Weather Calibration tab shows Calibration by Forecast Horizon (0-24h: n=5, overconfident) - PASS",
+      "Weather Calibration tab shows Calibration by Market Type (TEMPERATURE) - PASS",
+      "Weather Calibration tab shows Calibration Curve with ratio 1.27x - PASS",
+      "Weather Calibration tab shows Sigma Evolution table (5 recent forecasts) - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "P1_Realized_PnL_Fix": {
+      "status": "PASS",
+      "details": [
+        "GET /api/analytics/summary shows realized_pnl=$142.70 (was $0 before fix)",
+        "GET /api/analytics/strategy-attribution shows crypto realized=$64.65, arb realized=$80.90",
+        "POST /api/admin/fix-resolver-trades migrates historical resolver trades to correct strategy_id",
+        "Paper adapter records PnL on sell trades via trade_pnl calculation",
+        "Market resolver uses original strategy_id from position, not 'resolver'",
+        "Strategy tracker correctly attributes wins/losses to strategies"
+      ]
+    },
+    "P2_Weather_Asymmetric_Mode": {
+      "status": "PASS",
+      "details": [
+        "GET /api/strategies/weather-asymmetric/summary returns positions, config, metrics",
+        "Asymmetric config: max_market_price=0.25, min_model_prob=0.40, min_edge=0.15, default_size=5.0, max_positions=10",
+        "Weather health includes 'asymmetric' key with signals_generated, signals_executed, active_positions",
+        "Frontend Asymmetric tab shows config, positions table, and performance section",
+        "No positions yet (asymmetric mode has strict entry criteria: price≤25¢, model_prob≥40%, edge≥15%)"
+      ]
+    },
+    "P3_Calibration_Self_Improvement": {
+      "status": "PASS",
+      "details": [
+        "GET /api/strategies/weather/calibration/metrics returns brier_score=1.0639, coverage_1sigma=0.4, calibration_error=0.2827",
+        "by_lead_bracket breakdown: 0_24h shows n=5, avg_error=2.34F, avg_sigma=1.84F, sigma_rec=3.47F, is_overconfident=true",
+        "by_market_type breakdown: temperature has count=5, coverage=40%",
+        "calibration_curve: predicted_sigma=1.84F vs actual_error=2.34F, ratio=1.275x",
+        "sigma_evolution tracks 5 recent forecasts with z-scores (KLGA 2.654, KORD 1.869, etc.)",
+        "Frontend Calibration tab displays all metrics correctly"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "analytics_summary": {
+      "total_pnl": 142.7047,
+      "realized_pnl": 142.7047,
+      "trade_count": 2902,
+      "closing_trade_count": 431,
+      "win_count": 233,
+      "loss_count": 198,
+      "win_rate": 54.06
+    },
+    "strategy_attribution": {
+      "crypto": {"realized_pnl": 64.6464, "trade_count": 1963, "wins": 166, "losses": 163},
+      "weather": {"realized_pnl": 0.0, "trade_count": 778, "open_positions": 54},
+      "arb": {"realized_pnl": 80.896, "trade_count": 157, "wins": 67, "losses": 34},
+      "resolver": {"realized_pnl": -2.8377, "trade_count": 1}
+    },
+    "asymmetric_config": {
+      "enabled": true,
+      "max_market_price": 0.25,
+      "min_model_prob": 0.40,
+      "min_edge": 0.15,
+      "default_size": 5.0,
+      "max_positions": 10
+    },
+    "calibration_metrics": {
+      "status": "computed",
+      "total_resolved": 15,
+      "total_valid": 5,
+      "brier_score": 1.0639,
+      "coverage_1sigma": 0.4,
+      "coverage_2sigma": 0.8,
+      "calibration_error": 0.2827,
+      "over_confident_pct": 0.6,
+      "sigma_evolution_count": 5
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration48_pnl_asymmetric_calibration.py",
+    "/app/test_reports/pytest/pytest_results_iteration48.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration48_pnl_asymmetric_calibration.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (25/25 tests passed)",
+    "frontend": "100% (All UI features verified working)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (15 resolved forecast records, 2902 trades)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 48 verified P1/P2/P3 features: (1) Realized PnL fix working - crypto shows $64.65, arb shows $80.90 realized. Weather has 778 trades but $0 realized because no weather markets have resolved yet (all buys, no resolution trades). fix-resolver-trades endpoint available to migrate historical resolver→original strategy. (2) Weather Asymmetric Mode fully implemented - config at max_price=25¢, min_prob=40%, min_edge=15%. No positions yet because asymmetric has strict entry criteria. (3) Calibration metrics computed - brier_score=1.06, 1σ coverage=40% (ideal 68.3%), indicating model is slightly overconfident. sigma_evolution tracks 5 recent forecasts. 54 open weather positions. Only 1 trade remains attributed to 'resolver' strategy (-$2.84 PnL)."
+}

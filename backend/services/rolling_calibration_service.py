@@ -26,7 +26,7 @@ from engine.strategies.weather_models import (
     RollingCalibration, SigmaCalibration, WeatherConfig, StationType,
 )
 from engine.strategies.weather_parser import STATION_REGISTRY
-from engine.strategies.weather_pricing import get_season, _lead_hours_to_bracket
+from engine.strategies.weather_pricing import get_season, _lead_hours_to_bracket, compute_all_bucket_probabilities
 
 logger = logging.getLogger(__name__)
 
@@ -367,3 +367,231 @@ class RollingCalibrationService:
         self._last_record_count = await self._accuracy_collection.count_documents({"resolved": True})
         if self._calibrations:
             logger.info(f"[ROLLING CAL] Loaded {len(self._calibrations)} cached rolling calibrations")
+
+
+    # ---- Calibration Metrics (Brier Score, Calibration Error) ----
+
+    async def compute_calibration_metrics(self) -> Dict[str, Any]:
+        """Compute Brier score, calibration error, and sigma evolution.
+
+        Uses resolved forecast_accuracy records. For each:
+        - Compute how well sigma predicted the actual error distribution
+        - Measure over/under-confidence
+        - Group by lead_hours and market_type where available
+        """
+        cursor = self._accuracy_collection.find(
+            {"resolved": True},
+            {"_id": 0},
+        )
+        records = await cursor.to_list(length=10000)
+
+        if not records:
+            return {
+                "status": "no_data",
+                "total_resolved": 0,
+                "brier_score": None,
+                "calibration_error": None,
+            }
+
+        # === Brier-like score: how well does sigma capture actual errors? ===
+        # For each record: check if actual error falls within predicted sigma
+        # A well-calibrated model should have ~68% of errors within 1-sigma
+        brier_contributions = []
+        within_1sigma = 0
+        within_2sigma = 0
+        over_confident = 0  # sigma too small (error > sigma)
+        under_confident = 0  # sigma too large (error < 0.25 * sigma)
+        total_valid = 0
+
+        # Grouped metrics
+        by_lead = defaultdict(lambda: {"errors": [], "sigmas": [], "brier": [], "within_1s": 0, "count": 0})
+        by_station = defaultdict(lambda: {"errors": [], "sigmas": [], "brier": [], "within_1s": 0, "count": 0})
+        by_market_type = defaultdict(lambda: {"errors": [], "sigmas": [], "brier": [], "within_1s": 0, "count": 0})
+
+        # For calibration curve: bin predictions by confidence level
+        calibration_bins = defaultdict(lambda: {"predictions": [], "outcomes": []})
+
+        sigma_evolution = []  # Track sigma accuracy over time
+
+        for rec in records:
+            error_f = rec.get("forecast_error_f")
+            sigma = rec.get("sigma_used")
+            lead_hours = rec.get("lead_hours", 48)
+            station_id = rec.get("station_id", "unknown")
+            market_type = rec.get("market_type", "temperature")
+            target_date = rec.get("target_date", "")
+
+            if error_f is None or sigma is None or sigma <= 0:
+                continue
+
+            total_valid += 1
+            abs_error = abs(error_f)
+            normalized_error = abs_error / sigma  # z-score
+
+            # Brier-like: (normalized_error)^2 penalizes miscalibration
+            # Perfect calibration: normalized errors follow N(0,1)
+            # Expected value of normalized_error^2 for N(0,1) = 1.0
+            brier = (normalized_error - 1.0) ** 2  # 0 = perfect calibration
+            brier_contributions.append(brier)
+
+            # Sigma coverage
+            if abs_error <= sigma:
+                within_1sigma += 1
+            if abs_error <= 2 * sigma:
+                within_2sigma += 1
+            if abs_error > 1.5 * sigma:
+                over_confident += 1
+            if abs_error < 0.25 * sigma:
+                under_confident += 1
+
+            # Group by lead bracket
+            bracket = _lead_hours_to_bracket(lead_hours)
+            by_lead[bracket]["errors"].append(abs_error)
+            by_lead[bracket]["sigmas"].append(sigma)
+            by_lead[bracket]["brier"].append(brier)
+            if abs_error <= sigma:
+                by_lead[bracket]["within_1s"] += 1
+            by_lead[bracket]["count"] += 1
+
+            # Group by station
+            by_station[station_id]["errors"].append(abs_error)
+            by_station[station_id]["sigmas"].append(sigma)
+            by_station[station_id]["brier"].append(brier)
+            if abs_error <= sigma:
+                by_station[station_id]["within_1s"] += 1
+            by_station[station_id]["count"] += 1
+
+            # Group by market type
+            by_market_type[market_type]["errors"].append(abs_error)
+            by_market_type[market_type]["sigmas"].append(sigma)
+            by_market_type[market_type]["brier"].append(brier)
+            if abs_error <= sigma:
+                by_market_type[market_type]["within_1s"] += 1
+            by_market_type[market_type]["count"] += 1
+
+            # Calibration curve: bin by predicted confidence (1-sigma coverage proxy)
+            # Use sigma size as confidence indicator (smaller sigma = more confident)
+            confidence_bin = min(int(sigma / 0.5), 20)  # 0.5F bins
+            calibration_bins[confidence_bin]["predictions"].append(sigma)
+            calibration_bins[confidence_bin]["outcomes"].append(abs_error)
+
+            # Sigma evolution (time-ordered)
+            if target_date:
+                sigma_evolution.append({
+                    "date": target_date,
+                    "sigma_used": round(sigma, 2),
+                    "actual_error": round(abs_error, 2),
+                    "z_score": round(normalized_error, 3),
+                    "lead_hours": lead_hours,
+                    "station": station_id,
+                })
+
+        if total_valid == 0:
+            return {"status": "no_valid_data", "total_resolved": len(records), "total_valid": 0}
+
+        # === Aggregate metrics ===
+        overall_brier = round(sum(brier_contributions) / total_valid, 4)
+        coverage_1s = round(within_1sigma / total_valid, 4)  # should be ~0.68
+        coverage_2s = round(within_2sigma / total_valid, 4)  # should be ~0.95
+        calibration_error = round(abs(coverage_1s - 0.6827), 4)  # how far from ideal
+
+        # Per-lead breakdown
+        lead_breakdown = {}
+        for bracket, data in by_lead.items():
+            n = data["count"]
+            if n == 0:
+                continue
+            avg_err = sum(data["errors"]) / n
+            avg_sig = sum(data["sigmas"]) / n
+            cov = data["within_1s"] / n
+            b = sum(data["brier"]) / n
+            lead_breakdown[bracket] = {
+                "count": n,
+                "avg_error": round(avg_err, 2),
+                "avg_sigma": round(avg_sig, 2),
+                "coverage_1sigma": round(cov, 4),
+                "calibration_error": round(abs(cov - 0.6827), 4),
+                "brier_score": round(b, 4),
+                "sigma_recommendation": round(avg_err / 0.6745, 2),  # adjust sigma so 68% coverage
+                "is_overconfident": cov < 0.55,
+                "is_underconfident": cov > 0.80,
+            }
+
+        # Per-station breakdown
+        station_breakdown = {}
+        for sid, data in by_station.items():
+            n = data["count"]
+            if n < 3:
+                continue
+            avg_err = sum(data["errors"]) / n
+            avg_sig = sum(data["sigmas"]) / n
+            cov = data["within_1s"] / n
+            b = sum(data["brier"]) / n
+            station_breakdown[sid] = {
+                "count": n,
+                "avg_error": round(avg_err, 2),
+                "avg_sigma": round(avg_sig, 2),
+                "coverage_1sigma": round(cov, 4),
+                "brier_score": round(b, 4),
+                "sigma_recommendation": round(avg_err / 0.6745, 2),
+            }
+
+        # Per-market-type breakdown
+        market_type_breakdown = {}
+        for mt, data in by_market_type.items():
+            n = data["count"]
+            if n == 0:
+                continue
+            avg_err = sum(data["errors"]) / n
+            avg_sig = sum(data["sigmas"]) / n
+            cov = data["within_1s"] / n
+            b = sum(data["brier"]) / n
+            market_type_breakdown[mt] = {
+                "count": n,
+                "avg_error": round(avg_err, 2),
+                "avg_sigma": round(avg_sig, 2),
+                "coverage_1sigma": round(cov, 4),
+                "calibration_error": round(abs(cov - 0.6827), 4),
+                "brier_score": round(b, 4),
+                "sigma_recommendation": round(avg_err / 0.6745, 2),
+            }
+
+        # Calibration curve data (binned)
+        calibration_curve = []
+        for bin_idx in sorted(calibration_bins.keys()):
+            data = calibration_bins[bin_idx]
+            if not data["predictions"]:
+                continue
+            avg_predicted_sigma = sum(data["predictions"]) / len(data["predictions"])
+            avg_actual_error = sum(data["outcomes"]) / len(data["outcomes"])
+            calibration_curve.append({
+                "predicted_sigma": round(avg_predicted_sigma, 2),
+                "actual_error": round(avg_actual_error, 2),
+                "count": len(data["predictions"]),
+                "ratio": round(avg_actual_error / avg_predicted_sigma, 3) if avg_predicted_sigma > 0 else None,
+            })
+
+        # Sort sigma evolution by date, limit to last 100
+        sigma_evolution.sort(key=lambda x: x["date"])
+        sigma_evolution = sigma_evolution[-100:]
+
+        return {
+            "status": "computed",
+            "total_resolved": len(records),
+            "total_valid": total_valid,
+            # Overall metrics
+            "brier_score": overall_brier,
+            "coverage_1sigma": coverage_1s,
+            "coverage_2sigma": coverage_2s,
+            "ideal_coverage_1sigma": 0.6827,
+            "calibration_error": calibration_error,
+            "over_confident_pct": round(over_confident / total_valid, 4),
+            "under_confident_pct": round(under_confident / total_valid, 4),
+            # Breakdowns
+            "by_lead_bracket": lead_breakdown,
+            "by_station": station_breakdown,
+            "by_market_type": market_type_breakdown,
+            # Curve + evolution
+            "calibration_curve": calibration_curve,
+            "sigma_evolution": sigma_evolution,
+        }
