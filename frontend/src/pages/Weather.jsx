@@ -118,11 +118,11 @@ export default function Weather() {
   // ---- Open Positions Columns ----
   const positionColumns = [
     { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[200px] truncate block">{truncate(v, 50)}</span> },
-    { key: 'weather', label: 'City', render: (_, row) => {
+    { key: 'weather_city', label: 'City', render: (_, row) => {
       const w = row.weather;
       return w ? <span className="text-cyan-400 font-mono">{w.station_id}</span> : <span className="text-zinc-600">—</span>;
     }},
-    { key: 'weather', label: 'Bucket', render: (_, row) => {
+    { key: 'weather_bucket', label: 'Bucket', render: (_, row) => {
       const w = row.weather;
       return w ? <span className="text-zinc-300 font-medium">{w.bucket_label}</span> : <span className="text-zinc-600">—</span>;
     }},
@@ -135,7 +135,7 @@ export default function Weather() {
     { key: 'unrealized_pnl_pct', label: '%', align: 'right', render: (v) => (
       <span className={`font-mono text-xs ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}</span>
     )},
-    { key: 'weather', label: 'Edge@Entry', align: 'right', render: (_, row) => {
+    { key: 'weather_edge', label: 'Edge@Entry', align: 'right', render: (_, row) => {
       const e = row.weather?.edge_at_entry;
       return e != null ? <span className="font-mono text-amber-400">{formatBps(e)}</span> : <span className="text-zinc-600">—</span>;
     }},

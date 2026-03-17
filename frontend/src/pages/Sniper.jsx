@@ -53,11 +53,11 @@ export default function Sniper() {
   // ---- Open Positions Columns ----
   const positionColumns = [
     { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[220px] truncate block">{truncate(v, 55)}</span> },
-    { key: 'sniper', label: 'Asset', render: (_, row) => {
+    { key: 'sniper_asset', label: 'Asset', render: (_, row) => {
       const s = row.sniper;
       return s ? <span className="text-zinc-200 font-medium">{s.asset}</span> : <span className="text-zinc-600">—</span>;
     }},
-    { key: 'sniper', label: 'Side', render: (_, row) => {
+    { key: 'sniper_side', label: 'Side', render: (_, row) => {
       const s = row.sniper;
       return s ? <span className={s.side === 'buy_yes' ? 'text-emerald-400' : 'text-red-400'}>{s.side}</span> : <span className="text-zinc-600">—</span>;
     }},
@@ -70,7 +70,7 @@ export default function Sniper() {
     { key: 'unrealized_pnl_pct', label: '%', align: 'right', render: (v) => (
       <span className={`font-mono text-xs ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}</span>
     )},
-    { key: 'sniper', label: 'Edge@Entry', align: 'right', render: (_, row) => {
+    { key: 'sniper_edge', label: 'Edge@Entry', align: 'right', render: (_, row) => {
       const e = row.sniper?.edge_at_entry;
       return e != null ? <span className="font-mono text-amber-400">{formatBps(e)}</span> : <span className="text-zinc-600">—</span>;
     }},

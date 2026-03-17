@@ -1,70 +1,60 @@
 # Polymarket Edge OS — Product Requirements Document
 
 ## Original Problem Statement
-A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket paper trading with 3 strategies: crypto_sniper, weather_trader, arb_scanner. Ongoing incremental upgrades to improve weather strategy alpha quality and dashboard observability for paper testing.
+A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket paper trading with 3 strategies: crypto_sniper, weather_trader, arb_scanner. Ongoing incremental upgrades to weather strategy alpha quality, market coverage, and dashboard observability.
 
 ## Architecture
 ```
 /app
 ├── backend/
-│   ├── engine/
-│   │   ├── risk.py
-│   │   ├── state.py
-│   │   └── strategies/
-│   │       ├── weather_trader.py  # Signal sorting by quality_score, position cap, thesis builder
-│   │       ├── weather_models.py  # WeatherSignal: explanation dict, quality_score float
-│   │       ├── weather_feeds.py, weather_parser.py, weather_pricing.py
-│   │       ├── crypto_sniper.py, sniper_models.py
-│   │       └── arb_scanner.py
-│   ├── models.py
-│   ├── services/ (strategy_tracker.py, telegram_notifier.py, config_service.py)
-│   └── server.py               # /positions/by-strategy, /positions/weather/breakdown
-└── frontend/src/
-    ├── hooks/useApi.js, state/dashboardStore.js
-    └── pages/ (Weather.jsx, Sniper.jsx, Analytics.jsx)
+│   ├── engine/strategies/
+│   │   ├── weather_trader.py   # Quality-score-sorted execution, position cap, market type routing
+│   │   ├── weather_models.py   # WeatherMarketType enum, explanation/quality_score on signals
+│   │   ├── weather_parser.py   # Expanded: precipitation/snow/wind patterns, negative Celsius
+│   │   ├── weather_pricing.py  # compute_amount_bucket_probability for non-temp types
+│   │   ├── weather_feeds.py    # Fetches precip/snow/wind from Open-Meteo
+│   │   ├── crypto_sniper.py, sniper_models.py, arb_scanner.py
+│   ├── server.py               # /positions/by-strategy, /positions/weather/breakdown
+│   └── services/
+└── frontend/src/pages/
+    ├── Weather.jsx   # Open Positions + type breakdown + best signal + explanations
+    ├── Sniper.jsx    # Open Positions + PnL bar
+    └── Analytics.jsx # Strategy comparison with merged mark-to-market data
 ```
 
-## Key Config (Weather Strategy)
-- min_edge_bps: 500 (5% minimum edge)
-- min_confidence: 0.55 (55% floor)
-- max_weather_positions: 25 (hard cap)
+## Key Weather Config
+- min_edge_bps: 500 (5% minimum)
+- min_confidence: 0.55
+- max_weather_positions: 25 hard cap
 - Signal execution: sorted by quality_score descending
+- Supported market types: temperature, precipitation, snowfall, wind
 
 ## What's Been Implemented
 
-### Phase 1-4 (Prior sessions)
-- Core trading engine, WebSocket, Telegram, strategy isolation, attribution, live-readiness controls
+### Phase 1-6 (Prior work)
+- Core engine, WebSocket, Telegram, strategy isolation, attribution, live-readiness controls
+- Open positions visibility, dashboard cleanup, overtrading filter
+- Explanation layer, quality score, best signal tracking, position breakdown
 
-### Phase 5 — Open Positions & Dashboard (2026-03-17)
-- GET /api/positions/by-strategy with enriched metadata (city, bucket, asset, side parsing)
-- Weather/Sniper pages rewritten with Open Positions as primary tab, PnL bars
-- Analytics strategy comparison with merged mark-to-market data
-
-### Phase 6 — Overtrading Filter (2026-03-17)
-- Raised min_edge 300→500, min_confidence 0.40→0.55
-- max_weather_positions=25 hard cap
-- Signals sorted by quality_score descending (highest quality first)
-
-### Phase 7 — Explanation Layer & Quality Score (2026-03-17)
-- **Explanation layer**: Every signal (tradable + rejected) carries structured explanation dict:
-  - market, location, contract_type, bucket, forecast_summary, model_probability, market_price, edge, confidence, liquidity_score, quality_score, thesis (tradable), rejection_reason (rejected)
-- **Signal Quality Score**: Composite 0-1 metric = edge(50%) + confidence(30%) + liquidity(20%)
-- **Best Signal per Scan**: Tracked in health endpoint with station, date, bucket, edge, quality, thesis
-- **Thesis Builder**: Human-readable explanation of why a contract is mispriced
-- **Position Breakdown**: GET /api/positions/weather/breakdown — by resolution date, biggest winners/losers, oldest open, stale positions
-- **UI**: BEST SIGNAL banner on Signals tab, Quality/Thesis columns, color-coded rejection reasons, Context column, Position Breakdown section
+### Phase 7 — Multi-Market Type Support (2026-03-17)
+- **WeatherMarketType enum**: TEMPERATURE, PRECIPITATION, SNOWFALL, WIND
+- **Parser expansion**: Supports precipitation ("X inches or more of rain"), snowfall ("X inches of snow"), wind ("exceed X mph") patterns. Fixed negative Celsius parsing for Toronto/global markets.
+- **Probability models**: Normal CDF for all types with type-specific sigma tables (precip 0.3-1.5in, snow 1.0-5.0in, wind 3.0-12.0mph)
+- **Weather feeds**: Open-Meteo now fetches precipitation, snowfall, wind_speed_10m hourly data
+- **Market type tracking**: by_market_type breakdown in health endpoint (classified/signals/executed/rejected per type)
+- **Market discovery**: Gamma tag search expanded to rain, snow, precipitation, wind
+- **UI**: "By Market Type" card in Health tab (color-coded: temp=amber, precip=blue, snow=cyan, wind=teal). Type column in signals table.
+- **Coverage**: 69 markets classified (up from 65, Toronto Celsius fix). Currently 100% temperature — precip/snow/wind infrastructure ready for when markets appear.
 
 ## Prioritized Backlog
 
-### P0 — Weather Strategy V2 (incremental, next steps)
-1. Expand parser for precipitation/snow/wind contracts
-2. Improve probability modeling for non-temperature contracts
-3. Self-improvement loop: use resolved outcomes to adjust source weighting and sigma
-4. Multi-source weather feeds (OpenWeatherMap as secondary)
+### P0 — Weather Strategy V2 (next steps)
+1. Self-improvement loop: use resolved outcomes to adjust source weighting and sigma
+2. Additional data source integration (OpenWeatherMap as secondary)
+3. Hourly forecast mode near resolution (sub-daily precision)
 
 ### P1 — Future
 - Copy Trading skeleton
 - Manual Order Entry
 - Live trading mode integration
 - Position force-close for stale positions
-- Advanced portfolio rebalancing
