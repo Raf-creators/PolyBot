@@ -281,10 +281,22 @@ class WeatherTrader(BaseStrategy):
                 # Stage 3+4: Evaluate all classified markets
                 signals = await self._evaluate_all()
 
-                # Stage 5: Execute eligible signals
-                eligible = [s for s in signals if s.is_tradable]
+                # Stage 5: Execute eligible signals — sorted by edge (highest first)
+                eligible = sorted(
+                    [s for s in signals if s.is_tradable],
+                    key=lambda s: s.edge_bps,
+                    reverse=True,
+                )
                 for sig in eligible:
                     if len(self._active_executions) >= self.config.max_concurrent_signals:
+                        break
+                    # Check total open weather positions (active execs + existing positions)
+                    open_weather = self._count_open_weather_positions()
+                    if open_weather >= self.config.max_weather_positions:
+                        logger.info(
+                            f"[WEATHER] Skipping execution: {open_weather} open positions >= "
+                            f"max_weather_positions ({self.config.max_weather_positions})"
+                        )
                         break
                     await self._execute_signal(sig)
 
@@ -442,6 +454,16 @@ class WeatherTrader(BaseStrategy):
             self._signals = self._signals[:300]
 
         return results
+
+    def _count_open_weather_positions(self) -> int:
+        """Count total open weather positions (state positions + active executions)."""
+        from engine.risk import classify_strategy
+        state_count = sum(
+            1 for pos in self._state.positions.values()
+            if classify_strategy(pos) == "weather"
+        )
+        return state_count
+
 
     def _evaluate_market(
         self, cm: WeatherMarketClassification, now: float

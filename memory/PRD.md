@@ -7,76 +7,71 @@ A full-stack trading bot dashboard (FastAPI + React + MongoDB) for Polymarket pa
 3. Live-readiness controls (kill switch, max loss, max exposure)
 4. Dashboard upgrade to show open positions prominently
 5. Weather strategy upgrade (V2) for stronger alpha generation
+6. Stricter trade filtering for higher-quality weather trades
 
 ## Architecture
 ```
 /app
 ├── backend/
 │   ├── engine/
-│   │   ├── risk.py           # Per-strategy position slots, live-readiness controls
-│   │   ├── state.py          # Global application state
+│   │   ├── risk.py
+│   │   ├── state.py
 │   │   └── strategies/
-│   │       ├── arb_scanner.py    # Arbitrage strategy
-│   │       ├── crypto_sniper.py  # Crypto binary option sniper
-│   │       ├── sniper_models.py  # Sniper data models
-│   │       ├── weather_trader.py # Weather strategy
-│   │       ├── weather_feeds.py  # Weather data feeds
-│   │       ├── weather_parser.py # Market classification
-│   │       ├── weather_pricing.py # Probability modeling
-│   │       └── weather_models.py  # Weather data models
-│   ├── models.py             # Core data models
+│   │       ├── arb_scanner.py
+│   │       ├── crypto_sniper.py
+│   │       ├── sniper_models.py
+│   │       ├── weather_trader.py  # MODIFIED: edge-sorted execution, position cap check
+│   │       ├── weather_feeds.py
+│   │       ├── weather_parser.py
+│   │       ├── weather_pricing.py
+│   │       └── weather_models.py  # MODIFIED: stricter thresholds, max_weather_positions
+│   ├── models.py
 │   ├── services/
-│   │   ├── strategy_tracker.py # Performance tracking + attribution
+│   │   ├── strategy_tracker.py
 │   │   └── telegram_notifier.py
-│   └── server.py             # FastAPI endpoints
+│   └── server.py                  # MODIFIED: positions/by-strategy endpoint, question parsers
 └── frontend/
     └── src/
-        ├── hooks/useApi.js
-        ├── state/dashboardStore.js
+        ├── hooks/useApi.js        # MODIFIED: fetchStrategyPositions
+        ├── state/dashboardStore.js # MODIFIED: strategyPositions slice
         └── pages/
-            ├── Weather.jsx   # Weather trading console
-            ├── Sniper.jsx    # Crypto sniper console
-            └── Analytics.jsx # Strategy comparison + controls
+            ├── Weather.jsx        # REWRITTEN: open positions + cleaner layout
+            ├── Sniper.jsx         # REWRITTEN: open positions + cleaner layout
+            └── Analytics.jsx      # MODIFIED: merged PnL data, 3 strategy cards
 ```
 
-## Key API Endpoints
-- `GET /api/positions/by-strategy` — Strategy-filtered positions with enriched metadata, summaries
-- `GET /api/analytics/strategy-attribution` — Per-strategy PnL attribution
-- `GET /api/controls` — Live-readiness controls (kill switch, limits)
-- `GET /api/diagnostics` — Runtime diagnostics
-- `GET /api/config/strategies` — Strategy config/status
+## Key Config (Weather Strategy)
+- min_edge_bps: 500 (5% minimum edge, was 300/3%)
+- min_confidence: 0.55 (55% floor, was 0.40)
+- max_weather_positions: 25 (hard cap, new)
+- max_concurrent_signals: 8
+- Signal execution: sorted by edge descending (highest quality first)
 
 ## What's Been Implemented
 
 ### Phase 1-4 (Prior sessions)
-- Core trading engine with 3 strategies
-- WebSocket real-time updates
-- Telegram notifications
-- Strategy isolation with reserved position slots
-- Per-strategy analytics (attribution endpoint)
-- Live-readiness controls (max daily loss, exposure, kill switch)
-- PAPER MODE indicator
+- Core trading engine, WebSocket, Telegram, strategy isolation, attribution, live-readiness controls
 
-### Phase 5 — Open Positions Visibility (Current session, 2026-03-17)
-- **NEW endpoint** `GET /api/positions/by-strategy` — returns positions grouped by weather/crypto/arb with:
-  - Market enrichment (current mark, hours to resolution, unrealized PnL %)
-  - Weather enrichment (city, bucket parsed from market question)
-  - Sniper enrichment (asset, direction, side parsed from market question)
-  - Strategy summaries with realized/unrealized/total PnL
-- **Weather page rewrite** — Open Positions (54) as primary tab with city, bucket, entry, mark, unrealized PnL. PnL summary bar. Tabs: Positions > Signals > Executions > Rejected > Forecasts > Calibration > Health
-- **Sniper page rewrite** — Open Positions (11) as primary tab with asset, side, entry, mark, unrealized PnL. Same PnL bar. Tabs: Positions > Signals > Rejected > Executions > Health
-- **Analytics update** — Strategy Comparison cards show Total/Realized/Unrealized breakdown using live mark-to-market data. Removed RESOLVER bucket, shows CRYPTO/WEATHER/ARB only
-- **Dashboard cleanup** — Focused stat cards (Open Positions, Tradable Signals, Executed, Filled, Coverage, Latency). De-emphasized low-value metrics into Health tab
+### Phase 5 — Open Positions & Dashboard (2026-03-17)
+- New endpoint GET /api/positions/by-strategy with enriched metadata
+- Weather/Sniper pages rewritten with Open Positions as primary tab
+- Analytics strategy comparison updated with merged mark-to-market data
+
+### Phase 6 — Overtrading Filter (2026-03-17)
+- min_edge_bps raised 300→500 (71 rejections at 500bps threshold in first scan)
+- min_confidence raised 0.40→0.55
+- max_weather_positions=25 hard cap (blocks new trades when 54 positions open)
+- Signals sorted by edge descending before execution (highest quality first)
+- Persisted to MongoDB config, visible in Health tab UI
 
 ## Prioritized Backlog
 
-### P0 — Weather Strategy V2 (Phase 3, incremental)
+### P0 — Weather Strategy V2 (incremental)
 1. Expand parser for precipitation/snow/wind contracts
 2. Multi-source weather feeds (OpenWeatherMap secondary)
 3. Improved probability modeling for non-temperature contracts
-4. Better signal filtering with configurable thresholds
-5. Self-improvement loop via calibration integration
-6. Explanation layer on every signal/execution
+4. Self-improvement loop via calibration integration
+5. Explanation layer on every signal/execution
 
 ### P1 — Future
 - Copy Trading skeleton

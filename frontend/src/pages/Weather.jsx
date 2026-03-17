@@ -434,6 +434,7 @@ export default function Weather() {
                   ['Min Liquidity', `$${config.min_liquidity}`], ['Min Confidence', config.min_confidence],
                   ['Max Sigma', `${config.max_sigma}F`], ['Default Size', config.default_size],
                   ['Kelly Scale', config.kelly_scale], ['Max Concurrent', config.max_concurrent_signals],
+                  ['Max Positions', config.max_weather_positions],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>

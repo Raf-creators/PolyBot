@@ -45,11 +45,11 @@ class WeatherConfig(BaseModel):
     forecast_refresh_interval: float = 1800.0            # seconds between forecast API calls
 
     # Edge thresholds
-    min_edge_bps: float = 300.0                          # 3% minimum edge
+    min_edge_bps: float = 500.0                          # 5% minimum edge (was 3%)
 
     # Filters
     min_liquidity: float = 200.0
-    min_confidence: float = 0.40
+    min_confidence: float = 0.55                         # 55% confidence floor (was 40%)
     max_spread_sum: float = 0.30                         # max deviation of bucket price sum from 1.0
     max_stale_forecast_minutes: float = 120.0            # reject if forecast older than 2h
     max_stale_market_seconds: float = 120.0              # reject if market data older than 2min
@@ -62,6 +62,7 @@ class WeatherConfig(BaseModel):
     max_signal_size: float = 8.0
     max_buckets_per_market: int = 2                      # max buckets to trade per market
     max_concurrent_signals: int = 8
+    max_weather_positions: int = 25                      # hard cap on total open weather positions
     cooldown_seconds: float = 1800.0                     # 30 min cooldown per market
     kelly_scale: float = 0.25                            # quarter-Kelly
 
