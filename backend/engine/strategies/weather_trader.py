@@ -1717,6 +1717,214 @@ class WeatherTrader(BaseStrategy):
             return "6-24h"
         return ">24h"
 
+    def simulate_thresholds(self, params: dict) -> dict:
+        """Re-evaluate all positions with custom thresholds — NO live impact.
+
+        Uses pre-computed metrics from _lifecycle_evals (profit_multiple,
+        current_edge_bps, edge_at_entry, edge_decay_pct, time_held_hours)
+        and only re-applies the exit rules with different thresholds.
+        """
+        # Extract simulation thresholds
+        sim_profit = params.get("profit_capture_threshold", self.config.profit_capture_threshold)
+        sim_neg_edge = params.get("max_negative_edge_bps", self.config.max_negative_edge_bps)
+        sim_decay = params.get("edge_decay_exit_pct", self.config.edge_decay_exit_pct)
+        sim_time_hours = params.get("time_inefficiency_hours", self.config.time_inefficiency_hours)
+        sim_time_edge = params.get("time_inefficiency_min_edge_bps", self.config.time_inefficiency_min_edge_bps)
+
+        # Current live thresholds for comparison
+        live_thresholds = {
+            "profit_capture_threshold": self.config.profit_capture_threshold,
+            "max_negative_edge_bps": self.config.max_negative_edge_bps,
+            "edge_decay_exit_pct": self.config.edge_decay_exit_pct,
+            "time_inefficiency_hours": self.config.time_inefficiency_hours,
+            "time_inefficiency_min_edge_bps": self.config.time_inefficiency_min_edge_bps,
+        }
+        sim_thresholds = {
+            "profit_capture_threshold": sim_profit,
+            "max_negative_edge_bps": sim_neg_edge,
+            "edge_decay_exit_pct": sim_decay,
+            "time_inefficiency_hours": sim_time_hours,
+            "time_inefficiency_min_edge_bps": sim_time_edge,
+        }
+
+        evals = self._lifecycle_evals
+        if not evals:
+            return {
+                "sim_thresholds": sim_thresholds,
+                "live_thresholds": live_thresholds,
+                "total_evaluated": 0,
+                "live_candidates": 0,
+                "sim_candidates": 0,
+                "delta_candidates": 0,
+                "positions": [],
+                "per_reason": {},
+                "decision_quality": {},
+                "comparison": {},
+            }
+
+        positions_detail = []
+        live_exits = {}
+        sim_exits = {}
+
+        for tid, ev in evals.items():
+            pm = ev.profit_multiple
+            edge = ev.current_edge_bps
+            edge_entry = ev.edge_at_entry
+            decay = ev.edge_decay_pct
+            held_h = ev.time_held_hours
+            has_model = ev.current_model_prob > 0
+
+            # --- Live exit decision (current thresholds) ---
+            live_exit = ev.is_exit_candidate
+            live_reason = ev.exit_reason
+
+            # --- Simulated exit decision (custom thresholds) ---
+            sim_exit = False
+            sim_reason = None
+
+            if pm >= sim_profit:
+                sim_exit = True
+                sim_reason = "profit_capture"
+            elif edge <= sim_neg_edge and has_model:
+                sim_exit = True
+                sim_reason = "negative_edge"
+            elif edge_entry > 0 and decay >= sim_decay:
+                sim_exit = True
+                sim_reason = "edge_decay"
+            elif held_h >= sim_time_hours and edge < sim_time_edge and has_model:
+                sim_exit = True
+                sim_reason = "time_inefficiency"
+
+            if live_exit:
+                live_exits[tid] = live_reason
+            if sim_exit:
+                sim_exits[tid] = sim_reason
+
+            # Compute PnL context from snapshot if available
+            pos = self._state.positions.get(tid)
+            market = self._state.get_market(tid) if pos else None
+            current_price = (market.mid_price if market and market.mid_price else (pos.current_price if pos else 0)) or 0
+            avg_cost = pos.avg_cost if pos else 0
+            size = pos.size if pos else 0
+            unrealized_pnl = round((current_price - avg_cost) * size, 4) if avg_cost > 0 else 0
+
+            # Would the sim exit have been a good or bad decision?
+            # Good = selling a position that is currently losing or flat
+            # Bad = selling a position that is currently profitable
+            decision = "n/a"
+            if sim_exit and not live_exit:
+                decision = "new_exit"
+            elif not sim_exit and live_exit:
+                decision = "removed_exit"
+            elif sim_exit and live_exit and sim_reason != live_reason:
+                decision = "reason_changed"
+            elif sim_exit and live_exit:
+                decision = "unchanged"
+
+            positions_detail.append({
+                "token_id": tid[:16],
+                "market_question": (getattr(pos, 'market_question', '') or '')[:55] if pos else '',
+                "profit_multiple": pm,
+                "current_edge_bps": edge,
+                "edge_decay_pct": decay,
+                "time_held_hours": held_h,
+                "avg_cost": round(avg_cost, 4),
+                "current_price": round(current_price, 4),
+                "size": size,
+                "unrealized_pnl": unrealized_pnl,
+                "live_exit": live_exit,
+                "live_reason": live_reason,
+                "sim_exit": sim_exit,
+                "sim_reason": sim_reason,
+                "change": decision,
+            })
+
+        # --- Per-reason aggregation ---
+        all_reasons = ["profit_capture", "negative_edge", "edge_decay", "time_inefficiency", "model_shift"]
+        per_reason = {}
+        for reason in all_reasons:
+            sim_in = [p for p in positions_detail if p["sim_reason"] == reason]
+            live_in = [p for p in positions_detail if p["live_reason"] == reason]
+
+            # Net PnL of positions flagged for this reason (sim)
+            sim_total_pnl = round(sum(p["unrealized_pnl"] for p in sim_in), 4)
+            live_total_pnl = round(sum(p["unrealized_pnl"] for p in live_in), 4)
+
+            # Would selling these have been profitable? (positive unrealized = good hold, negative = good sell)
+            sim_good_exits = sum(1 for p in sim_in if p["unrealized_pnl"] <= 0)  # selling losers
+            sim_bad_exits = sum(1 for p in sim_in if p["unrealized_pnl"] > 0)   # selling winners
+
+            per_reason[reason] = {
+                "sim_count": len(sim_in),
+                "live_count": len(live_in),
+                "delta": len(sim_in) - len(live_in),
+                "sim_aggregate_pnl": sim_total_pnl,
+                "live_aggregate_pnl": live_total_pnl,
+                "good_exits": sim_good_exits,
+                "bad_exits": sim_bad_exits,
+            }
+
+        # --- Decision quality ---
+        sim_exit_positions = [p for p in positions_detail if p["sim_exit"]]
+        total_sim_exits = len(sim_exit_positions)
+        # "Good" exit = position is losing money (selling avoids further loss)
+        # "Bad" exit = position is making money (selling gives up upside)
+        good = sum(1 for p in sim_exit_positions if p["unrealized_pnl"] <= 0)
+        bad = sum(1 for p in sim_exit_positions if p["unrealized_pnl"] > 0)
+        # Also track total PnL impact
+        total_exit_pnl = round(sum(p["unrealized_pnl"] for p in sim_exit_positions), 4)
+        total_held_pnl = round(sum(p["unrealized_pnl"] for p in positions_detail if not p["sim_exit"]), 4)
+
+        decision_quality = {
+            "total_sim_exits": total_sim_exits,
+            "good_exits": good,
+            "bad_exits": bad,
+            "good_exit_pct": round(good / total_sim_exits * 100, 1) if total_sim_exits > 0 else 0,
+            "bad_exit_pct": round(bad / total_sim_exits * 100, 1) if total_sim_exits > 0 else 0,
+            "total_exit_pnl": total_exit_pnl,
+            "total_held_pnl": total_held_pnl,
+            "portfolio_pnl": round(total_exit_pnl + total_held_pnl, 4),
+        }
+
+        # --- Snapshot comparison ---
+        live_candidate_count = sum(1 for p in positions_detail if p["live_exit"])
+        sim_candidate_count = sum(1 for p in positions_detail if p["sim_exit"])
+        new_exits = [p for p in positions_detail if p["change"] == "new_exit"]
+        removed_exits = [p for p in positions_detail if p["change"] == "removed_exit"]
+
+        comparison = {
+            "live_candidates": live_candidate_count,
+            "sim_candidates": sim_candidate_count,
+            "delta": sim_candidate_count - live_candidate_count,
+            "new_exits": [{
+                "token_id": p["token_id"],
+                "market": p["market_question"],
+                "reason": p["sim_reason"],
+                "profit_multiple": p["profit_multiple"],
+                "pnl": p["unrealized_pnl"],
+            } for p in new_exits],
+            "removed_exits": [{
+                "token_id": p["token_id"],
+                "market": p["market_question"],
+                "reason": p["live_reason"],
+                "profit_multiple": p["profit_multiple"],
+                "pnl": p["unrealized_pnl"],
+            } for p in removed_exits],
+        }
+
+        return {
+            "sim_thresholds": sim_thresholds,
+            "live_thresholds": live_thresholds,
+            "total_evaluated": len(positions_detail),
+            "live_candidates": live_candidate_count,
+            "sim_candidates": sim_candidate_count,
+            "delta_candidates": sim_candidate_count - live_candidate_count,
+            "per_reason": per_reason,
+            "decision_quality": decision_quality,
+            "comparison": comparison,
+            "positions": sorted(positions_detail, key=lambda p: -p["profit_multiple"]),
+        }
+
     # ---- Forecast Accuracy Recording ----
 
     async def _record_forecast_accuracy(self, signals: List[WeatherSignal]):

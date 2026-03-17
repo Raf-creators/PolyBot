@@ -6,6 +6,7 @@ import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { Slider } from '../components/ui/slider';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatBps, formatPrice, formatPnl, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 import axios from 'axios';
@@ -1884,6 +1885,340 @@ function LifecycleDashboard({ data, formatPnl }) {
           </div>
         )}
       </div>
+
+      {/* Section 6: Threshold Simulator */}
+      <ThresholdSimulator currentConfig={config} formatPnl={formatPnl} />
+    </div>
+  );
+}
+
+const PRESETS = {
+  conservative: { label: 'Conservative', desc: 'Fewer exits, hold longer', profit_capture_threshold: 3.0, max_negative_edge_bps: -200, edge_decay_exit_pct: 0.80, time_inefficiency_hours: 24, time_inefficiency_min_edge_bps: 500 },
+  balanced: { label: 'Balanced', desc: 'Default thresholds', profit_capture_threshold: 2.0, max_negative_edge_bps: -100, edge_decay_exit_pct: 0.60, time_inefficiency_hours: 18, time_inefficiency_min_edge_bps: 300 },
+  aggressive: { label: 'Aggressive', desc: 'More exits, capture early', profit_capture_threshold: 1.5, max_negative_edge_bps: -50, edge_decay_exit_pct: 0.40, time_inefficiency_hours: 12, time_inefficiency_min_edge_bps: 200 },
+};
+
+const REASON_SIM_COLORS = {
+  profit_capture: { text: 'text-emerald-400', bg: 'bg-emerald-950/30', border: 'border-emerald-500/30' },
+  negative_edge: { text: 'text-red-400', bg: 'bg-red-950/30', border: 'border-red-500/30' },
+  edge_decay: { text: 'text-amber-400', bg: 'bg-amber-950/30', border: 'border-amber-500/30' },
+  time_inefficiency: { text: 'text-orange-400', bg: 'bg-orange-950/30', border: 'border-orange-500/30' },
+  model_shift: { text: 'text-violet-400', bg: 'bg-violet-950/30', border: 'border-violet-500/30' },
+};
+const REASON_SIM_LABELS = { profit_capture: 'Profit Capture', negative_edge: 'Negative Edge', edge_decay: 'Edge Decay', time_inefficiency: 'Time Inefficient', model_shift: 'Model Shift' };
+
+function ThresholdSimulator({ currentConfig, formatPnl }) {
+  const [params, setParams] = useState({
+    profit_capture_threshold: currentConfig?.profit_capture_threshold || 2.0,
+    max_negative_edge_bps: currentConfig?.max_negative_edge_bps || -100,
+    edge_decay_exit_pct: currentConfig?.edge_decay_exit_pct || 0.6,
+    time_inefficiency_hours: currentConfig?.time_inefficiency_hours || 18,
+    time_inefficiency_min_edge_bps: currentConfig?.time_inefficiency_min_edge_bps || 300,
+  });
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [activePreset, setActivePreset] = useState(null);
+
+  const runSimulation = useCallback(async (overrideParams) => {
+    setLoading(true);
+    try {
+      const p = overrideParams || params;
+      const res = await axios.post(`${API_BASE}/positions/weather/lifecycle/simulate`, p);
+      setResult(res.data);
+    } catch (e) {
+      console.error('Simulation error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [params]);
+
+  const applyPreset = (key) => {
+    const preset = PRESETS[key];
+    const newParams = {
+      profit_capture_threshold: preset.profit_capture_threshold,
+      max_negative_edge_bps: preset.max_negative_edge_bps,
+      edge_decay_exit_pct: preset.edge_decay_exit_pct,
+      time_inefficiency_hours: preset.time_inefficiency_hours,
+      time_inefficiency_min_edge_bps: preset.time_inefficiency_min_edge_bps,
+    };
+    setParams(newParams);
+    setActivePreset(key);
+    runSimulation(newParams);
+  };
+
+  const updateParam = (key, value) => {
+    setParams(prev => ({ ...prev, [key]: value }));
+    setActivePreset(null);
+  };
+
+  const isModified = currentConfig && (
+    params.profit_capture_threshold !== currentConfig.profit_capture_threshold ||
+    params.max_negative_edge_bps !== currentConfig.max_negative_edge_bps ||
+    params.edge_decay_exit_pct !== currentConfig.edge_decay_exit_pct ||
+    params.time_inefficiency_hours !== currentConfig.time_inefficiency_hours ||
+    params.time_inefficiency_min_edge_bps !== currentConfig.time_inefficiency_min_edge_bps
+  );
+
+  const dq = result?.decision_quality || {};
+  const cmp = result?.comparison || {};
+
+  return (
+    <div data-testid="threshold-simulator" className="rounded-lg border-2 border-cyan-500/20 bg-zinc-950 p-5 space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-medium text-zinc-200">Threshold Simulator</div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">Adjust thresholds to preview exit decisions — no live impact</div>
+        </div>
+        <Badge variant="outline" className="text-[9px] font-mono border-cyan-500/30 text-cyan-400">SIMULATION ONLY</Badge>
+      </div>
+
+      {/* Presets */}
+      <div data-testid="sim-presets" className="flex items-center gap-2">
+        <span className="text-[10px] text-zinc-500 mr-1">Presets:</span>
+        {Object.entries(PRESETS).map(([key, preset]) => (
+          <button key={key} data-testid={`preset-${key}`}
+            onClick={() => applyPreset(key)}
+            className={`px-3 py-1 rounded text-[10px] font-mono transition-all ${
+              activePreset === key
+                ? 'bg-cyan-900/40 text-cyan-300 ring-1 ring-cyan-500/40'
+                : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+            }`}>
+            {preset.label}
+          </button>
+        ))}
+        {isModified && (
+          <button data-testid="preset-reset"
+            onClick={() => { setParams({ profit_capture_threshold: currentConfig.profit_capture_threshold, max_negative_edge_bps: currentConfig.max_negative_edge_bps, edge_decay_exit_pct: currentConfig.edge_decay_exit_pct, time_inefficiency_hours: currentConfig.time_inefficiency_hours, time_inefficiency_min_edge_bps: currentConfig.time_inefficiency_min_edge_bps }); setActivePreset(null); setResult(null); }}
+            className="px-3 py-1 rounded text-[10px] font-mono text-zinc-600 bg-zinc-900 hover:text-zinc-400">
+            Reset to Live
+          </button>
+        )}
+      </div>
+
+      {/* Sliders */}
+      <div data-testid="sim-sliders" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <SliderParam label="Profit Capture" unit="x" value={params.profit_capture_threshold}
+          min={1.0} max={5.0} step={0.1}
+          onChange={v => updateParam('profit_capture_threshold', v)}
+          liveValue={currentConfig?.profit_capture_threshold}
+          desc="Exit when profit multiple exceeds" />
+        <SliderParam label="Max Negative Edge" unit="bp" value={params.max_negative_edge_bps}
+          min={-500} max={0} step={10}
+          onChange={v => updateParam('max_negative_edge_bps', v)}
+          liveValue={currentConfig?.max_negative_edge_bps}
+          desc="Exit when edge drops below" />
+        <SliderParam label="Edge Decay" unit="%" value={params.edge_decay_exit_pct * 100}
+          min={10} max={95} step={5}
+          onChange={v => updateParam('edge_decay_exit_pct', v / 100)}
+          liveValue={currentConfig?.edge_decay_exit_pct ? currentConfig.edge_decay_exit_pct * 100 : null}
+          desc="Exit when edge decayed by" />
+        <SliderParam label="Time Threshold" unit="h" value={params.time_inefficiency_hours}
+          min={4} max={48} step={1}
+          onChange={v => updateParam('time_inefficiency_hours', v)}
+          liveValue={currentConfig?.time_inefficiency_hours}
+          desc="Flag if held longer than" />
+        <SliderParam label="Time Min Edge" unit="bp" value={params.time_inefficiency_min_edge_bps}
+          min={50} max={800} step={25}
+          onChange={v => updateParam('time_inefficiency_min_edge_bps', v)}
+          liveValue={currentConfig?.time_inefficiency_min_edge_bps}
+          desc="...and edge below" />
+      </div>
+
+      {/* Run Button */}
+      <div className="flex items-center gap-3">
+        <Button data-testid="sim-run-btn" onClick={() => runSimulation()} disabled={loading}
+          className="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono px-5">
+          {loading ? 'Simulating...' : 'Run Simulation'}
+        </Button>
+        {result && <span className="text-[10px] text-zinc-600">{result.total_evaluated} positions evaluated</span>}
+      </div>
+
+      {/* Results */}
+      {result && (
+        <div className="space-y-4 pt-2 border-t border-zinc-800/50">
+          {/* Comparison Cards */}
+          <div data-testid="sim-comparison" className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <ComparisonCard label="Exit Candidates" live={cmp.live_candidates} sim={cmp.sim_candidates} delta={cmp.delta} />
+            <ComparisonCard label="Good Exits" live={null} sim={dq.good_exits}
+              sub={`${dq.good_exit_pct}% of exits`} good />
+            <ComparisonCard label="Bad Exits" live={null} sim={dq.bad_exits}
+              sub={`${dq.bad_exit_pct}% — selling winners`} bad />
+            <div className="rounded-lg border border-zinc-800/50 bg-zinc-900/50 p-3">
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Portfolio PnL</div>
+              <div className={`text-lg font-mono font-bold ${dq.portfolio_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {formatPnl(dq.portfolio_pnl)}
+              </div>
+              <div className="text-[9px] text-zinc-600 mt-0.5">
+                Exit: {formatPnl(dq.total_exit_pnl)} | Held: {formatPnl(dq.total_held_pnl)}
+              </div>
+            </div>
+          </div>
+
+          {/* Per-Reason Performance */}
+          <div data-testid="sim-per-reason" className="rounded-lg border border-zinc-800/50 bg-zinc-900/30 p-4">
+            <div className="text-xs font-medium text-zinc-300 mb-3">Per-Reason Performance</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {Object.entries(result.per_reason || {}).map(([reason, rdata]) => {
+                if (rdata.sim_count === 0 && rdata.live_count === 0) return null;
+                const rc = REASON_SIM_COLORS[reason] || {};
+                return (
+                  <div key={reason} data-testid={`sim-reason-${reason}`}
+                    className={`rounded-lg border ${rc.border || 'border-zinc-800'} ${rc.bg || ''} p-3`}>
+                    <div className={`text-xs font-mono font-medium ${rc.text || 'text-zinc-400'} mb-2`}>
+                      {REASON_SIM_LABELS[reason] || reason}
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] mb-1.5">
+                      <span className="text-zinc-600">Live: <span className="text-zinc-400 font-mono">{rdata.live_count}</span></span>
+                      <span className="text-zinc-600">Sim: <span className="text-zinc-200 font-mono">{rdata.sim_count}</span></span>
+                      <span className={`font-mono font-bold ${rdata.delta > 0 ? 'text-amber-400' : rdata.delta < 0 ? 'text-emerald-400' : 'text-zinc-600'}`}>
+                        {rdata.delta > 0 ? '+' : ''}{rdata.delta}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px]">
+                      <span className="text-zinc-600">PnL: <span className={`font-mono ${rdata.sim_aggregate_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPnl(rdata.sim_aggregate_pnl)}</span></span>
+                      <span className="text-zinc-700">Good: <span className="text-emerald-500 font-mono">{rdata.good_exits}</span></span>
+                      <span className="text-zinc-700">Bad: <span className="text-red-500 font-mono">{rdata.bad_exits}</span></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* New / Removed Exits */}
+          {(cmp.new_exits?.length > 0 || cmp.removed_exits?.length > 0) && (
+            <div data-testid="sim-changes" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {cmp.new_exits?.length > 0 && (
+                <div className="rounded-lg border border-amber-500/20 bg-zinc-900/30 p-3">
+                  <div className="text-xs font-medium text-amber-400 mb-2">New Exits ({cmp.new_exits.length})</div>
+                  <div className="space-y-1.5">
+                    {cmp.new_exits.map((ne, i) => (
+                      <div key={i} data-testid={`new-exit-${i}`} className="flex items-center justify-between text-[10px] py-1 border-b border-zinc-900/50 last:border-0">
+                        <span className="text-zinc-300 truncate max-w-[200px]">{ne.market || ne.token_id}</span>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className={`text-[7px] font-mono ${(REASON_SIM_COLORS[ne.reason] || {}).border || ''} ${(REASON_SIM_COLORS[ne.reason] || {}).text || ''}`}>
+                            {REASON_SIM_LABELS[ne.reason] || ne.reason}
+                          </Badge>
+                          <span className="text-zinc-500 font-mono">{ne.profit_multiple?.toFixed(2)}x</span>
+                          <span className={`font-mono ${ne.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPnl(ne.pnl)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {cmp.removed_exits?.length > 0 && (
+                <div className="rounded-lg border border-emerald-500/20 bg-zinc-900/30 p-3">
+                  <div className="text-xs font-medium text-emerald-400 mb-2">Removed Exits ({cmp.removed_exits.length})</div>
+                  <div className="space-y-1.5">
+                    {cmp.removed_exits.map((re, i) => (
+                      <div key={i} data-testid={`removed-exit-${i}`} className="flex items-center justify-between text-[10px] py-1 border-b border-zinc-900/50 last:border-0">
+                        <span className="text-zinc-300 truncate max-w-[200px]">{re.market || re.token_id}</span>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[7px] font-mono border-zinc-700 text-zinc-500">was: {REASON_SIM_LABELS[re.reason] || re.reason}</Badge>
+                          <span className="text-zinc-500 font-mono">{re.profit_multiple?.toFixed(2)}x</span>
+                          <span className={`font-mono ${re.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPnl(re.pnl)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Decision Quality Summary */}
+          <div data-testid="sim-decision-quality" className="rounded-lg border border-zinc-800/50 bg-zinc-900/30 p-4">
+            <div className="text-xs font-medium text-zinc-300 mb-3">Decision Quality Assessment</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+              <div>
+                <div className="text-2xl font-mono font-bold text-zinc-200">{dq.total_sim_exits}</div>
+                <div className="text-[10px] text-zinc-600">Total Exits</div>
+              </div>
+              <div>
+                <div className={`text-2xl font-mono font-bold ${dq.good_exit_pct >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {dq.good_exit_pct}%
+                </div>
+                <div className="text-[10px] text-zinc-600">Improved Outcome</div>
+              </div>
+              <div>
+                <div className={`text-2xl font-mono font-bold ${dq.bad_exit_pct <= 30 ? 'text-emerald-400' : dq.bad_exit_pct <= 60 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {dq.bad_exit_pct}%
+                </div>
+                <div className="text-[10px] text-zinc-600">Reduced Profit</div>
+              </div>
+              <div>
+                <div className={`text-2xl font-mono font-bold ${dq.total_exit_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatPnl(dq.total_exit_pnl)}
+                </div>
+                <div className="text-[10px] text-zinc-600">Exit PnL Impact</div>
+              </div>
+            </div>
+            {/* Verdict */}
+            <div className="mt-3 pt-2 border-t border-zinc-800/50 text-center">
+              {dq.good_exit_pct >= 60 ? (
+                <span className="text-xs text-emerald-400 font-mono">These thresholds produce mostly good exits — consider enabling SHADOW_EXIT</span>
+              ) : dq.good_exit_pct >= 40 ? (
+                <span className="text-xs text-amber-400 font-mono">Mixed results — review per-reason breakdown before enabling</span>
+              ) : dq.total_sim_exits === 0 ? (
+                <span className="text-xs text-zinc-600 font-mono">No exits triggered at these thresholds</span>
+              ) : (
+                <span className="text-xs text-red-400 font-mono">Most exits reduce profit — these thresholds may be too aggressive</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SliderParam({ label, unit, value, min, max, step, onChange, liveValue, desc }) {
+  const isDiff = liveValue !== null && liveValue !== undefined && Math.abs(value - liveValue) > 0.001;
+  return (
+    <div data-testid={`slider-${label.toLowerCase().replace(/\s/g, '-')}`} className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-zinc-400">{label}</span>
+        <div className="flex items-center gap-1.5">
+          {isDiff && (
+            <span className="text-[9px] text-zinc-700 font-mono line-through">{typeof liveValue === 'number' ? (unit === '%' ? liveValue.toFixed(0) : liveValue) : liveValue}{unit}</span>
+          )}
+          <span className={`text-xs font-mono font-bold ${isDiff ? 'text-cyan-400' : 'text-zinc-300'}`}>
+            {unit === '%' ? value.toFixed(0) : value}{unit}
+          </span>
+        </div>
+      </div>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={([v]) => onChange(v)}
+        className="[&_[role=slider]]:bg-cyan-500 [&_[role=slider]]:border-cyan-400 [&_[data-orientation=horizontal]>.bg-primary]:bg-cyan-500/70"
+      />
+      <div className="text-[9px] text-zinc-700">{desc}</div>
+    </div>
+  );
+}
+
+function ComparisonCard({ label, live, sim, delta, sub, good, bad }) {
+  return (
+    <div className="rounded-lg border border-zinc-800/50 bg-zinc-900/50 p-3">
+      <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">{label}</div>
+      <div className="flex items-baseline gap-2">
+        <span className={`text-lg font-mono font-bold ${good ? 'text-emerald-400' : bad ? 'text-red-400' : 'text-zinc-200'}`}>
+          {sim ?? '—'}
+        </span>
+        {delta !== undefined && delta !== null && (
+          <span className={`text-xs font-mono font-bold ${delta > 0 ? 'text-amber-400' : delta < 0 ? 'text-emerald-400' : 'text-zinc-600'}`}>
+            {delta > 0 ? '+' : ''}{delta}
+          </span>
+        )}
+      </div>
+      {live !== null && live !== undefined && (
+        <div className="text-[9px] text-zinc-600 mt-0.5">Live: {live}</div>
+      )}
+      {sub && <div className="text-[9px] text-zinc-600 mt-0.5">{sub}</div>}
     </div>
   );
 }

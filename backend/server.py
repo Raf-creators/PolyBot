@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
@@ -1387,6 +1387,21 @@ async def get_weather_lifecycle_dashboard():
             "config": {},
         }
     return weather_trader_ref.get_lifecycle_dashboard()
+
+
+@api_router.post("/positions/weather/lifecycle/simulate")
+async def simulate_lifecycle_thresholds(request: Request):
+    """Simulate exit decisions with custom thresholds — NO live impact.
+
+    Body: { profit_capture_threshold, max_negative_edge_bps, edge_decay_exit_pct,
+            time_inefficiency_hours, time_inefficiency_min_edge_bps }
+    Returns: comparison of live vs simulated exits, per-reason breakdown,
+             decision quality metrics, position-level detail.
+    """
+    if not weather_trader_ref:
+        raise HTTPException(503, "Weather trader not initialized")
+    body = await request.json()
+    return weather_trader_ref.simulate_thresholds(body)
 
 
 @api_router.get("/positions/weather/breakdown")
