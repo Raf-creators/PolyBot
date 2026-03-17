@@ -21,8 +21,9 @@ export default function Analytics() {
   const watchdog = useDashboardStore((s) => s.watchdog);
   const strategyTracker = useDashboardStore((s) => s.strategyTracker);
   const strategyAttribution = useDashboardStore((s) => s.strategyAttribution);
+  const strategyPositions = useDashboardStore((s) => s.strategyPositions);
   const controls = useDashboardStore((s) => s.controls);
-  const { fetchPnlHistory, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker, fetchStrategyAttribution, fetchControls } = useApi();
+  const { fetchPnlHistory, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker, fetchStrategyAttribution, fetchControls, fetchStrategyPositions } = useApi();
   const [summary, setSummary] = useState(null);
   const [strategies, setStrategies] = useState({});
   const [execQuality, setExecQuality] = useState(null);
@@ -49,7 +50,8 @@ export default function Analytics() {
     fetchStrategyTracker();
     fetchStrategyAttribution();
     fetchControls();
-  }, [prefix, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker, fetchStrategyAttribution, fetchControls]);
+    fetchStrategyPositions();
+  }, [prefix, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker, fetchStrategyAttribution, fetchControls, fetchStrategyPositions]);
 
   useEffect(() => {
     fetchPnlHistory();
@@ -76,7 +78,7 @@ export default function Analytics() {
         </TabsList>
 
         <TabsContent value="comparison" className="mt-4 space-y-4">
-          <StrategyComparisonSection attribution={strategyAttribution} strategyTracker={strategyTracker} />
+          <StrategyComparisonSection attribution={strategyAttribution} strategyTracker={strategyTracker} positionSummaries={strategyPositions?.summaries} />
         </TabsContent>
 
         <TabsContent value="controls" className="mt-4 space-y-4">
@@ -528,40 +530,50 @@ const STRATEGY_COLORS = {
   resolver: { bg: 'bg-zinc-900/50', border: 'border-zinc-800/40', accent: 'text-zinc-400', label: 'RESOLVER' },
 };
 
-function StrategyComparisonSection({ attribution, strategyTracker }) {
+function StrategyComparisonSection({ attribution, strategyTracker, positionSummaries }) {
   const attr = attribution || {};
-  const slots = (strategyTracker || {}).position_slots || {};
-  const displayBuckets = ['crypto', 'weather', 'arb', 'resolver'];
+  const posSums = positionSummaries || {};
+  const displayBuckets = ['crypto', 'weather', 'arb'];
+
+  // Merge: prefer positionSummaries for unrealized/total as it uses live mark-to-market
+  const merged = {};
+  for (const b of displayBuckets) {
+    const a = attr[b] || {};
+    const p = posSums[b] || {};
+    merged[b] = {
+      ...a,
+      unrealized_pnl: p.unrealized_pnl ?? a.unrealized_pnl ?? 0,
+      total_pnl: p.total_pnl ?? a.total_pnl ?? 0,
+      open_positions: p.open_positions ?? a.open_positions ?? 0,
+      capital_allocated: p.capital_allocated ?? a.capital_allocated ?? 0,
+    };
+  }
 
   const rows = [
     { key: 'realized_pnl', label: 'Realized PnL', fmt: (v) => <PnlValue v={v} />, important: true },
-    { key: 'unrealized_pnl', label: 'Unrealized PnL', fmt: (v) => <PnlValue v={v} /> },
+    { key: 'unrealized_pnl', label: 'Unrealized PnL', fmt: (v) => <PnlValue v={v} />, important: true },
     { key: 'total_pnl', label: 'Total PnL', fmt: (v) => <PnlValue v={v} />, important: true },
-    { key: 'trade_count', label: 'Trade Count', fmt: (v) => <span className="text-zinc-300 font-mono">{v}</span> },
-    { key: 'win_rate', label: 'Win Rate', fmt: (v) => <span className={`font-mono ${v > 55 ? 'text-emerald-400' : v > 45 ? 'text-amber-400' : 'text-red-400'}`}>{v}%</span>, important: true },
+    { key: 'open_positions', label: 'Open Positions', fmt: (v) => <span className="text-zinc-300 font-mono">{v}</span>, important: true },
+    { key: 'trade_count', label: 'Closed Trades', fmt: (v) => <span className="text-zinc-300 font-mono">{v}</span> },
+    { key: 'win_rate', label: 'Win Rate', fmt: (v) => <span className={`font-mono ${v > 55 ? 'text-emerald-400' : v > 45 ? 'text-amber-400' : v > 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v > 0 ? `${v}%` : '—'}</span> },
     { key: 'avg_pnl_per_trade', label: 'Avg PnL/Trade', fmt: (v) => <PnlValue v={v} /> },
-    { key: 'pnl_per_hour', label: 'PnL/Hour', fmt: (v) => <PnlValue v={v} />, important: true },
-    { key: 'avg_hold_hours', label: 'Avg Hold (hrs)', fmt: (v) => <span className="text-zinc-300 font-mono">{v}h</span> },
-    { key: 'capital_allocated', label: 'Capital Allocated', fmt: (v) => <span className="text-zinc-300 font-mono">${v}</span> },
-    { key: 'open_positions', label: 'Open Positions', fmt: (v) => <span className="text-zinc-300 font-mono">{v}</span> },
-    { key: 'avg_trade_size', label: 'Avg Trade Size', fmt: (v) => <span className="text-zinc-300 font-mono">${v}</span> },
+    { key: 'capital_allocated', label: 'Capital Deployed', fmt: (v) => <span className="text-zinc-300 font-mono">${v}</span> },
     { key: 'best_trade', label: 'Best Trade', fmt: (v) => <PnlValue v={v} /> },
     { key: 'worst_trade', label: 'Worst Trade', fmt: (v) => <PnlValue v={v} /> },
   ];
 
-  // Find best strategy by total PnL for capital recommendation
   const ranked = displayBuckets
-    .filter(b => attr[b])
-    .sort((a, b) => (attr[b]?.total_pnl || 0) - (attr[a]?.total_pnl || 0));
+    .filter(b => merged[b])
+    .sort((a, b) => (merged[b]?.total_pnl || 0) - (merged[a]?.total_pnl || 0));
 
   return (
     <div className="space-y-5">
-      {/* Strategy cards — side by side */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Strategy cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {displayBuckets.map((bucket) => {
-          const s = attr[bucket] || {};
+          const s = merged[bucket] || {};
           const c = STRATEGY_COLORS[bucket] || STRATEGY_COLORS.resolver;
-          const isTop = ranked[0] === bucket && (s.trade_count || 0) > 0;
+          const isTop = ranked[0] === bucket && ((s.trade_count || 0) + (s.open_positions || 0)) > 0;
           return (
             <div key={bucket} data-testid={`strategy-card-${bucket}`}
               className={`rounded-lg border p-4 space-y-3 ${c.bg} ${c.border} ${isTop ? 'ring-1 ring-emerald-500/30' : ''}`}>
@@ -569,30 +581,38 @@ function StrategyComparisonSection({ attribution, strategyTracker }) {
                 <span className={`text-sm font-semibold ${c.accent}`}>{c.label}</span>
                 {isTop && <span className="text-[10px] bg-emerald-900/60 text-emerald-300 px-1.5 py-0.5 rounded">TOP</span>}
               </div>
-              {/* Hero number */}
-              <div className="text-center py-2">
-                <div className="text-2xl font-bold font-mono">
-                  <PnlValue v={s.total_pnl || 0} large />
+              {/* PnL breakdown */}
+              <div className="py-2 space-y-1">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-[10px] text-zinc-500">Total</span>
+                  <span className="text-xl font-bold font-mono">
+                    <PnlValue v={s.total_pnl || 0} large />
+                  </span>
                 </div>
-                <div className="text-[10px] text-zinc-500 mt-1">Total PnL</div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-zinc-500">Realized</span>
+                  <PnlValue v={s.realized_pnl || 0} />
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-zinc-500">Unrealized</span>
+                  <PnlValue v={s.unrealized_pnl || 0} />
+                </div>
               </div>
               {/* Key metrics */}
-              <div className="space-y-1.5 text-xs">
-                <Row label="Win Rate" value={s.win_rate != null ? `${s.win_rate}%` : '—'} color={s.win_rate > 55 ? 'text-emerald-400' : s.win_rate > 45 ? 'text-amber-400' : 'text-zinc-400'} />
-                <Row label="Trades" value={s.trade_count || 0} />
+              <div className="space-y-1.5 text-xs pt-2 border-t border-zinc-800/50">
+                <Row label="Open" value={s.open_positions || 0} />
+                <Row label="Closed" value={s.trade_count || 0} />
                 <Row label="W/L" value={`${s.wins || 0}/${s.losses || 0}`} />
-                <Row label="PnL/Hour" value={s.pnl_per_hour != null ? `$${s.pnl_per_hour}` : '—'} color={s.pnl_per_hour > 0 ? 'text-emerald-400' : 'text-red-400'} />
-                <Row label="Hold Time" value={s.avg_hold_hours != null ? `${s.avg_hold_hours}h` : '—'} />
+                {s.win_rate > 0 && <Row label="Win Rate" value={`${s.win_rate}%`} color={s.win_rate > 55 ? 'text-emerald-400' : 'text-amber-400'} />}
                 <Row label="Capital" value={`$${s.capital_allocated || 0}`} />
-                <Row label="Positions" value={s.open_positions || 0} />
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Detailed comparison table */}
-      <SectionCard title="Detailed Comparison" testId="section-strategy-comparison-table">
+      {/* Comparison table */}
+      <SectionCard title="Strategy Comparison" testId="section-strategy-comparison-table">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -611,7 +631,7 @@ function StrategyComparisonSection({ attribution, strategyTracker }) {
                   <td className={`p-2 ${row.important ? 'text-zinc-200 font-medium' : 'text-zinc-500'}`}>{row.label}</td>
                   {displayBuckets.map(b => (
                     <td key={b} className="p-2 text-right">
-                      {row.fmt((attr[b] || {})[row.key] ?? 0)}
+                      {row.fmt((merged[b] || {})[row.key] ?? 0)}
                     </td>
                   ))}
                 </tr>

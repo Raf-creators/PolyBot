@@ -44,6 +44,7 @@ export function useApi() {
   const setStrategyTracker = useDashboardStore((s) => s.setStrategyTracker);
   const setStrategyAttribution = useDashboardStore((s) => s.setStrategyAttribution);
   const setControls = useDashboardStore((s) => s.setControls);
+  const setStrategyPositions = useDashboardStore((s) => s.setStrategyPositions);
 
   // Polling fallback for stats — works even when WebSocket is down
   const fetchStatus = useCallback(async () => {
@@ -242,6 +243,13 @@ export function useApi() {
     } catch {}
   }, [prefix, setControls]);
 
+  const fetchStrategyPositions = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/positions/by-strategy`);
+      setStrategyPositions(data);
+    } catch {}
+  }, [prefix, setStrategyPositions]);
+
   // Load the demo status snapshot (overrides WS-driven top-level state)
   const loadDemoSnapshot = useCallback(async () => {
     try {
@@ -290,6 +298,7 @@ export function useApi() {
     fetchStrategyTracker,
     fetchStrategyAttribution,
     fetchControls,
+    fetchStrategyPositions,
     loadDemoSnapshot,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,

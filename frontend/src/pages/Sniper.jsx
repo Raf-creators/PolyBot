@@ -5,7 +5,7 @@ import { StatCard } from '../components/StatCard';
 import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { formatBps, formatPrice, formatNumber, formatPercent, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
+import { formatBps, formatPrice, formatPnl, formatNumber, formatPercent, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 
 const SIGNAL_STATUS_COLORS = {
   generated: 'text-blue-400',
@@ -19,30 +19,65 @@ export default function Sniper() {
   const signals = useDashboardStore((s) => s.sniperSignals);
   const executions = useDashboardStore((s) => s.sniperExecutions);
   const health = useDashboardStore((s) => s.sniperHealth);
-  const { fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth } = useApi();
-  const [tab, setTab] = useState('signals');
+  const strategyPositions = useDashboardStore((s) => s.strategyPositions);
+  const { fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchStrategyPositions } = useApi();
+  const [tab, setTab] = useState('positions');
 
   useEffect(() => {
     fetchSniperSignals();
     fetchSniperExecutions();
     fetchSniperHealth();
+    fetchStrategyPositions();
     const interval = setInterval(() => {
       fetchSniperSignals();
       fetchSniperExecutions();
       fetchSniperHealth();
+      fetchStrategyPositions();
     }, 6000);
     return () => clearInterval(interval);
-  }, [fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth]);
+  }, [fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchStrategyPositions]);
 
   const config = health.config || {};
   const buffers = health.price_buffer_sizes || {};
   const rejReasons = health.rejection_reasons || {};
   const classFailReasons = health.classification_failure_reasons || {};
 
+  const sniperSummary = strategyPositions?.summaries?.crypto || {};
+  const sniperPositions = strategyPositions?.positions?.crypto || [];
+
   const allExecs = useMemo(() => [
     ...(executions.active || []),
     ...(executions.completed || []).reverse(),
   ], [executions]);
+
+  // ---- Open Positions Columns ----
+  const positionColumns = [
+    { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[220px] truncate block">{truncate(v, 55)}</span> },
+    { key: 'sniper', label: 'Asset', render: (_, row) => {
+      const s = row.sniper;
+      return s ? <span className="text-zinc-200 font-medium">{s.asset}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'sniper', label: 'Side', render: (_, row) => {
+      const s = row.sniper;
+      return s ? <span className={s.side === 'buy_yes' ? 'text-emerald-400' : 'text-red-400'}>{s.side}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'avg_cost', label: 'Entry', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
+    { key: 'current_price', label: 'Mark', align: 'right', render: (v) => <span className="font-mono text-zinc-200">{formatPrice(v)}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{formatNumber(v, 2)}</span> },
+    { key: 'unrealized_pnl', label: 'Unrl P&L', align: 'right', sortable: true, render: (v) => (
+      <span className={`font-mono font-medium ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{formatPnl(v)}</span>
+    )},
+    { key: 'unrealized_pnl_pct', label: '%', align: 'right', render: (v) => (
+      <span className={`font-mono text-xs ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}</span>
+    )},
+    { key: 'sniper', label: 'Edge@Entry', align: 'right', render: (_, row) => {
+      const e = row.sniper?.edge_at_entry;
+      return e != null ? <span className="font-mono text-amber-400">{formatBps(e)}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'hours_to_resolution', label: 'Resolves', align: 'right', render: (v) => (
+      <span className={`font-mono ${v != null && v < 1 ? 'text-amber-400' : 'text-zinc-400'}`}>{v != null ? (v < 1 ? `${Math.round(v * 60)}m` : `${v.toFixed(1)}h`) : '—'}</span>
+    )},
+  ];
 
   const signalColumns = [
     { key: 'asset', label: 'Asset', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
@@ -61,7 +96,6 @@ export default function Sniper() {
         {v > 0 ? formatPercent(v * 100, 0) : '—'}
       </span>
     )},
-    { key: 'volatility', label: 'Vol', align: 'right', render: (v) => v > 0 ? formatPercent(v * 100, 1) : '—' },
     { key: 'time_to_expiry_seconds', label: 'TTE', align: 'right', sortable: true, render: (v) => v > 0 ? `${Math.round(v)}s` : '—' },
     { key: 'side', label: 'Side', render: (v) => (
       <span className={v === 'buy_yes' ? 'text-emerald-400' : v === 'buy_no' ? 'text-red-400' : 'text-zinc-600'}>{v}</span>
@@ -75,18 +109,16 @@ export default function Sniper() {
   ];
 
   const execColumns = [
-    { key: 'signal_id', label: 'Signal', render: (v) => <span className="text-zinc-400 font-mono">{truncate(v, 12)}</span> },
     { key: 'asset', label: 'Asset', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
     { key: 'side', label: 'Side', render: (v) => (
       <span className={v === 'buy_yes' ? 'text-emerald-400' : 'text-red-400'}>{v}</span>
     )},
     { key: 'size', label: 'Size', align: 'right', render: (v) => formatNumber(v, 2) },
     { key: 'entry_price', label: 'Fill', align: 'right', render: (v) => v != null ? formatPrice(v) : '—' },
-    { key: 'target_edge_bps', label: 'Target Edge', align: 'right', sortable: true, render: (v) => formatBps(v) },
+    { key: 'target_edge_bps', label: 'Edge', align: 'right', sortable: true, render: (v) => formatBps(v) },
     { key: 'status', label: 'Status', render: (v) => (
       <span className={`font-medium ${SIGNAL_STATUS_COLORS[v] || 'text-zinc-400'}`}>{v}</span>
     )},
-    { key: 'submitted_at', label: 'Submitted', render: (v) => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
     { key: 'filled_at', label: 'Filled', render: (v) => v ? <span className="text-zinc-500">{formatTimestamp(v)}</span> : '—' },
   ];
 
@@ -99,18 +131,49 @@ export default function Sniper() {
         </span>
       </div>
 
-      {/* Key Metrics */}
+      {/* Summary Cards - focused on live metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        <StatCard testId="stat-sniper-tradable" label="Tradable" value={signals.total_tradable} />
-        <StatCard testId="stat-sniper-rejected" label="Rejected" value={signals.total_rejected} />
+        <StatCard testId="stat-sniper-open" label="Open Positions" value={sniperPositions.length}
+          sub={sniperSummary.unrealized_pnl != null ? `${formatPnl(sniperSummary.unrealized_pnl)} unrl` : undefined} />
+        <StatCard testId="stat-sniper-tradable" label="Tradable Signals" value={signals.total_tradable} />
         <StatCard testId="stat-sniper-executed" label="Executed" value={health.signals_executed || 0} />
         <StatCard testId="stat-sniper-filled" label="Filled" value={health.signals_filled || 0} />
         <StatCard testId="stat-sniper-classified" label="Markets Classified" value={health.markets_classified || 0} />
         <StatCard testId="stat-sniper-scan-ms" label="Scan Latency" value={`${health.last_scan_duration_ms || 0}ms`} />
       </div>
 
+      {/* PnL Summary Bar */}
+      <div data-testid="sniper-pnl-bar" className="flex items-center gap-6 px-4 py-2.5 bg-zinc-900/60 border border-zinc-800 rounded-lg text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Realized</span>
+          <span className={`font-mono font-medium ${(sniperSummary.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(sniperSummary.realized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Unrealized</span>
+          <span className={`font-mono font-medium ${(sniperSummary.unrealized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(sniperSummary.unrealized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Total</span>
+          <span className={`font-mono font-semibold ${(sniperSummary.total_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(sniperSummary.total_pnl || 0)}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-4 text-zinc-500">
+          <span>Trades: <span className="text-zinc-300 font-mono">{sniperSummary.trade_count || 0}</span></span>
+          <span>W/L: <span className="text-zinc-300 font-mono">{sniperSummary.wins || 0}/{sniperSummary.losses || 0}</span></span>
+          {sniperSummary.win_rate > 0 && <span>WR: <span className="text-zinc-300 font-mono">{sniperSummary.win_rate}%</span></span>}
+        </div>
+      </div>
+
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-zinc-900 border border-zinc-800">
+          <TabsTrigger data-testid="tab-positions" value="positions" className="text-xs data-[state=active]:bg-zinc-800">
+            Open Positions ({sniperPositions.length})
+          </TabsTrigger>
           <TabsTrigger value="signals" className="text-xs data-[state=active]:bg-zinc-800">
             Signals ({signals.total_tradable})
           </TabsTrigger>
@@ -124,6 +187,15 @@ export default function Sniper() {
             Health
           </TabsTrigger>
         </TabsList>
+
+        {/* Open Positions Tab (PRIMARY) */}
+        <TabsContent value="positions" className="mt-4">
+          <SectionCard title="Open Sniper Positions" testId="section-sniper-positions">
+            <DataTable columns={positionColumns} data={sniperPositions}
+              emptyMessage="No open sniper positions — trades will appear here when the strategy executes"
+              testId="sniper-positions-table" />
+          </SectionCard>
+        </TabsContent>
 
         <TabsContent value="signals" className="mt-4">
           <SectionCard testId="section-sniper-signals">
@@ -145,67 +217,41 @@ export default function Sniper() {
 
         <TabsContent value="health" className="mt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {/* Volatility Panel */}
             <SectionCard title="Volatility" testId="section-sniper-vol">
               <div className="space-y-3 text-xs">
                 <div className="flex justify-between">
                   <span className="text-zinc-500">BTC Realized Vol</span>
                   <span className={`font-mono ${health.btc_realized_vol ? 'text-zinc-200' : 'text-zinc-600'}`}>
-                    {health.btc_realized_vol ? formatPercent(health.btc_realized_vol * 100, 1) : 'Warming up…'}
+                    {health.btc_realized_vol ? formatPercent(health.btc_realized_vol * 100, 1) : 'Warming up...'}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-zinc-500">ETH Realized Vol</span>
                   <span className={`font-mono ${health.eth_realized_vol ? 'text-zinc-200' : 'text-zinc-600'}`}>
-                    {health.eth_realized_vol ? formatPercent(health.eth_realized_vol * 100, 1) : 'Warming up…'}
+                    {health.eth_realized_vol ? formatPercent(health.eth_realized_vol * 100, 1) : 'Warming up...'}
                   </span>
                 </div>
                 <div className="pt-2 border-t border-zinc-800 space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">BTC Samples</span>
-                    <span className="font-mono text-zinc-400">
-                      {buffers.BTC || 0} / {config.vol_min_samples || 30}
-                      {(buffers.BTC || 0) >= (config.vol_min_samples || 30) ? (
-                        <span className="ml-2 text-emerald-400">Ready</span>
-                      ) : (
-                        <span className="ml-2 text-amber-400">Filling</span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">ETH Samples</span>
-                    <span className="font-mono text-zinc-400">
-                      {buffers.ETH || 0} / {config.vol_min_samples || 30}
-                      {(buffers.ETH || 0) >= (config.vol_min_samples || 30) ? (
-                        <span className="ml-2 text-emerald-400">Ready</span>
-                      ) : (
-                        <span className="ml-2 text-amber-400">Filling</span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-zinc-500">Vol Floor</span>
-                    <span className="font-mono text-zinc-400">{config.vol_floor ? formatPercent(config.vol_floor * 100, 0) : '—'}</span>
-                  </div>
+                  {['BTC', 'ETH'].map(a => (
+                    <div key={a} className="flex justify-between">
+                      <span className="text-zinc-500">{a} Samples</span>
+                      <span className="font-mono text-zinc-400">
+                        {buffers[a] || 0} / {config.vol_min_samples || 30}
+                        {(buffers[a] || 0) >= (config.vol_min_samples || 30) ? <span className="ml-2 text-emerald-400">Ready</span> : <span className="ml-2 text-amber-400">Filling</span>}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </SectionCard>
 
-            {/* Scanner Metrics */}
             <SectionCard title="Scanner Metrics" testId="section-sniper-metrics">
               <div className="space-y-2 text-xs">
                 {[
-                  ['Total Scans', health.total_scans],
-                  ['Scan Duration', `${health.last_scan_duration_ms || 0}ms`],
-                  ['Markets Classified', health.markets_classified],
-                  ['Markets Evaluated', health.markets_evaluated],
-                  ['Signals Generated', health.signals_generated],
-                  ['Signals Rejected', health.signals_rejected],
-                  ['Signals Executed', health.signals_executed],
-                  ['Signals Filled', health.signals_filled],
-                  ['Active Executions', health.active_executions],
-                  ['Completed', health.completed_executions],
-                  ['Stale Feed Skips', health.stale_feed_skips],
+                  ['Total Scans', health.total_scans], ['Scan Duration', `${health.last_scan_duration_ms || 0}ms`],
+                  ['Markets Classified', health.markets_classified], ['Markets Evaluated', health.markets_evaluated],
+                  ['Signals Generated', health.signals_generated], ['Signals Executed', health.signals_executed],
+                  ['Signals Filled', health.signals_filled], ['Active Executions', health.active_executions],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -215,7 +261,6 @@ export default function Sniper() {
               </div>
             </SectionCard>
 
-            {/* Rejection Reasons */}
             <SectionCard title="Rejection Reasons" testId="section-sniper-rejections">
               <div className="space-y-2 text-xs">
                 {Object.keys(rejReasons).length === 0 ? (
@@ -242,21 +287,13 @@ export default function Sniper() {
               </div>
             </SectionCard>
 
-            {/* Scanner Config */}
             <SectionCard title="Scanner Config" testId="section-sniper-config">
               <div className="space-y-2 text-xs">
                 {[
-                  ['Scan Interval', `${config.scan_interval}s`],
-                  ['Min Edge', `${config.min_edge_bps} bps`],
-                  ['Min Liquidity', `$${config.min_liquidity}`],
-                  ['Min Confidence', config.min_confidence],
-                  ['Max Spread', config.max_spread],
-                  ['Min TTE', `${config.min_tte_seconds}s`],
-                  ['Max TTE', `${config.max_tte_seconds}s`],
-                  ['Default Size', config.default_size],
-                  ['Max Concurrent', config.max_concurrent_signals],
+                  ['Scan Interval', `${config.scan_interval}s`], ['Min Edge', `${config.min_edge_bps} bps`],
+                  ['Min Liquidity', `$${config.min_liquidity}`], ['Min Confidence', config.min_confidence],
+                  ['Default Size', config.default_size], ['Max Concurrent', config.max_concurrent_signals],
                   ['Cooldown', `${config.cooldown_seconds}s`],
-                  ['Momentum Weight', config.momentum_weight],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>

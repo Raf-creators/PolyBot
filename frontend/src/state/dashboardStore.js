@@ -64,6 +64,9 @@ export const useDashboardStore = create((set, get) => ({
   // Controls (fetched from /api/controls)
   controls: {},
 
+  // Strategy positions (fetched from /api/positions/by-strategy)
+  strategyPositions: { positions: { weather: [], crypto: [], arb: [], other: [] }, summaries: {}, total_unrealized_pnl: 0, total_open: 0 },
+
   // Connection state
   wsConnected: false,
   lastWsUpdate: null,
@@ -120,6 +123,7 @@ export const useDashboardStore = create((set, get) => ({
   setStrategyTracker: (data) => set({ strategyTracker: data }),
   setStrategyAttribution: (data) => set({ strategyAttribution: data }),
   setControls: (data) => set({ controls: data }),
+  setStrategyPositions: (data) => set({ strategyPositions: data }),
 
   // Apply a full demo snapshot to all state slices
   applyDemoSnapshot: (demoStatus) => set({

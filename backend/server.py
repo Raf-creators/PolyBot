@@ -1011,6 +1011,166 @@ async def get_positions():
     return result
 
 
+@api_router.get("/positions/by-strategy")
+async def get_positions_by_strategy():
+    """Strategy-filtered open positions with enriched metadata for dashboard display."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    from engine.risk import classify_strategy
+    now = datetime.now(timezone.utc)
+
+    # Collect weather signal/execution context for enrichment
+    weather_exec_map = {}  # token_id -> execution data
+    if weather_trader_ref:
+        for ex in weather_trader_ref._active_executions.values():
+            # Find token from the signal or from condition_id matching
+            for sig in weather_trader_ref._signals:
+                if sig.id == ex.signal_id:
+                    weather_exec_map[sig.token_id] = {
+                        "station_id": ex.station_id,
+                        "bucket_label": ex.bucket_label,
+                        "target_date": ex.target_date,
+                        "edge_at_entry": ex.target_edge_bps,
+                        "forecast_high_f": sig.forecast_high_f,
+                        "sigma": sig.sigma,
+                        "model_prob": sig.model_prob,
+                        "confidence": sig.confidence,
+                        "lead_hours": sig.lead_hours,
+                    }
+                    break
+        # Also check recent filled executions
+        for ex in weather_trader_ref._completed_executions[-50:]:
+            if ex.status.value == "filled":
+                for sig in weather_trader_ref._signals:
+                    if sig.id == ex.signal_id and sig.token_id not in weather_exec_map:
+                        weather_exec_map[sig.token_id] = {
+                            "station_id": ex.station_id,
+                            "bucket_label": ex.bucket_label,
+                            "target_date": ex.target_date,
+                            "edge_at_entry": ex.target_edge_bps,
+                            "forecast_high_f": sig.forecast_high_f,
+                            "sigma": sig.sigma,
+                            "model_prob": sig.model_prob,
+                            "confidence": sig.confidence,
+                            "lead_hours": sig.lead_hours,
+                        }
+                        break
+
+    # Collect sniper signal context
+    sniper_exec_map = {}  # token_id -> signal data
+    if crypto_sniper_ref:
+        for ex in crypto_sniper_ref._active_executions.values():
+            for sig in crypto_sniper_ref._signals:
+                if sig.id == ex.signal_id:
+                    sniper_exec_map[sig.token_id] = {
+                        "asset": sig.asset,
+                        "direction": sig.direction,
+                        "strike": sig.strike,
+                        "spot_at_entry": sig.spot_price,
+                        "fair_price": sig.fair_price,
+                        "edge_at_entry": sig.edge_bps,
+                        "confidence": sig.confidence,
+                        "side": sig.side,
+                    }
+                    break
+        for ex in crypto_sniper_ref._completed_executions[-50:]:
+            if ex.status.value == "filled":
+                for sig in crypto_sniper_ref._signals:
+                    if sig.id == ex.signal_id and sig.token_id not in sniper_exec_map:
+                        sniper_exec_map[sig.token_id] = {
+                            "asset": sig.asset,
+                            "direction": sig.direction,
+                            "strike": sig.strike,
+                            "spot_at_entry": sig.spot_price,
+                            "fair_price": sig.fair_price,
+                            "edge_at_entry": sig.edge_bps,
+                            "confidence": sig.confidence,
+                            "side": sig.side,
+                        }
+                        break
+
+    by_strategy = {"weather": [], "crypto": [], "arb": [], "other": []}
+    total_unrealized = 0.0
+
+    for pos in state.positions.values():
+        bucket = classify_strategy(pos)
+        d = pos.model_dump()
+
+        # Market enrichment (same as /positions)
+        market = state.get_market(pos.token_id)
+        if market:
+            d["end_date"] = market.end_date
+            d["condition_id"] = market.condition_id
+            d["current_price"] = market.mid_price or pos.current_price
+            # Recompute unrealized PnL from current mid_price
+            if market.mid_price and pos.avg_cost > 0:
+                d["unrealized_pnl"] = round((market.mid_price - pos.avg_cost) * pos.size, 4)
+            if market.end_date:
+                try:
+                    end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    tte = (end_dt - now).total_seconds()
+                    d["time_to_expiry_seconds"] = round(tte, 0)
+                    d["hours_to_resolution"] = round(tte / 3600, 1) if tte > 0 else 0
+                except (ValueError, TypeError):
+                    d["time_to_expiry_seconds"] = None
+                    d["hours_to_resolution"] = None
+            else:
+                d["time_to_expiry_seconds"] = None
+                d["hours_to_resolution"] = None
+        else:
+            d["end_date"] = None
+            d["time_to_expiry_seconds"] = None
+            d["hours_to_resolution"] = None
+
+        # Unrealized PnL percent
+        cost_basis = pos.avg_cost * pos.size
+        if cost_basis > 0:
+            d["unrealized_pnl_pct"] = round(d.get("unrealized_pnl", pos.unrealized_pnl) / cost_basis * 100, 2)
+        else:
+            d["unrealized_pnl_pct"] = 0.0
+
+        d["strategy_bucket"] = bucket
+        total_unrealized += d.get("unrealized_pnl", pos.unrealized_pnl)
+
+        # Strategy-specific enrichment
+        if bucket == "weather" and pos.token_id in weather_exec_map:
+            d["weather"] = weather_exec_map[pos.token_id]
+        elif bucket == "crypto" and pos.token_id in sniper_exec_map:
+            d["sniper"] = sniper_exec_map[pos.token_id]
+
+        target = by_strategy.get(bucket, by_strategy["other"])
+        target.append(d)
+
+    # Strategy summaries
+    summaries = {}
+    attribution = strategy_tracker.get_strategy_attribution()
+    for bucket_name in ["weather", "crypto", "arb"]:
+        attr = attribution.get(bucket_name, {})
+        positions = by_strategy.get(bucket_name, [])
+        summaries[bucket_name] = {
+            "open_positions": len(positions),
+            "unrealized_pnl": round(sum(p.get("unrealized_pnl", 0) for p in positions), 4),
+            "realized_pnl": attr.get("realized_pnl", 0),
+            "total_pnl": round(
+                attr.get("realized_pnl", 0) + sum(p.get("unrealized_pnl", 0) for p in positions), 4
+            ),
+            "trade_count": attr.get("trade_count", 0),
+            "wins": attr.get("wins", 0),
+            "losses": attr.get("losses", 0),
+            "win_rate": attr.get("win_rate", 0),
+            "capital_allocated": round(sum(p.get("size", 0) * p.get("avg_cost", 0) for p in positions), 2),
+            "best_trade": attr.get("best_trade", 0),
+            "worst_trade": attr.get("worst_trade", 0),
+        }
+
+    return {
+        "positions": by_strategy,
+        "summaries": summaries,
+        "total_unrealized_pnl": round(total_unrealized, 4),
+        "total_open": sum(len(v) for v in by_strategy.values()),
+    }
+
+
 @api_router.get("/orders")
 async def get_orders():
     if not state:

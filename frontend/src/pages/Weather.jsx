@@ -7,7 +7,7 @@ import { DataTable } from '../components/DataTable';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { formatBps, formatPrice, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
+import { formatBps, formatPrice, formatPnl, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 import axios from 'axios';
 import { API_BASE } from '../utils/constants';
 
@@ -26,10 +26,10 @@ export default function Weather() {
   const forecasts = useDashboardStore((s) => s.weatherForecasts);
   const weatherAlerts = useDashboardStore((s) => s.weatherAlerts);
   const demoMode = useDashboardStore((s) => s.demoMode);
-  const { fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts } = useApi();
-  const [tab, setTab] = useState('signals');
+  const strategyPositions = useDashboardStore((s) => s.strategyPositions);
+  const { fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts, fetchStrategyPositions } = useApi();
+  const [tab, setTab] = useState('positions');
 
-  // Calibration / accuracy state (fetched directly since these are weather-specific)
   const [shadowSummary, setShadowSummary] = useState(null);
   const [accuracyHistory, setAccuracyHistory] = useState([]);
   const [stationSummary, setStationSummary] = useState({});
@@ -66,6 +66,7 @@ export default function Weather() {
     fetchWeatherHealth();
     fetchWeatherForecasts();
     fetchWeatherAlerts();
+    fetchStrategyPositions();
     fetchCalibration();
     const interval = setInterval(() => {
       fetchWeatherSignals();
@@ -73,10 +74,11 @@ export default function Weather() {
       fetchWeatherHealth();
       fetchWeatherForecasts();
       fetchWeatherAlerts();
+      fetchStrategyPositions();
     }, 8000);
     const calInterval = setInterval(fetchCalibration, 30000);
     return () => { clearInterval(interval); clearInterval(calInterval); };
-  }, [fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts, fetchCalibration]);
+  }, [fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts, fetchStrategyPositions, fetchCalibration]);
 
   const config = health.config || {};
   const feedHealth = health.feed_health || {};
@@ -88,6 +90,10 @@ export default function Weather() {
   const execMode = health.execution_mode || shadowSummary?.execution_mode || 'paper';
   const alertStats = health.alert_stats || {};
   const alerts = weatherAlerts.alerts || [];
+
+  // Strategy-level summary
+  const weatherSummary = strategyPositions?.summaries?.weather || {};
+  const weatherPositions = strategyPositions?.positions?.weather || [];
 
   const allExecs = useMemo(() => [
     ...(executions.active || []),
@@ -106,45 +112,65 @@ export default function Weather() {
     });
   }, [forecasts, classifications]);
 
-  // ---- Column Definitions ----
+  // ---- Open Positions Columns ----
+  const positionColumns = [
+    { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[200px] truncate block">{truncate(v, 50)}</span> },
+    { key: 'weather', label: 'City', render: (_, row) => {
+      const w = row.weather;
+      return w ? <span className="text-cyan-400 font-mono">{w.station_id}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'weather', label: 'Bucket', render: (_, row) => {
+      const w = row.weather;
+      return w ? <span className="text-zinc-300 font-medium">{w.bucket_label}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'avg_cost', label: 'Entry', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
+    { key: 'current_price', label: 'Mark', align: 'right', render: (v) => <span className="font-mono text-zinc-200">{formatPrice(v)}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{formatNumber(v, 2)}</span> },
+    { key: 'unrealized_pnl', label: 'Unrl P&L', align: 'right', sortable: true, render: (v) => (
+      <span className={`font-mono font-medium ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{formatPnl(v)}</span>
+    )},
+    { key: 'unrealized_pnl_pct', label: '%', align: 'right', render: (v) => (
+      <span className={`font-mono text-xs ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}</span>
+    )},
+    { key: 'weather', label: 'Edge@Entry', align: 'right', render: (_, row) => {
+      const e = row.weather?.edge_at_entry;
+      return e != null ? <span className="font-mono text-amber-400">{formatBps(e)}</span> : <span className="text-zinc-600">—</span>;
+    }},
+    { key: 'hours_to_resolution', label: 'Resolves', align: 'right', render: (v) => (
+      <span className={`font-mono ${v != null && v < 12 ? 'text-amber-400' : 'text-zinc-400'}`}>{v != null ? `${v.toFixed(0)}h` : '—'}</span>
+    )},
+  ];
+
+  // ---- Signal Columns ----
   const signalColumns = [
     { key: 'station_id', label: 'Station', render: (v) => <span className="text-cyan-400 font-medium font-mono">{v}</span> },
     { key: 'target_date', label: 'Date', render: (v) => <span className="text-zinc-300">{v}</span> },
     { key: 'bucket_label', label: 'Bucket', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
     { key: 'forecast_high_f', label: 'Fcst', align: 'right', render: (v) => <span className="font-mono">{v ? `${v}F` : '—'}</span> },
-    { key: 'sigma', label: 'Sigma', align: 'right', render: (v) => <span className="font-mono text-zinc-400">{v ? `${v}F` : '—'}</span> },
     { key: 'model_prob', label: 'Model', align: 'right', sortable: true, render: (v) => <span className="font-mono">{v > 0 ? formatPrice(v) : '—'}</span> },
     { key: 'market_price', label: 'Mkt', align: 'right', sortable: true, render: (v) => <span className="font-mono">{v > 0 ? formatPrice(v) : '—'}</span> },
     { key: 'edge_bps', label: 'Edge', align: 'right', sortable: true, render: (v) => <span className={v > 0 ? 'text-emerald-400 font-mono' : 'text-zinc-500 font-mono'}>{formatBps(v)}</span> },
     { key: 'confidence', label: 'Conf', align: 'right', sortable: true, render: (v) => (
       <span className={`font-mono ${v >= 0.6 ? 'text-emerald-400' : v >= 0.3 ? 'text-amber-400' : 'text-zinc-500'}`}>{v > 0 ? (v * 100).toFixed(0) + '%' : '—'}</span>
     )},
-    { key: 'liquidity_score', label: 'Liq', align: 'right', sortable: true, render: (v) => {
-      const s = v || 0;
-      const color = s >= 50 ? 'text-emerald-400' : s >= 35 ? 'text-teal-400' : s >= 20 ? 'text-cyan-400' : 'text-zinc-500';
-      return <span className={`font-mono ${color}`}>{s > 0 ? s.toFixed(0) : '—'}</span>;
-    }},
     { key: 'recommended_size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{v > 0 ? formatNumber(v, 1) : '—'}</span> },
-    { key: 'lead_hours', label: 'Lead', align: 'right', render: (v) => <span className="font-mono text-zinc-400">{v > 0 ? `${v.toFixed(0)}h` : '—'}</span> },
   ];
 
   const rejectedColumns = [
     ...signalColumns.slice(0, 5),
     { key: 'rejection_reason', label: 'Reason', render: (v) => (
-      <span className={`text-xs ${v?.includes('liquidity_too_low') ? 'text-orange-400' : 'text-zinc-500'}`}>{v}</span>
+      <span className={`text-xs ${v?.includes('liquidity') ? 'text-orange-400' : 'text-zinc-500'}`}>{v}</span>
     )},
     { key: 'detected_at', label: 'Detected', render: (v) => <span className="text-zinc-600">{formatTimeAgo(v)}</span> },
   ];
 
   const execColumns = [
-    { key: 'signal_id', label: 'Signal', render: (v) => <span className="text-zinc-400 font-mono">{truncate(v, 10)}</span> },
     { key: 'station_id', label: 'Station', render: (v) => <span className="text-cyan-400 font-mono">{v}</span> },
     { key: 'bucket_label', label: 'Bucket', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
     { key: 'size', label: 'Size', align: 'right', render: (v) => formatNumber(v, 2) },
     { key: 'entry_price', label: 'Fill', align: 'right', render: (v) => v != null ? formatPrice(v) : '—' },
     { key: 'target_edge_bps', label: 'Edge', align: 'right', sortable: true, render: (v) => formatBps(v) },
     { key: 'status', label: 'Status', render: (v) => <span className={`font-medium ${STATUS_COLORS[v] || 'text-zinc-400'}`}>{v}</span> },
-    { key: 'submitted_at', label: 'Submitted', render: (v) => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
     { key: 'filled_at', label: 'Filled', render: (v) => v ? <span className="text-zinc-500">{formatTimestamp(v)}</span> : '—' },
   ];
 
@@ -196,31 +222,57 @@ export default function Weather() {
         </span>
       </div>
 
-      {/* Key Metrics */}
-      <div data-testid="weather-stats-grid" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-        <StatCard testId="stat-weather-classified" label="Markets" value={health.markets_classified || health.classified_markets || 0} />
-        <StatCard testId="stat-weather-tradable" label="Tradable" value={signals.total_tradable} />
-        <StatCard testId="stat-weather-rejected" label="Rejected" value={signals.total_rejected} />
+      {/* Summary Cards - focused on live observability */}
+      <div data-testid="weather-stats-grid" className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+        <StatCard testId="stat-weather-open" label="Open Positions" value={weatherPositions.length}
+          sub={weatherSummary.unrealized_pnl != null ? `${formatPnl(weatherSummary.unrealized_pnl)} unrl` : undefined} />
+        <StatCard testId="stat-weather-tradable" label="Tradable Signals" value={signals.total_tradable} />
         <StatCard testId="stat-weather-executed" label="Executed" value={health.signals_executed || 0} />
         <StatCard testId="stat-weather-filled" label="Filled" value={health.signals_filled || 0} />
-        <StatCard testId="stat-weather-forecasts" label="Forecasts" value={health.forecasts_fetched || 0}
-          sub={health.forecasts_missing ? `${health.forecasts_missing} missing` : undefined} />
+        <StatCard testId="stat-weather-forecasts" label="Forecast Coverage" value={`${health.forecasts_fetched || 0}/${(health.forecasts_fetched || 0) + (health.forecasts_missing || 0)}`} />
         <StatCard testId="stat-weather-scan-ms" label="Scan Latency" value={`${health.last_scan_duration_ms || 0}ms`} />
+      </div>
+
+      {/* PnL Summary Bar */}
+      <div data-testid="weather-pnl-bar" className="flex items-center gap-6 px-4 py-2.5 bg-zinc-900/60 border border-zinc-800 rounded-lg text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Realized</span>
+          <span className={`font-mono font-medium ${(weatherSummary.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(weatherSummary.realized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Unrealized</span>
+          <span className={`font-mono font-medium ${(weatherSummary.unrealized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(weatherSummary.unrealized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Total</span>
+          <span className={`font-mono font-semibold ${(weatherSummary.total_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(weatherSummary.total_pnl || 0)}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-4 text-zinc-500">
+          <span>Trades: <span className="text-zinc-300 font-mono">{weatherSummary.trade_count || 0}</span></span>
+          <span>W/L: <span className="text-zinc-300 font-mono">{weatherSummary.wins || 0}/{weatherSummary.losses || 0}</span></span>
+          {weatherSummary.win_rate > 0 && <span>WR: <span className="text-zinc-300 font-mono">{weatherSummary.win_rate}%</span></span>}
+        </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-zinc-900 border border-zinc-800">
+          <TabsTrigger data-testid="tab-positions" value="positions" className="text-xs data-[state=active]:bg-zinc-800">
+            Open Positions ({weatherPositions.length})
+          </TabsTrigger>
           <TabsTrigger data-testid="tab-signals" value="signals" className="text-xs data-[state=active]:bg-zinc-800">
             Signals ({signals.total_tradable})
           </TabsTrigger>
-          <TabsTrigger data-testid="tab-alerts" value="alerts" className="text-xs data-[state=active]:bg-zinc-800">
-            Alerts ({alerts.length})
+          <TabsTrigger data-testid="tab-executions" value="executions" className="text-xs data-[state=active]:bg-zinc-800">
+            Executions ({allExecs.length})
           </TabsTrigger>
           <TabsTrigger data-testid="tab-rejected" value="rejected" className="text-xs data-[state=active]:bg-zinc-800">
             Rejected ({signals.total_rejected})
-          </TabsTrigger>
-          <TabsTrigger data-testid="tab-executions" value="executions" className="text-xs data-[state=active]:bg-zinc-800">
-            Executions ({allExecs.length})
           </TabsTrigger>
           <TabsTrigger data-testid="tab-forecasts" value="forecasts" className="text-xs data-[state=active]:bg-zinc-800">
             Forecasts ({forecastRows.length})
@@ -233,24 +285,20 @@ export default function Weather() {
           </TabsTrigger>
         </TabsList>
 
+        {/* Open Positions Tab (PRIMARY) */}
+        <TabsContent value="positions" className="mt-4">
+          <SectionCard title="Open Weather Positions" testId="section-weather-positions">
+            <DataTable columns={positionColumns} data={weatherPositions}
+              emptyMessage="No open weather positions — trades will appear here when the strategy executes"
+              testId="weather-positions-table" />
+          </SectionCard>
+        </TabsContent>
+
         {/* Signals Tab */}
         <TabsContent value="signals" className="mt-4">
           <SectionCard testId="section-weather-signals">
             <DataTable columns={signalColumns} data={signals.tradable || []}
               emptyMessage="No tradable weather signals — start engine & wait for weather markets" testId="weather-signals-table" />
-          </SectionCard>
-        </TabsContent>
-
-        {/* Alerts Tab */}
-        <TabsContent value="alerts" className="mt-4">
-          <WeatherAlertsSection alerts={alerts} stats={alertStats} />
-        </TabsContent>
-
-        {/* Rejected Tab */}
-        <TabsContent value="rejected" className="mt-4">
-          <SectionCard testId="section-weather-rejected">
-            <DataTable columns={rejectedColumns} data={signals.rejected || []}
-              emptyMessage="No rejected signals" testId="weather-rejected-table" />
           </SectionCard>
         </TabsContent>
 
@@ -262,77 +310,60 @@ export default function Weather() {
           </SectionCard>
         </TabsContent>
 
+        {/* Rejected Tab */}
+        <TabsContent value="rejected" className="mt-4">
+          <SectionCard testId="section-weather-rejected">
+            <DataTable columns={rejectedColumns} data={signals.rejected || []}
+              emptyMessage="No rejected signals" testId="weather-rejected-table" />
+          </SectionCard>
+        </TabsContent>
+
         {/* Forecasts Tab */}
         <TabsContent value="forecasts" className="mt-4">
           <SectionCard testId="section-weather-forecasts">
             <DataTable columns={forecastColumns} data={forecastRows}
-              emptyMessage="No forecasts cached — weather markets will trigger forecast fetches" testId="weather-forecasts-table" />
+              emptyMessage="No forecasts cached" testId="weather-forecasts-table" />
           </SectionCard>
         </TabsContent>
 
         {/* Calibration Tab */}
         <TabsContent value="calibration" className="mt-4">
           <div className="space-y-5">
-            {/* Shadow Mode Summary */}
             <ShadowSummarySection summary={shadowSummary} config={config} isShadow={isShadow} execMode={execMode} />
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {/* Calibration Health */}
               <CalibrationHealthSection health={calibrationHealth} />
-              {/* Historical Sigma Calibration */}
               <SigmaCalibrationSection
                 status={sigmaCalStatus}
                 calRunning={calRunning}
                 onRunCalibration={async () => {
                   setCalRunning(true);
-                  try {
-                    await axios.post(`${API_BASE}/strategies/weather/calibration/run`);
-                    await fetchCalibration();
-                  } catch {}
+                  try { await axios.post(`${API_BASE}/strategies/weather/calibration/run`); await fetchCalibration(); } catch {}
                   setCalRunning(false);
                 }}
                 onReload={async () => {
-                  try {
-                    await axios.post(`${API_BASE}/strategies/weather/calibration/reload`);
-                    fetchWeatherHealth();
-                  } catch {}
+                  try { await axios.post(`${API_BASE}/strategies/weather/calibration/reload`); fetchWeatherHealth(); } catch {}
                 }}
               />
             </div>
-
-            {/* Rolling Calibration */}
             <RollingCalibrationSection
               status={rollingCalStatus}
               running={rollingCalRunning}
               onRun={async () => {
                 setRollingCalRunning(true);
-                try {
-                  await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/run`);
-                  await fetchCalibration();
-                  fetchWeatherHealth();
-                } catch {}
+                try { await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/run`); await fetchCalibration(); fetchWeatherHealth(); } catch {}
                 setRollingCalRunning(false);
               }}
               onReload={async () => {
-                try {
-                  await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/reload`);
-                  fetchWeatherHealth();
-                } catch {}
+                try { await axios.post(`${API_BASE}/strategies/weather/calibration/rolling/reload`); fetchWeatherHealth(); } catch {}
               }}
             />
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              {/* Per-Station Accuracy */}
               <StationAccuracySection stations={stationSummary} />
-              {/* Per-Station Sigma Values */}
               <StationSigmaSection status={sigmaCalStatus} />
             </div>
-
-            {/* Accuracy Log */}
             <SectionCard title="Forecast Accuracy Log" testId="section-accuracy-log">
               <DataTable columns={accuracyColumns} data={accuracyHistory}
-                emptyMessage="No forecast accuracy records yet — data is collected as the strategy runs"
-                testId="accuracy-log-table" />
+                emptyMessage="No forecast accuracy records yet" testId="accuracy-log-table" />
             </SectionCard>
           </div>
         </TabsContent>
@@ -341,17 +372,14 @@ export default function Weather() {
         <TabsContent value="health" className="mt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             <CalibrationStatusCard calStatus={health.calibration_status || {}} />
-
             <SectionCard title="Scanner Metrics" testId="section-weather-metrics">
               <div className="space-y-2 text-xs">
                 {[
                   ['Total Scans', health.total_scans], ['Scan Duration', `${health.last_scan_duration_ms || 0}ms`],
                   ['Markets Classified', health.markets_classified || health.classified_markets],
                   ['Forecasts Fetched', health.forecasts_fetched], ['Forecasts Missing', health.forecasts_missing],
-                  ['Forecasts Stale', health.forecasts_stale], ['Opportunities Evaluated', health.opportunities_evaluated],
-                  ['Opportunities Rejected', health.opportunities_rejected], ['Signals Generated', health.signals_generated],
-                  ['Signals Executed', health.signals_executed], ['Signals Filled', health.signals_filled],
-                  ['Active Executions', health.active_executions], ['Completed', health.completed_executions],
+                  ['Signals Generated', health.signals_generated], ['Signals Executed', health.signals_executed],
+                  ['Signals Filled', health.signals_filled], ['Active Executions', health.active_executions],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -360,15 +388,12 @@ export default function Weather() {
                 ))}
               </div>
             </SectionCard>
-
             <SectionCard title="Feed Health" testId="section-weather-feed-health">
               <div className="space-y-2 text-xs">
                 {[
                   ['Open-Meteo Errors', feedHealth.open_meteo_errors],
-                  ['Open-Meteo Last Error', feedHealth.open_meteo_last_error ? truncate(String(feedHealth.open_meteo_last_error), 40) : null],
                   ['NWS Errors', feedHealth.nws_errors],
-                  ['NWS Last Error', feedHealth.nws_last_error ? truncate(String(feedHealth.nws_last_error), 40) : null],
-                  ['Forecast Cache', feedHealth.forecast_cache_size], ['Observation Cache', feedHealth.observation_cache_size],
+                  ['Forecast Cache', feedHealth.forecast_cache_size],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -377,39 +402,6 @@ export default function Weather() {
                 ))}
               </div>
             </SectionCard>
-
-            <SectionCard title="CLOB WebSocket" testId="section-clob-ws-health">
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Status</span>
-                  <span className={`font-mono font-medium ${clobHealth.connected ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {clobHealth.connected ? 'CONNECTED' : 'DISCONNECTED'}
-                  </span>
-                </div>
-                {[
-                  ['Subscribed Tokens', clobHealth.subscribed_tokens],
-                  ['Messages Received', clobHealth.messages_received],
-                  ['Price Updates', clobHealth.price_updates],
-                  ['Book Updates', clobHealth.book_updates],
-                  ['Trade Updates', clobHealth.trade_updates],
-                  ['Reconnects', clobHealth.reconnect_count],
-                  ['Uptime', clobHealth.uptime_seconds != null ? `${Math.floor(clobHealth.uptime_seconds / 60)}m ${Math.floor(clobHealth.uptime_seconds % 60)}s` : null],
-                  ['Last Message', clobHealth.last_message_seconds_ago != null ? `${clobHealth.last_message_seconds_ago.toFixed(0)}s ago` : null],
-                  ['Errors', clobHealth.errors],
-                ].map(([label, val]) => (
-                  <div key={label} className="flex justify-between">
-                    <span className="text-zinc-500">{label}</span>
-                    <span className={`font-mono ${label === 'Errors' && val > 0 ? 'text-red-400' : 'text-zinc-300'}`}>{val ?? '—'}</span>
-                  </div>
-                ))}
-                {clobHealth.last_error && (
-                  <div className="pt-2 border-t border-zinc-800">
-                    <span className="text-red-400 text-[10px]">{truncate(clobHealth.last_error, 60)}</span>
-                  </div>
-                )}
-              </div>
-            </SectionCard>
-
             <SectionCard title="Rejection Reasons" testId="section-weather-rejections">
               <div className="space-y-2 text-xs">
                 {Object.keys(rejReasons).length === 0 ? (
@@ -435,27 +427,13 @@ export default function Weather() {
                 )}
               </div>
             </SectionCard>
-
             <SectionCard title="Strategy Config" testId="section-weather-config">
               <div className="space-y-2 text-xs">
                 {[
-                  ['Scan Interval', `${config.scan_interval}s`], ['Forecast Refresh', `${config.forecast_refresh_interval}s`],
-                  ['Min Edge', `${config.min_edge_bps} bps`], ['Min Liquidity', `$${config.min_liquidity}`],
-                  ['Min Confidence', config.min_confidence], ['Max Sigma', `${config.max_sigma}F`],
-                  ['Min Lead', `${config.min_hours_to_resolution}h`], ['Max Lead', `${config.max_hours_to_resolution}h`],
-                  ['Default Size', config.default_size], ['Max Size', config.max_signal_size],
+                  ['Scan Interval', `${config.scan_interval}s`], ['Min Edge', `${config.min_edge_bps} bps`],
+                  ['Min Liquidity', `$${config.min_liquidity}`], ['Min Confidence', config.min_confidence],
+                  ['Max Sigma', `${config.max_sigma}F`], ['Default Size', config.default_size],
                   ['Kelly Scale', config.kelly_scale], ['Max Concurrent', config.max_concurrent_signals],
-                  ['Max Buckets/Market', config.max_buckets_per_market], ['Cooldown', `${config.cooldown_seconds}s`],
-                  ['Max Stale Market', `${config.max_stale_market_seconds}s`],
-                  ['Alerts Enabled', config.weather_alerts_enabled ? 'Yes' : 'No'],
-                  ['Alert Min Edge', `${config.min_weather_alert_edge_bps} bps`],
-                  ['Alert Min Price Move', `${config.min_weather_alert_price_move_bps} bps`],
-                  ['Alert Cooldown', `${config.weather_alert_cooldown_seconds}s`],
-                  ['Rolling Cal Enabled', config.rolling_calibration_enabled ? 'Yes' : 'No'],
-                  ['Rolling Min Samples', config.rolling_min_samples],
-                  ['Rolling Recalc Interval', `${config.rolling_recalc_interval_hours}h`],
-                  ['Rolling Recalc After', `${config.rolling_recalc_after_n_records} records`],
-                  ['Min Liquidity Score', config.min_liquidity_score],
                 ].map(([label, val]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-zinc-500">{label}</span>
@@ -464,7 +442,6 @@ export default function Weather() {
                 ))}
               </div>
             </SectionCard>
-
             <SectionCard title="Classified Markets" testId="section-weather-classified">
               <div className="space-y-2 text-xs">
                 {Object.keys(classifications).length === 0 ? (
@@ -487,119 +464,41 @@ export default function Weather() {
   );
 }
 
-// ---- Sub-Components for Calibration Tab ----
+// ---- Sub-Components (Calibration) ----
 
 function ShadowSummarySection({ summary, config, isShadow, execMode }) {
   const ss = summary || {};
   const ops = ss.operational_stats || {};
   return (
-    <SectionCard
-      title="Shadow-Mode Summary"
-      testId="section-shadow-summary"
-      action={
-        <Badge
-          data-testid="shadow-mode-badge"
-          variant="outline"
-          className={`text-[10px] ${isShadow ? 'border-amber-500/30 text-amber-400' : 'border-zinc-700 text-zinc-500'}`}
-        >
-          {isShadow ? 'SHADOW ACTIVE' : execMode?.toUpperCase() || 'PAPER'}
-        </Badge>
-      }
-    >
+    <SectionCard title="Shadow-Mode Summary" testId="section-shadow-summary"
+      action={<Badge data-testid="shadow-mode-badge" variant="outline" className={`text-[10px] ${isShadow ? 'border-amber-500/30 text-amber-400' : 'border-zinc-700 text-zinc-500'}`}>{isShadow ? 'SHADOW ACTIVE' : execMode?.toUpperCase() || 'PAPER'}</Badge>}>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
         <div className="space-y-2">
           <div className="text-zinc-500 font-medium mb-2">Shadow Config</div>
-          {[
-            ['Min Edge', `${ss.config_snapshot?.min_edge_bps ?? config.min_edge_bps ?? '—'} bps`],
-            ['Kelly Scale', ss.config_snapshot?.kelly_scale ?? config.kelly_scale ?? '—'],
-            ['Max Size', `$${ss.config_snapshot?.max_signal_size ?? config.max_signal_size ?? '—'}`],
-            ['Max Concurrent', ss.config_snapshot?.max_concurrent_signals ?? config.max_concurrent_signals ?? '—'],
-            ['Max Stale', `${ss.config_snapshot?.max_stale_market_seconds ?? config.max_stale_market_seconds ?? '—'}s`],
-            ['Cooldown', `${ss.config_snapshot?.cooldown_seconds ?? config.cooldown_seconds ?? '—'}s`],
-          ].map(([label, val]) => (
-            <div key={label} className="flex justify-between">
-              <span className="text-zinc-500">{label}</span>
-              <span className="text-zinc-300 font-mono">{val}</span>
-            </div>
+          {[['Min Edge', `${ss.config_snapshot?.min_edge_bps ?? config.min_edge_bps ?? '—'} bps`], ['Kelly Scale', ss.config_snapshot?.kelly_scale ?? config.kelly_scale ?? '—'], ['Max Size', `$${ss.config_snapshot?.max_signal_size ?? config.max_signal_size ?? '—'}`]].map(([l, v]) => (
+            <div key={l} className="flex justify-between"><span className="text-zinc-500">{l}</span><span className="text-zinc-300 font-mono">{v}</span></div>
           ))}
         </div>
         <div className="space-y-2">
           <div className="text-zinc-500 font-medium mb-2">Operational Stats</div>
-          {[
-            ['Total Scans', ops.total_scans],
-            ['Markets Classified', ops.markets_classified],
-            ['Forecasts Fetched', ops.forecasts_fetched],
-            ['Signals Generated', ops.signals_generated],
-            ['Signals Executed', ops.signals_executed],
-            ['Signals Filled', ops.signals_filled],
-          ].map(([label, val]) => (
-            <div key={label} className="flex justify-between">
-              <span className="text-zinc-500">{label}</span>
-              <span className="text-zinc-300 font-mono">{val ?? '—'}</span>
-            </div>
+          {[['Total Scans', ops.total_scans], ['Signals Generated', ops.signals_generated], ['Signals Filled', ops.signals_filled]].map(([l, v]) => (
+            <div key={l} className="flex justify-between"><span className="text-zinc-500">{l}</span><span className="text-zinc-300 font-mono">{v ?? '—'}</span></div>
           ))}
         </div>
       </div>
-      {!isShadow && (
-        <p className="text-zinc-600 text-xs mt-3 pt-3 border-t border-zinc-800">
-          Shadow mode is not active. Switch execution mode to "shadow" in Settings to enable shadow testing.
-        </p>
-      )}
     </SectionCard>
   );
 }
 
 function CalibrationHealthSection({ health }) {
   const cal = health || {};
-  const statusColors = {
-    no_data: 'text-zinc-500', collecting: 'text-amber-400',
-    partial: 'text-blue-400', ready: 'text-emerald-400',
-  };
-
   return (
     <SectionCard title="Calibration Health" testId="section-calibration-health">
       <div className="space-y-2 text-xs">
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Status</span>
-          <span className={`font-mono font-medium ${statusColors[cal.calibration_status] || 'text-zinc-500'}`}>
-            {cal.calibration_status?.toUpperCase() || 'NO DATA'}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Using Defaults</span>
-          <span className={`font-mono ${cal.using_defaults ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {cal.using_defaults !== undefined ? (cal.using_defaults ? 'Yes' : 'No') : '—'}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Total Records</span>
-          <span className="text-zinc-300 font-mono">{cal.total_records ?? 0}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Resolved</span>
-          <span className="text-zinc-300 font-mono">{cal.resolved_records ?? 0}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Pending</span>
-          <span className="text-zinc-300 font-mono">{cal.pending_resolution ?? 0}</span>
-        </div>
-        {cal.global_mae_f != null && (
-          <div className="flex justify-between">
-            <span className="text-zinc-500">Global MAE</span>
-            <span className={`font-mono ${cal.global_mae_f > 3 ? 'text-red-400' : cal.global_mae_f > 1.5 ? 'text-amber-400' : 'text-emerald-400'}`}>
-              {cal.global_mae_f}F
-            </span>
-          </div>
-        )}
-        {cal.global_bias_f != null && (
-          <div className="flex justify-between">
-            <span className="text-zinc-500">Global Bias</span>
-            <span className="text-zinc-300 font-mono">{cal.global_bias_f > 0 ? '+' : ''}{cal.global_bias_f}F</span>
-          </div>
-        )}
-        {cal.calibration_note && (
-          <p className="text-zinc-600 pt-2 border-t border-zinc-800">{cal.calibration_note}</p>
-        )}
+        {[['Status', cal.calibration_status?.toUpperCase() || 'NO DATA'], ['Total Records', cal.total_records ?? 0], ['Resolved', cal.resolved_records ?? 0], ['Pending', cal.pending_resolution ?? 0]].map(([l, v]) => (
+          <div key={l} className="flex justify-between"><span className="text-zinc-500">{l}</span><span className="text-zinc-300 font-mono">{v}</span></div>
+        ))}
+        {cal.global_mae_f != null && <div className="flex justify-between"><span className="text-zinc-500">Global MAE</span><span className={`font-mono ${cal.global_mae_f > 3 ? 'text-red-400' : 'text-emerald-400'}`}>{cal.global_mae_f}F</span></div>}
       </div>
     </SectionCard>
   );
@@ -607,42 +506,18 @@ function CalibrationHealthSection({ health }) {
 
 function StationAccuracySection({ stations }) {
   const entries = Object.values(stations || {});
-
   return (
     <SectionCard title="Per-Station Accuracy" testId="section-station-accuracy">
       <div className="space-y-3 text-xs">
-        {entries.length === 0 ? (
-          <p className="text-zinc-600">No resolved forecast data yet. Accuracy will populate as markets resolve.</p>
-        ) : (
-          entries.map((s) => (
-            <div key={s.station_id} className="space-y-1 pb-2 border-b border-zinc-800 last:border-0">
-              <div className="flex justify-between items-center">
-                <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] ${s.calibration_meaningful ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}
-                >
-                  {s.sample_count} samples
-                </Badge>
-              </div>
-              {s.mean_abs_error_f != null && (
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">MAE</span>
-                  <span className={`font-mono ${s.mean_abs_error_f > 3 ? 'text-red-400' : s.mean_abs_error_f > 1.5 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                    {s.mean_abs_error_f}F
-                  </span>
-                </div>
-              )}
-              {s.mean_bias_f != null && (
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Bias</span>
-                  <span className="text-zinc-300 font-mono">{s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f}F</span>
-                </div>
-              )}
-              <p className="text-zinc-600 text-[10px]">{s.calibration_note}</p>
+        {entries.length === 0 ? <p className="text-zinc-600">No resolved forecast data yet.</p> : entries.map((s) => (
+          <div key={s.station_id} className="space-y-1 pb-2 border-b border-zinc-800 last:border-0">
+            <div className="flex justify-between items-center">
+              <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
+              <Badge variant="outline" className={`text-[9px] ${s.calibration_meaningful ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}>{s.sample_count} samples</Badge>
             </div>
-          ))
-        )}
+            {s.mean_abs_error_f != null && <div className="flex justify-between"><span className="text-zinc-500">MAE</span><span className={`font-mono ${s.mean_abs_error_f > 3 ? 'text-red-400' : 'text-emerald-400'}`}>{s.mean_abs_error_f}F</span></div>}
+          </div>
+        ))}
       </div>
     </SectionCard>
   );
@@ -650,248 +525,43 @@ function StationAccuracySection({ stations }) {
 
 function SigmaCalibrationSection({ status, calRunning, onRunCalibration, onReload }) {
   const s = status || {};
-  const ready = s.total_stations_calibrated > 0;
-
   return (
-    <SectionCard
-      title="Sigma Calibration"
-      testId="section-sigma-calibration"
-      action={
-        <div className="flex gap-2">
-          <Button
-            data-testid="run-calibration-btn"
-            size="sm"
-            variant="outline"
-            onClick={onRunCalibration}
-            disabled={calRunning}
-            className="h-6 text-[10px] px-2.5 border-zinc-700"
-          >
-            {calRunning ? 'Running...' : 'Run Calibration'}
-          </Button>
-          {ready && (
-            <Button
-              data-testid="reload-calibration-btn"
-              size="sm"
-              variant="outline"
-              onClick={onReload}
-              className="h-6 text-[10px] px-2.5 border-zinc-700"
-            >
-              Reload
-            </Button>
-          )}
-        </div>
-      }
-    >
+    <SectionCard title="Sigma Calibration" testId="section-sigma-calibration"
+      action={<div className="flex gap-2"><Button data-testid="run-calibration-btn" size="sm" variant="outline" onClick={onRunCalibration} disabled={calRunning} className="h-6 text-[10px] px-2.5 border-zinc-700">{calRunning ? 'Running...' : 'Run Calibration'}</Button>{s.total_stations_calibrated > 0 && <Button data-testid="reload-calibration-btn" size="sm" variant="outline" onClick={onReload} className="h-6 text-[10px] px-2.5 border-zinc-700">Reload</Button>}</div>}>
       <div className="space-y-2 text-xs">
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Stations Calibrated</span>
-          <span className={`font-mono ${ready ? 'text-emerald-400' : 'text-zinc-500'}`}>
-            {s.total_stations_calibrated ?? 0} / {s.total_stations_registered ?? 8}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Last Run</span>
-          <span className="text-zinc-400 font-mono">{s.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Status</span>
-          <Badge
-            variant="outline"
-            className={`text-[9px] ${
-              s.last_status === 'completed' ? 'border-emerald-500/30 text-emerald-400'
-              : s.last_status === 'running' ? 'border-amber-500/30 text-amber-400'
-              : 'border-zinc-700 text-zinc-500'
-            }`}
-          >
-            {(s.last_status || 'NOT RUN').toUpperCase()}
-          </Badge>
-        </div>
-        {!ready && (
-          <p className="text-zinc-600 pt-2 border-t border-zinc-800">
-            Click "Run Calibration" to fetch 90 days of historical data from Open-Meteo and compute station-specific sigma values.
-          </p>
-        )}
+        <div className="flex justify-between"><span className="text-zinc-500">Stations Calibrated</span><span className="text-zinc-300 font-mono">{s.total_stations_calibrated ?? 0} / {s.total_stations_registered ?? 8}</span></div>
+        <div className="flex justify-between"><span className="text-zinc-500">Last Run</span><span className="text-zinc-400 font-mono">{s.last_run ? new Date(s.last_run).toLocaleString() : 'Never'}</span></div>
       </div>
     </SectionCard>
   );
 }
 
 function StationSigmaSection({ status }) {
-  const stations = status?.stations || {};
-  const entries = Object.values(stations);
-
-  const LEAD_LABELS = {
-    '0_24': '0-24h',
-    '24_48': '24-48h',
-    '48_72': '48-72h',
-    '72_120': '72-120h',
-    '120_168': '120-168h',
-  };
-
+  const entries = Object.values(status?.stations || {});
   return (
     <SectionCard title="Calibrated Sigma Values" testId="section-station-sigma">
       <div className="space-y-3 text-xs">
-        {entries.length === 0 ? (
-          <p className="text-zinc-600">No calibration data. Run calibration to compute station-specific sigma values from historical forecast accuracy.</p>
-        ) : (
-          entries.map((s) => (
-            <div key={s.station_id} className="space-y-1.5 pb-2 border-b border-zinc-800 last:border-0">
-              <div className="flex justify-between items-center">
-                <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-zinc-600 text-[10px]">{s.sample_count} samples</span>
-                  <Badge
-                    variant="outline"
-                    className={`text-[9px] ${s.ready ? 'border-emerald-500/30 text-emerald-400' : 'border-amber-500/30 text-amber-400'}`}
-                  >
-                    {s.ready ? 'READY' : 'LOW DATA'}
-                  </Badge>
-                </div>
-              </div>
-              <div className="grid grid-cols-5 gap-1 text-[10px]">
-                {['0_24', '24_48', '48_72', '72_120', '120_168'].map((bracket) => (
-                  <div key={bracket} className="text-center">
-                    <div className="text-zinc-600">{LEAD_LABELS[bracket]}</div>
-                    <div className="text-zinc-300 font-mono">
-                      {bracket === '0_24' && s.base_sigma_0_24 != null
-                        ? `${s.base_sigma_0_24.toFixed(2)}F`
-                        : bracket === '48_72' && s.base_sigma_48_72 != null
-                        ? `${s.base_sigma_48_72.toFixed(2)}F`
-                        : '—'}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {s.mean_bias_f != null && (
-                <div className="flex justify-between text-[10px]">
-                  <span className="text-zinc-600">Bias</span>
-                  <span className={`font-mono ${Math.abs(s.mean_bias_f) > 2 ? 'text-amber-400' : 'text-zinc-400'}`}>
-                    {s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f.toFixed(2)}F
-                  </span>
-                </div>
-              )}
-            </div>
-          ))
-        )}
+        {entries.length === 0 ? <p className="text-zinc-600">Run calibration to compute station-specific sigma values.</p> : entries.map((s) => (
+          <div key={s.station_id} className="flex justify-between items-center pb-1 border-b border-zinc-800 last:border-0">
+            <span className="text-cyan-400 font-mono">{s.station_id}</span>
+            <span className="text-zinc-500 text-[10px]">{s.sample_count} samples</span>
+            <Badge variant="outline" className={`text-[9px] ${s.ready ? 'border-emerald-500/30 text-emerald-400' : 'border-amber-500/30 text-amber-400'}`}>{s.ready ? 'READY' : 'LOW DATA'}</Badge>
+          </div>
+        ))}
       </div>
     </SectionCard>
   );
 }
 
-const ALERT_TYPE_STYLES = {
-  price_move: { label: 'PRICE MOVE', color: 'text-amber-400', border: 'border-amber-500/30' },
-  edge_change: { label: 'EDGE CHANGE', color: 'text-blue-400', border: 'border-blue-500/30' },
-  became_tradable: { label: 'NOW TRADABLE', color: 'text-emerald-400', border: 'border-emerald-500/30' },
-  no_longer_tradable: { label: 'NOT TRADABLE', color: 'text-red-400', border: 'border-red-500/30' },
-  spread_deviation: { label: 'SPREAD WARN', color: 'text-orange-400', border: 'border-orange-500/30' },
-};
-
-function WeatherAlertsSection({ alerts, stats }) {
-  return (
-    <div data-testid="weather-alerts-section" className="space-y-4">
-      {/* Stats bar */}
-      <div className="flex items-center gap-4 text-xs text-zinc-500">
-        <span>Generated: <span className="text-zinc-300 font-mono">{stats.total_generated || 0}</span></span>
-        <span>Debounced: <span className="text-zinc-400 font-mono">{stats.total_debounced || 0}</span></span>
-        <span>Telegram: <span className="text-zinc-400 font-mono">{stats.total_telegram_sent || 0}</span></span>
-        <span>Cooldowns: <span className="text-zinc-400 font-mono">{stats.active_cooldowns || 0}</span></span>
-        <Badge
-          data-testid="alerts-enabled-badge"
-          variant="outline"
-          className={`text-[9px] ml-auto ${stats.enabled ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}
-        >
-          {stats.enabled ? 'ENABLED' : 'DISABLED'}
-        </Badge>
-      </div>
-
-      {/* Alert feed */}
-      <SectionCard testId="section-weather-alerts-feed">
-        {alerts.length === 0 ? (
-          <p className="text-xs text-zinc-600 py-4 text-center">
-            No weather alerts yet — alerts trigger on significant price moves, edge changes, and tradability shifts
-          </p>
-        ) : (
-          <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
-            {alerts.map((a) => {
-              const style = ALERT_TYPE_STYLES[a.alert_type] || { label: a.alert_type, color: 'text-zinc-400', border: 'border-zinc-700' };
-              return (
-                <div
-                  key={a.id}
-                  data-testid={`alert-item-${a.id}`}
-                  className={`border ${style.border} bg-zinc-950/60 rounded-md px-3 py-2 text-xs`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className={`text-[9px] ${style.color} ${style.border}`}>
-                        {style.label}
-                      </Badge>
-                      <span className="text-cyan-400 font-mono font-medium">{a.station_id}</span>
-                      <span className="text-zinc-500">{a.target_date}</span>
-                      {a.bucket_label && <span className="text-zinc-400">{a.bucket_label}</span>}
-                    </div>
-                    <span className="text-zinc-600 text-[10px]">{formatTimeAgo(a.timestamp)}</span>
-                  </div>
-                  <div className="text-zinc-400">{a.detail}</div>
-                  {(a.model_prob > 0 || a.edge_bps !== 0) && (
-                    <div className="flex gap-4 mt-1 text-[10px] text-zinc-500">
-                      {a.model_prob > 0 && <span>Model: <span className="text-zinc-300 font-mono">{formatPrice(a.model_prob)}</span></span>}
-                      {a.market_price > 0 && <span>Mkt: <span className="text-zinc-300 font-mono">{formatPrice(a.market_price)}</span></span>}
-                      {a.edge_bps !== 0 && <span>Edge: <span className={`font-mono ${a.edge_bps > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatBps(a.edge_bps)}</span></span>}
-                      {a.confidence > 0 && <span>Conf: <span className="text-zinc-300 font-mono">{(a.confidence * 100).toFixed(0)}%</span></span>}
-                      {a.price_move_bps > 0 && <span>Move: <span className="text-amber-400 font-mono">{a.price_move_bps.toFixed(0)}bps</span></span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </SectionCard>
-    </div>
-  );
-}
-
-const SOURCE_STYLES = {
-  rolling_live: { label: 'ROLLING LIVE', color: 'text-emerald-400' },
-  historical_bootstrap: { label: 'HISTORICAL', color: 'text-amber-400' },
-  default_sigma_table: { label: 'DEFAULT', color: 'text-zinc-500' },
-};
-
 function CalibrationStatusCard({ calStatus }) {
   const source = calStatus.calibration_source || 'default_sigma_table';
-  const sourceSummary = calStatus.source_summary || {};
+  const SOURCE_STYLES = { rolling_live: { label: 'ROLLING LIVE', color: 'text-emerald-400' }, historical_bootstrap: { label: 'HISTORICAL', color: 'text-amber-400' }, default_sigma_table: { label: 'DEFAULT', color: 'text-zinc-500' } };
   const style = SOURCE_STYLES[source] || SOURCE_STYLES.default_sigma_table;
-
   return (
     <SectionCard title="Calibration Source" testId="section-weather-calibration">
-      <div className="space-y-3 text-xs">
-        <div className="flex justify-between items-center">
-          <span className="text-zinc-500">Active Source</span>
-          <Badge data-testid="calibration-source-badge" variant="outline" className={`text-[9px] ${style.color}`}>
-            {style.label}
-          </Badge>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-500">Calibrated Stations</span>
-          <span className="text-zinc-300 font-mono">{calStatus.calibrated_stations?.length || 0} / {calStatus.total_stations || 0}</span>
-        </div>
-        {Object.keys(sourceSummary).length > 0 && (
-          <div className="pt-2 border-t border-zinc-800 space-y-1">
-            <div className="text-zinc-600 mb-1">Source Breakdown</div>
-            {Object.entries(sourceSummary).map(([src, count]) => {
-              const s = SOURCE_STYLES[src] || SOURCE_STYLES.default_sigma_table;
-              return (
-                <div key={src} className="flex justify-between">
-                  <span className={s.color}>{s.label}</span>
-                  <span className="text-zinc-300 font-mono">{count} stations</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="pt-2 border-t border-zinc-800 text-zinc-600">
-          {calStatus.note || 'Using default NWS MOS sigma table'}
-        </div>
+      <div className="space-y-2 text-xs">
+        <div className="flex justify-between items-center"><span className="text-zinc-500">Active Source</span><Badge data-testid="calibration-source-badge" variant="outline" className={`text-[9px] ${style.color}`}>{style.label}</Badge></div>
+        <div className="flex justify-between"><span className="text-zinc-500">Calibrated</span><span className="text-zinc-300 font-mono">{calStatus.calibrated_stations?.length || 0} / {calStatus.total_stations || 0}</span></div>
       </div>
     </SectionCard>
   );
@@ -899,90 +569,29 @@ function CalibrationStatusCard({ calStatus }) {
 
 function RollingCalibrationSection({ status, running, onRun, onReload }) {
   if (!status) return null;
-  const stations = status.stations || {};
-  const stationList = Object.values(stations);
-
+  const stationList = Object.values(status.stations || {});
   return (
-    <SectionCard
-      title="Rolling Live Calibration"
-      testId="section-rolling-calibration"
-      action={
-        <div className="flex gap-2">
-          <Button
-            data-testid="run-rolling-calibration-btn"
-            size="sm" variant="outline"
-            disabled={running}
-            onClick={onRun}
-            className="h-6 text-[10px] px-3 border-zinc-700"
-          >
-            {running ? 'Running...' : 'Run Now'}
-          </Button>
-          <Button
-            data-testid="reload-rolling-calibration-btn"
-            size="sm" variant="outline"
-            onClick={onReload}
-            className="h-6 text-[10px] px-3 border-zinc-700"
-          >
-            Reload
-          </Button>
-        </div>
-      }
-    >
+    <SectionCard title="Rolling Live Calibration" testId="section-rolling-calibration"
+      action={<div className="flex gap-2"><Button data-testid="run-rolling-calibration-btn" size="sm" variant="outline" disabled={running} onClick={onRun} className="h-6 text-[10px] px-3 border-zinc-700">{running ? 'Running...' : 'Run Now'}</Button><Button data-testid="reload-rolling-calibration-btn" size="sm" variant="outline" onClick={onReload} className="h-6 text-[10px] px-3 border-zinc-700">Reload</Button></div>}>
       <div className="space-y-3 text-xs">
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-zinc-500">
           <span>Enabled: <span className={`font-mono ${status.enabled ? 'text-emerald-400' : 'text-zinc-500'}`}>{status.enabled ? 'YES' : 'NO'}</span></span>
-          <span>Resolved Records: <span className="text-zinc-300 font-mono">{status.total_resolved_records || 0}</span></span>
-          <span>Stations Calibrated: <span className="text-zinc-300 font-mono">{status.total_stations_calibrated || 0}</span></span>
-          <span>Min Samples: <span className="text-zinc-400 font-mono">{status.min_samples_required}</span></span>
-          <span>Needs Recalc: <span className={`font-mono ${status.needs_recalculation ? 'text-amber-400' : 'text-zinc-500'}`}>{status.needs_recalculation ? 'YES' : 'No'}</span></span>
+          <span>Resolved: <span className="text-zinc-300 font-mono">{status.total_resolved_records || 0}</span></span>
+          <span>Calibrated: <span className="text-zinc-300 font-mono">{status.total_stations_calibrated || 0}</span></span>
         </div>
-        {status.last_run && (
-          <div className="text-zinc-600">Last run: {formatTimeAgo(status.last_run)} ({status.last_status})</div>
-        )}
-
-        {stationList.length > 0 ? (
-          <div className="pt-2 border-t border-zinc-800 space-y-2">
-            {stationList.map((s) => (
-              <div key={s.station_id} className="border border-zinc-800 rounded-md px-3 py-2">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
-                  <div className="flex gap-3">
-                    <span className="text-zinc-500">Samples: <span className="text-zinc-300 font-mono">{s.sample_count}</span></span>
-                    <Badge
-                      variant="outline"
-                      className={`text-[9px] ${s.sufficient ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}
-                    >
-                      {s.sufficient ? 'SUFFICIENT' : 'SPARSE'}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-zinc-500">
-                  <span>Bias: <span className={`font-mono ${s.mean_bias_f > 0 ? 'text-red-400' : s.mean_bias_f < 0 ? 'text-blue-400' : 'text-zinc-400'}`}>{s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f?.toFixed(2)}F</span></span>
-                  <span>Sigma 0-24h: <span className="text-zinc-300 font-mono">{s.sigma_0_24?.toFixed(2)}F</span></span>
-                  <span>Sigma 48-72h: <span className="text-zinc-300 font-mono">{s.sigma_48_72?.toFixed(2)}F</span></span>
-                  {s.coverage_start && <span>Coverage: {s.coverage_start} to {s.coverage_end}</span>}
-                </div>
-                {s.bias_by_lead && Object.keys(s.bias_by_lead).length > 0 && (
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[10px] text-zinc-600">
-                    {Object.entries(s.bias_by_lead).map(([bracket, bias]) => (
-                      <span key={bracket}>
-                        {bracket}: <span className={`font-mono ${bias > 0.5 ? 'text-red-400' : bias < -0.5 ? 'text-blue-400' : 'text-zinc-400'}`}>{bias > 0 ? '+' : ''}{bias?.toFixed(2)}F</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+        {stationList.length > 0 ? stationList.map((s) => (
+          <div key={s.station_id} className="border border-zinc-800 rounded-md px-3 py-2">
+            <div className="flex items-center justify-between">
+              <span className="text-cyan-400 font-mono font-medium">{s.station_id}</span>
+              <Badge variant="outline" className={`text-[9px] ${s.sufficient ? 'border-emerald-500/30 text-emerald-400' : 'border-zinc-700 text-zinc-500'}`}>{s.sufficient ? 'SUFFICIENT' : 'SPARSE'}</Badge>
+            </div>
+            <div className="flex flex-wrap gap-x-4 text-[10px] text-zinc-500 mt-1">
+              <span>Bias: <span className="font-mono">{s.mean_bias_f > 0 ? '+' : ''}{s.mean_bias_f?.toFixed(2)}F</span></span>
+              <span>Samples: <span className="font-mono">{s.sample_count}</span></span>
+            </div>
           </div>
-        ) : (
-          <p className="text-zinc-600 pt-2 border-t border-zinc-800">
-            No rolling calibrations computed yet. Requires {status.min_samples_required} resolved forecast records per station.
-          </p>
-        )}
+        )) : <p className="text-zinc-600">No rolling calibrations computed yet.</p>}
       </div>
     </SectionCard>
   );
 }
-
-
-
