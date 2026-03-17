@@ -43,8 +43,7 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 
 ### Resolution Time Visibility (March 17)
 - Each weather position includes: resolves_at, target_date, time_to_resolution, opened_at, resolution_category
-- Filter by resolution: All / <6h / 6-24h / >24h
-- Sort: Resolves soonest / Held longest / Best P&L
+- Filter by resolution: All / <6h / 6-24h / >24h, Sort: Resolves soonest / Held longest / Best P&L
 
 ### Position Lifecycle Management (March 17)
 - **Lifecycle modes**: OFF, TAG_ONLY (default), SHADOW_EXIT, AUTO_EXIT
@@ -53,27 +52,33 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
   - Negative edge: current edge <= -100 bps
   - Edge decay: >= 60% decay from entry edge
   - Time inefficiency: held >= 18h with < 300 bps edge
-- **Asymmetric positions NEVER evaluated for exit** (always hold to resolution)
-- **Backend**: `_evaluate_position_lifecycle()` runs every scan, computes profit_multiple, current_edge, edge_decay for all weather positions
-- **API endpoints**:
-  - GET /api/positions/weather/exit-candidates — filtered exit candidates + config
-  - GET /api/positions/weather/lifecycle — full lifecycle evaluations + metrics
-  - GET /api/positions/by-strategy enriched with lifecycle object per weather position
-- **Frontend**: LIFECYCLE TAG ONLY badge, Mult/Edge Now/Decay/Status columns, Exit filter, Best Multiple sort, EXIT badge with reason
+- **Asymmetric positions NEVER evaluated for exit**
+- Backend: `_evaluate_position_lifecycle()` runs every scan
+- API: `/api/positions/weather/exit-candidates`, `/api/positions/weather/lifecycle`
+- Frontend: Lifecycle badge, Mult/Edge/Decay/Status columns, Exit filter, Best Multiple sort
+
+### Lifecycle Dashboard Tab (March 17)
+- **Summary Cards**: Total candidates, avg profit multiple, avg current edge, avg edge decay
+- **Exit Reason Distribution**: Visual bars for all 5 exit reasons with counts and avg metrics
+- **Resolution Time Breakdown**: <6h / 6-24h / >24h / unknown with position counts, exit rates, avg multiples
+- **Price Multiple Distribution**: Histogram across 6 ranges (<0.5x to >2.0x)
+- **Shadow Exit Timeline**: Table for simulated exit records (active in SHADOW_EXIT mode)
+- **Would Have Sold vs Held**: Per-position comparison of simulated exit PnL vs held PnL with delta and verdict
+- **Aggregate by Exit Reason**: Per-reason Sim Exit / Held / Delta comparison cards
+- Backend: `/api/positions/weather/lifecycle/dashboard` endpoint with `get_lifecycle_dashboard()` method
+- First-flagged snapshot tracking (`_exit_candidate_snapshots`) for persistent comparison
 
 ## Key Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
-| /api/analytics/summary | GET | Portfolio PnL |
-| /api/analytics/weather-by-type | GET | PnL by market type |
 | /api/positions/by-strategy | GET | Enriched positions with lifecycle |
 | /api/positions/weather/exit-candidates | GET | Exit candidates + config |
 | /api/positions/weather/lifecycle | GET | Full lifecycle evaluations |
-| /api/strategies/weather/health | GET | Health + sigma_pipeline + lifecycle |
+| /api/positions/weather/lifecycle/dashboard | GET | Dashboard for threshold validation |
+| /api/strategies/weather/health | GET | Health + lifecycle status |
 | /api/strategies/weather/calibration/metrics | GET | Brier, coverage, curves |
 | /api/strategies/weather/calibration/auto-tune | GET | Auto-tune recommendation |
-| /api/strategies/weather/calibration/auto-tune/apply | POST | Apply one step |
-| /api/strategies/weather-asymmetric/summary | GET | Asymmetric positions + PnL |
+| /api/analytics/weather-by-type | GET | PnL by market type |
 
 ## Prioritized Backlog
 ### P0: Validate lifecycle decisions in paper mode (observe exit candidates, tune thresholds)
