@@ -1,0 +1,150 @@
+{
+  "summary": "Iteration 51: Verified resolution time visibility for weather positions. All 14 backend API tests pass (100%). Frontend UI verified: Weather positions table shows all required columns (Market, City, Bucket, Entry, Mark, Size, P&L, Resolves, Time Left, Held), filter buttons (All/6h/6-24h/>24h) and sort buttons (Resolves soonest/Held longest/Best P&L) work correctly. 54 open weather positions: 15 near (<6h), 39 long (>24h).",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/positions/by-strategy returns 200 - PASS",
+      "Weather positions have all 6 resolution fields (resolves_at, target_date, time_to_resolution_seconds, time_open_seconds, opened_at, resolution_category) - PASS",
+      "resolves_at is valid ISO timestamp ending in Z for all 54 positions - PASS",
+      "resolution_category values are valid (near: 15, medium: 0, long: 39) - PASS",
+      "opened_at is valid timestamp from earliest buy trade - PASS",
+      "time_open_seconds > 0 for all positions - PASS",
+      "time_to_resolution_seconds consistent with resolution_category (near=<6h, medium=6-24h, long=>24h) - PASS",
+      "Weather object has parsed data (station_id, target_date, bucket_label, resolves_at_utc) - PASS",
+      "target_date is in YYYY-MM-DD format - PASS",
+      "GET /api/analytics/summary returns 200 - PASS",
+      "Analytics summary has realized_pnl field - PASS",
+      "realized_pnl > 0 ($142.70) - PASS",
+      "Weather position count = 54 - PASS",
+      "Response includes summaries section with weather stats - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with Open Positions tab showing 54 positions - PASS",
+      "Table has all required columns: Market, City, Bucket, Entry, Mark, Size, P&L, Resolves, Time Left, Held - PASS",
+      "Filter buttons present: All, <6h, 6-24h, >24h (with data-testid) - PASS",
+      "Sort buttons present: Resolves soonest, Held longest, Best P&L (with data-testid) - PASS",
+      "Time Left column shows human-readable format (e.g. '4h 6m') - PASS",
+      "Resolves column shows formatted date (e.g. 'Mar 17, 23:59 UTC') - PASS",
+      "Held column shows time held (e.g. '46h 37m') - PASS",
+      "<6h filter correctly filters to 15 near-resolution positions - PASS",
+      ">24h filter correctly filters to 39 long-resolution positions - PASS",
+      "Held longest sort reorders positions by time_open_seconds descending - PASS",
+      "Best P&L sort reorders positions by unrealized_pnl descending - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "resolution_time_fields": {
+      "status": "PASS",
+      "details": [
+        "resolves_at: Valid ISO timestamp ending in Z (e.g., '2026-03-17T23:59:00Z')",
+        "target_date: Parsed from question text in YYYY-MM-DD format",
+        "time_to_resolution_seconds: Seconds until resolution (e.g., 14895 for 4h)",
+        "time_open_seconds: Seconds since opened_at (e.g., 167729 for ~46h)",
+        "opened_at: Timestamp from earliest buy trade for token_id",
+        "resolution_category: 'near' (<6h), 'medium' (6-24h), 'long' (>24h)"
+      ]
+    },
+    "date_parser": {
+      "status": "PASS",
+      "details": [
+        "Parses 'on March 17' without year - assumes current year 2026",
+        "Parses 'on March 17, 2026' with year",
+        "Sets resolution time to 23:59:00Z on target date",
+        "All 54 positions have valid parsed dates"
+      ]
+    },
+    "filter_controls": {
+      "status": "PASS",
+      "details": [
+        "All: Shows all 54 positions",
+        "<6h (near): Shows 15 positions resolving within 6 hours",
+        "6-24h (medium): Shows 0 positions (none in this range currently)",
+        ">24h (long): Shows 39 positions resolving after 24 hours"
+      ]
+    },
+    "sort_controls": {
+      "status": "PASS",
+      "details": [
+        "Resolves soonest: Sorts by time_to_resolution_seconds ascending (default)",
+        "Held longest: Sorts by time_open_seconds descending",
+        "Best P&L: Sorts by unrealized_pnl descending"
+      ]
+    },
+    "time_display_formats": {
+      "status": "PASS",
+      "details": [
+        "Time Left: Shows '4h 6m' format for near-resolution",
+        "Time Left: Shows '28h 6m' format for long-resolution",
+        "Resolves: Shows 'Mar 17, 23:59 UTC' format",
+        "Held: Shows '46h 37m' format for time held"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "sample_weather_position": {
+      "token_id": "24021860934983882105518886982898873304929620544394781349875683161590396815368",
+      "market_question": "Will the highest temperature in New York City be 50°F or higher on March 17?",
+      "resolves_at": "2026-03-17T23:59:00Z",
+      "target_date": "2026-03-17",
+      "time_to_resolution_seconds": 14895,
+      "time_open_seconds": 167729,
+      "opened_at": "2026-03-15T21:15:16.563687+00:00",
+      "resolution_category": "near",
+      "weather": {
+        "station_id": "New York City",
+        "bucket_label": "50°F or higher",
+        "target_date": "2026-03-17",
+        "resolves_at_utc": "2026-03-17T23:59:00Z"
+      }
+    },
+    "position_counts": {
+      "total_weather": 54,
+      "near_category": 15,
+      "medium_category": 0,
+      "long_category": 39
+    },
+    "analytics_summary": {
+      "realized_pnl": 142.70
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration51_resolution_time.py",
+    "/app/test_reports/pytest/pytest_results_iteration51.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration51_resolution_time.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (All 11 UI features verified)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 open weather positions)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 51 verified resolution time visibility for all weather positions. Key findings: (1) All 54 weather positions now include resolves_at (ISO timestamp ending in Z), target_date, time_to_resolution_seconds, time_open_seconds, opened_at, and resolution_category fields. (2) resolution_category breakdown: 15 near (<6h), 0 medium (6-24h), 39 long (>24h). (3) Date parser handles both 'on March 17' (no year, assumes 2026) and 'on March 17, 2026' formats. (4) opened_at is derived from earliest buy trade timestamp for each token_id. (5) Frontend shows all new columns: Resolves (formatted date), Time Left (human-readable), Held (time since opened). (6) Filter buttons (All/<6h/6-24h/>24h) filter by resolution_category. (7) Sort buttons (Resolves soonest/Held longest/Best P&L) reorder positions. (8) All existing features continue to work: analytics summary shows $142.70 realized PnL."
+}

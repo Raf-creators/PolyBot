@@ -128,9 +128,43 @@ export default function Weather() {
     });
   }, [forecasts, classifications]);
 
+  // ---- Time helpers ----
+  const formatTimeLeft = (seconds) => {
+    if (seconds == null) return '—';
+    if (seconds <= 0) return 'Resolved';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h >= 48) return `${Math.floor(h / 24)}d ${h % 24}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+  const formatTimeHeld = (seconds) => {
+    if (seconds == null) return '—';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h >= 48) return `${Math.floor(h / 24)}d ${h % 24}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+  const formatResolvesAt = (isoStr) => {
+    if (!isoStr) return '—';
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+        ', ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
+    } catch { return '—'; }
+  };
+
+  const resCatColors = { near: 'text-red-400', medium: 'text-amber-400', long: 'text-zinc-400', resolved: 'text-emerald-400' };
+  const resCatLabels = { near: '<6h', medium: '6-24h', long: '>24h' };
+
+  // ---- Resolution filter ----
+  const [resFilter, setResFilter] = useState('all'); // all | near | medium | long
+  const [posSort, setPosSort] = useState('time_left_asc'); // time_left_asc | time_held_desc | pnl_desc
+
   // ---- Open Positions Columns ----
   const positionColumns = [
-    { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[200px] truncate block">{truncate(v, 50)}</span> },
+    { key: 'market_question', label: 'Market', render: (v) => <span className="text-zinc-200 max-w-[180px] truncate block">{truncate(v, 45)}</span> },
     { key: 'weather_city', label: 'City', render: (_, row) => {
       const w = row.weather;
       return w ? <span className="text-cyan-400 font-mono">{w.station_id}</span> : <span className="text-zinc-600">—</span>;
@@ -142,20 +176,59 @@ export default function Weather() {
     { key: 'avg_cost', label: 'Entry', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
     { key: 'current_price', label: 'Mark', align: 'right', render: (v) => <span className="font-mono text-zinc-200">{formatPrice(v)}</span> },
     { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{formatNumber(v, 2)}</span> },
-    { key: 'unrealized_pnl', label: 'Unrl P&L', align: 'right', sortable: true, render: (v) => (
+    { key: 'unrealized_pnl', label: 'P&L', align: 'right', sortable: true, render: (v) => (
       <span className={`font-mono font-medium ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{formatPnl(v)}</span>
     )},
-    { key: 'unrealized_pnl_pct', label: '%', align: 'right', render: (v) => (
-      <span className={`font-mono text-xs ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{v != null ? `${v > 0 ? '+' : ''}${v.toFixed(1)}%` : '—'}</span>
+    { key: 'resolves_at', label: 'Resolves', align: 'right', render: (v) => (
+      <span className="text-zinc-300 text-[10px] font-mono">{formatResolvesAt(v)}</span>
     )},
-    { key: 'weather_edge', label: 'Edge@Entry', align: 'right', render: (_, row) => {
-      const e = row.weather?.edge_at_entry;
-      return e != null ? <span className="font-mono text-amber-400">{formatBps(e)}</span> : <span className="text-zinc-600">—</span>;
+    { key: 'time_to_resolution_seconds', label: 'Time Left', align: 'right', sortable: true, render: (v, row) => {
+      const cat = row?.resolution_category;
+      return (
+        <span className={`font-mono font-medium ${resCatColors[cat] || 'text-zinc-500'}`}>
+          {formatTimeLeft(v)}
+        </span>
+      );
     }},
-    { key: 'hours_to_resolution', label: 'Resolves', align: 'right', render: (v) => (
-      <span className={`font-mono ${v != null && v < 12 ? 'text-amber-400' : 'text-zinc-400'}`}>{v != null ? `${v.toFixed(0)}h` : '—'}</span>
+    { key: 'time_open_seconds', label: 'Held', align: 'right', render: (v) => (
+      <span className="text-zinc-400 font-mono">{formatTimeHeld(v)}</span>
     )},
+    { key: 'resolution_category', label: '', render: (v) => {
+      if (!v || v === 'resolved') return null;
+      const colors = { near: 'border-red-500/30 text-red-400', medium: 'border-amber-500/30 text-amber-400', long: 'border-zinc-700 text-zinc-500' };
+      return <Badge variant="outline" className={`text-[8px] ${colors[v] || ''}`}>{resCatLabels[v] || v}</Badge>;
+    }},
   ];
+
+  // ---- Filtered & sorted positions ----
+  const filteredPositions = useMemo(() => {
+    let positions = [...weatherPositions];
+
+    // Filter by resolution category
+    if (resFilter !== 'all') {
+      positions = positions.filter(p => p.resolution_category === resFilter);
+    }
+
+    // Sort
+    positions.sort((a, b) => {
+      if (posSort === 'time_left_asc') {
+        const aT = a.time_to_resolution_seconds ?? Infinity;
+        const bT = b.time_to_resolution_seconds ?? Infinity;
+        return aT - bT;
+      }
+      if (posSort === 'time_held_desc') {
+        const aT = a.time_open_seconds ?? 0;
+        const bT = b.time_open_seconds ?? 0;
+        return bT - aT;
+      }
+      if (posSort === 'pnl_desc') {
+        return (b.unrealized_pnl ?? 0) - (a.unrealized_pnl ?? 0);
+      }
+      return 0;
+    });
+
+    return positions;
+  }, [weatherPositions, resFilter, posSort]);
 
   // ---- Signal Columns ----
   const TYPE_BADGE_COLORS = { temperature: 'text-amber-400', precipitation: 'text-blue-400', snowfall: 'text-cyan-300', wind: 'text-teal-400' };
@@ -323,9 +396,55 @@ export default function Weather() {
         {/* Open Positions Tab (PRIMARY) */}
         <TabsContent value="positions" className="mt-4 space-y-5">
           <SectionCard title="Open Weather Positions" testId="section-weather-positions">
-            <DataTable columns={positionColumns} data={weatherPositions}
-              emptyMessage="No open weather positions — trades will appear here when the strategy executes"
+            {/* Filter & Sort Controls */}
+            <div data-testid="position-controls" className="flex items-center gap-3 mb-3 flex-wrap">
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-zinc-500">Resolution:</span>
+                {['all', 'near', 'medium', 'long'].map(f => (
+                  <button key={f} data-testid={`filter-${f}`}
+                    onClick={() => setResFilter(f)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                      resFilter === f
+                        ? 'bg-zinc-700 text-zinc-100'
+                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                    }`}>
+                    {f === 'all' ? 'All' : f === 'near' ? '<6h' : f === 'medium' ? '6–24h' : '>24h'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-zinc-500">Sort:</span>
+                {[
+                  { key: 'time_left_asc', label: 'Resolves soonest' },
+                  { key: 'time_held_desc', label: 'Held longest' },
+                  { key: 'pnl_desc', label: 'Best P&L' },
+                ].map(s => (
+                  <button key={s.key} data-testid={`sort-${s.key}`}
+                    onClick={() => setPosSort(s.key)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${
+                      posSort === s.key
+                        ? 'bg-zinc-700 text-zinc-100'
+                        : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                    }`}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <DataTable columns={positionColumns} data={filteredPositions}
+              emptyMessage={resFilter !== 'all'
+                ? `No ${resFilter === 'near' ? '<6h' : resFilter === 'medium' ? '6–24h' : '>24h'} positions`
+                : "No open weather positions — trades will appear here when the strategy executes"}
               testId="weather-positions-table" />
+            {/* Summary below table */}
+            {weatherPositions.length > 0 && (
+              <div className="flex gap-4 text-[10px] text-zinc-600 mt-2 pt-2 border-t border-zinc-800/50">
+                <span>{weatherPositions.filter(p => p.resolution_category === 'near').length} near ({'<'}6h)</span>
+                <span>{weatherPositions.filter(p => p.resolution_category === 'medium').length} medium (6-24h)</span>
+                <span>{weatherPositions.filter(p => p.resolution_category === 'long').length} long ({'>'}24h)</span>
+                <span>{weatherPositions.filter(p => !p.resolution_category).length} unknown</span>
+              </div>
+            )}
           </SectionCard>
           {posBreakdown && <PositionBreakdownSection data={posBreakdown} />}
         </TabsContent>

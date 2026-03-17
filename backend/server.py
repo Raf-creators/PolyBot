@@ -1018,6 +1018,10 @@ _WEATHER_Q_RE = _re.compile(
     r"(?:highest|lowest)\s+temperature\s+in\s+(?P<city>[A-Za-z\s.'-]+?)\s+(?:be\s+)?(?P<bucket>\d+.*?)(?:\s+on|\s*\?)",
     _re.IGNORECASE,
 )
+_WEATHER_DATE_RE = _re.compile(
+    r"on\s+(?P<date>(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,?\s*\d{4})?)",
+    _re.IGNORECASE,
+)
 _SNIPER_Q_RE = _re.compile(
     r"(?P<asset>Bitcoin|Ethereum|BTC|ETH)\s+(?P<direction>Up|Down)",
     _re.IGNORECASE,
@@ -1025,18 +1029,45 @@ _SNIPER_Q_RE = _re.compile(
 
 
 def _parse_weather_from_question(q: str) -> dict:
+    result = {}
     m = _WEATHER_Q_RE.search(q or "")
     if m:
         city = m.group("city").strip()
         city = _re.sub(r'\s+(be|be between|will)$', '', city, flags=_re.IGNORECASE).strip()
-        return {"station_id": city, "bucket_label": m.group("bucket").strip()}
-    # Simpler fallback: try to extract city from "temperature in <City>"
-    simple = _re.search(r"temperature\s+in\s+([A-Za-z\s.'-]+?)(?:\s+be|\s+will|\s*\?)", q or "", _re.IGNORECASE)
-    if simple:
-        city = simple.group(1).strip()
-        city = _re.sub(r'\s+(be|be between|will)$', '', city, flags=_re.IGNORECASE).strip()
-        return {"station_id": city, "bucket_label": ""}
-    return {}
+        result = {"station_id": city, "bucket_label": m.group("bucket").strip()}
+    else:
+        simple = _re.search(r"temperature\s+in\s+([A-Za-z\s.'-]+?)(?:\s+be|\s+will|\s*\?)", q or "", _re.IGNORECASE)
+        if simple:
+            city = simple.group(1).strip()
+            city = _re.sub(r'\s+(be|be between|will)$', '', city, flags=_re.IGNORECASE).strip()
+            result = {"station_id": city, "bucket_label": ""}
+
+    # Extract target date (resolution date)
+    dm = _WEATHER_DATE_RE.search(q or "")
+    if dm:
+        raw_date = dm.group("date").strip()
+        from datetime import datetime as _dt
+        parsed_date = None
+        # Try with year
+        for fmt in ("%B %d, %Y", "%B %d %Y"):
+            try:
+                parsed_date = _dt.strptime(raw_date, fmt)
+                break
+            except ValueError:
+                pass
+        # Try without year — assume current year
+        if not parsed_date:
+            for fmt in ("%B %d",):
+                try:
+                    parsed_date = _dt.strptime(raw_date, fmt)
+                    parsed_date = parsed_date.replace(year=_dt.now().year)
+                    break
+                except ValueError:
+                    pass
+        if parsed_date:
+            result["target_date"] = parsed_date.strftime("%Y-%m-%d")
+            result["resolves_at_utc"] = parsed_date.strftime("%Y-%m-%dT23:59:00Z")
+    return result
 
 
 def _parse_sniper_from_question(q: str) -> dict:
@@ -1132,6 +1163,12 @@ async def get_positions_by_strategy():
     by_strategy = {"weather": [], "crypto": [], "arb": [], "other": []}
     total_unrealized = 0.0
 
+    # Build opened_at map: token_id -> earliest buy trade timestamp
+    _opened_at_map = {}
+    for t in state.trades:
+        if t.side.value == "buy" and t.token_id not in _opened_at_map:
+            _opened_at_map[t.token_id] = t.timestamp
+
     for pos in state.positions.values():
         bucket = classify_strategy(pos)
         d = pos.model_dump()
@@ -1142,7 +1179,6 @@ async def get_positions_by_strategy():
             d["end_date"] = market.end_date
             d["condition_id"] = market.condition_id
             d["current_price"] = market.mid_price or pos.current_price
-            # Recompute unrealized PnL from current mid_price
             if market.mid_price and pos.avg_cost > 0:
                 d["unrealized_pnl"] = round((market.mid_price - pos.avg_cost) * pos.size, 4)
             if market.end_date:
@@ -1172,13 +1208,55 @@ async def get_positions_by_strategy():
         d["strategy_bucket"] = bucket
         total_unrealized += d.get("unrealized_pnl", pos.unrealized_pnl)
 
+        # --- Resolution time enrichment ---
+        opened_at_str = _opened_at_map.get(pos.token_id)
+        d["opened_at"] = opened_at_str
+        if opened_at_str:
+            try:
+                opened_dt = datetime.fromisoformat(opened_at_str.replace("Z", "+00:00"))
+                d["time_open_seconds"] = round((now - opened_dt).total_seconds(), 0)
+            except (ValueError, TypeError):
+                d["time_open_seconds"] = None
+        else:
+            d["time_open_seconds"] = None
+
         # Strategy-specific enrichment
         if bucket == "weather":
             if pos.token_id in weather_exec_map:
                 d["weather"] = weather_exec_map[pos.token_id]
             else:
-                # Fallback: parse city/bucket from market_question
                 d["weather"] = _parse_weather_from_question(d.get("market_question", ""))
+
+            # Derive resolution time from weather target_date or parsed question
+            resolves_at = d.get("weather", {}).get("resolves_at_utc")
+            target_date = d.get("weather", {}).get("target_date")
+            if not resolves_at and target_date:
+                resolves_at = f"{target_date}T23:59:00Z"
+
+            d["resolves_at"] = resolves_at
+            d["target_date"] = target_date
+            if resolves_at:
+                try:
+                    res_dt = datetime.fromisoformat(resolves_at.replace("Z", "+00:00"))
+                    ttr = (res_dt - now).total_seconds()
+                    d["time_to_resolution_seconds"] = round(ttr, 0)
+                    d["hours_to_resolution"] = round(ttr / 3600, 1) if ttr > 0 else 0
+                    # Category
+                    if ttr <= 0:
+                        d["resolution_category"] = "resolved"
+                    elif ttr <= 6 * 3600:
+                        d["resolution_category"] = "near"
+                    elif ttr <= 24 * 3600:
+                        d["resolution_category"] = "medium"
+                    else:
+                        d["resolution_category"] = "long"
+                except (ValueError, TypeError):
+                    d["time_to_resolution_seconds"] = None
+                    d["resolution_category"] = None
+            else:
+                d["time_to_resolution_seconds"] = d.get("time_to_expiry_seconds")
+                d["resolution_category"] = None
+
         elif bucket == "crypto":
             if pos.token_id in sniper_exec_map:
                 d["sniper"] = sniper_exec_map[pos.token_id]
