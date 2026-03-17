@@ -1319,6 +1319,18 @@ class WeatherTrader(BaseStrategy):
                     else "narrowed_temporary" if self.config.sigma_overconfidence_multiplier < 1.0
                     else "neutral"
                 ),
+                "auto_tune": {
+                    "enabled": self.config.auto_tune_enabled,
+                    "step_size": self.config.auto_tune_step_size,
+                    "min_multiplier": self.config.auto_tune_min_multiplier,
+                    "max_multiplier": self.config.auto_tune_max_multiplier,
+                    "target_coverage": self.config.auto_tune_target_coverage,
+                    "min_samples": self.config.auto_tune_min_samples,
+                    "mode": (
+                        "auto" if self.config.auto_tune_enabled
+                        else "manual"
+                    ),
+                },
             },
             "feed_health": self._feed.health,
             "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},

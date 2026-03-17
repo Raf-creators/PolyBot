@@ -1,0 +1,169 @@
+{
+  "summary": "Iteration 50: Verified auto-tune framework for sigma overconfidence multiplier. All 14 backend API tests pass, all frontend UI features verified. Auto-tune is correctly disabled by default, shows MANUAL mode, current multiplier 1.25x, waiting for 30 resolved samples (5 collected). POST apply endpoint correctly returns 400 when disabled.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/strategies/weather/calibration/auto-tune returns 200 - PASS",
+      "Auto-tune response has required fields: status, current_multiplier, recommended_multiplier, management_mode, auto_tune_enabled, mode_label, coverage_1sigma, total_valid, min_samples_required - PASS",
+      "Auto-tune status is 'insufficient_data' with 5 samples (needs 30) - PASS",
+      "Management mode is 'manual' when auto_tune_enabled=false - PASS",
+      "Current multiplier is 1.25 - PASS",
+      "Mode label describes manual mode: 'Manual — operator controls the multiplier' - PASS",
+      "POST /api/strategies/weather/calibration/auto-tune/apply returns 400 when disabled - PASS",
+      "GET /api/strategies/weather/health has sigma_pipeline.auto_tune section - PASS",
+      "Auto_tune config fields verified: enabled=false, step_size=0.05, min_multiplier=1.0, max_multiplier=1.5, target_coverage=0.6827, min_samples=30, mode=manual - PASS",
+      "GET /api/config/strategies weather_trader has all auto-tune config fields - PASS",
+      "GET /api/analytics/summary shows realized PnL > 0 ($142.70) - PASS",
+      "GET /api/strategies/weather/calibration/metrics returns valid brier_score and coverage - PASS",
+      "Full auto-tune response structure matches expected types - PASS",
+      "Coverage 1σ is present when valid samples available (40.0%) - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with 54 open positions - PASS",
+      "All 9 tabs visible: Open Positions, Signals, Executions, Rejected, Forecasts, Calibration, Asymmetric, By Type, Health - PASS",
+      "Calibration tab shows 'Sigma Pipeline & Auto-Tune' section heading - PASS",
+      "Current Multiplier shows '1.25x' with ACTIVE badge - PASS",
+      "Management shows 'MANUAL' badge with 'Operator sets multiplier directly' text - PASS",
+      "Auto-Tune Recommendation shows 'Waiting for 30 resolved samples (5 collected)' - PASS",
+      "Samples shows '5/30' with 'Blending (5/30)' status - PASS",
+      "Auto-Tune badge shows 'DISABLED' - PASS",
+      "Brier Score 1.064 displayed correctly - PASS",
+      "1σ Coverage 40.0% (Target: 68.3%) displayed - PASS",
+      "2σ Coverage 80.0% displayed - PASS",
+      "Calibration Error 0.283 displayed - PASS",
+      "Over-confident 60%, Under-confident 20% metrics displayed - PASS",
+      "Asymmetric tab shows ENABLED config: Max Price 25¢, Min Model Prob 40%, Min Edge 15% - PASS",
+      "By Type tab shows all 4 types: TEMPERATURE (778/0 Buys/Closes), PRECIPITATION, SNOWFALL, WIND - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "auto_tune_status_endpoint": {
+      "status": "PASS",
+      "details": [
+        "GET /api/strategies/weather/calibration/auto-tune returns complete recommendation data",
+        "status='insufficient_data' with 5 samples (needs 30 minimum)",
+        "management_mode='manual' when auto_tune_enabled=false",
+        "mode_label='Manual — operator controls the multiplier' for UI display",
+        "current_multiplier=1.25, recommended_multiplier=1.25 (no change when insufficient data)"
+      ]
+    },
+    "auto_tune_apply_endpoint": {
+      "status": "PASS",
+      "details": [
+        "POST /api/strategies/weather/calibration/auto-tune/apply returns HTTP 400 when disabled",
+        "Error message: 'Auto-tune is disabled. Enable it first via config.'",
+        "Correct behavior - operator must explicitly enable auto-tune before applying"
+      ]
+    },
+    "weather_health_auto_tune_section": {
+      "status": "PASS",
+      "details": [
+        "sigma_pipeline.auto_tune section present in /api/strategies/weather/health",
+        "Fields: enabled=false, step_size=0.05, min_multiplier=1.0, max_multiplier=1.5",
+        "target_coverage=0.6827 (ideal 68.27% 1σ coverage)",
+        "min_samples=30, mode='manual'",
+        "All values match WeatherConfig defaults from weather_models.py"
+      ]
+    },
+    "config_auto_tune_fields": {
+      "status": "PASS",
+      "details": [
+        "auto_tune_enabled=false (disabled by default)",
+        "auto_tune_step_size=0.05 (max 0.05 change per update step)",
+        "auto_tune_min_multiplier=1.0 (floor - never narrow below this)",
+        "auto_tune_max_multiplier=1.5 (ceiling - never widen above this)",
+        "auto_tune_target_coverage=0.6827 (ideal 1σ coverage 68.27%)",
+        "auto_tune_min_samples=30 (min samples before recommending)"
+      ]
+    },
+    "frontend_ui_display": {
+      "status": "PASS",
+      "details": [
+        "'Sigma Pipeline & Auto-Tune' section heading clearly visible",
+        "Current Multiplier '1.25x' with ACTIVE badge shows widening is active",
+        "MANUAL badge indicates operator-controlled mode",
+        "'Waiting for 30 resolved samples (5 collected)' explains why auto-tune not ready",
+        "Progress bar shows 5/30 samples collected with 'Blending' status",
+        "Auto-Tune DISABLED badge clearly indicates feature is off",
+        "Calibration metrics (Brier, Coverage, etc.) still displayed correctly"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "auto_tune_response": {
+      "status": "insufficient_data",
+      "current_multiplier": 1.25,
+      "recommended_multiplier": 1.25,
+      "recommended_direction": "hold",
+      "reason": "Only 5/30 resolved samples — need more data",
+      "coverage_1sigma": 0.4,
+      "total_valid": 5,
+      "min_samples_required": 30,
+      "can_auto_apply": false,
+      "auto_tune_enabled": false,
+      "management_mode": "manual",
+      "mode_label": "Manual — operator controls the multiplier"
+    },
+    "sigma_pipeline_auto_tune": {
+      "enabled": false,
+      "step_size": 0.05,
+      "min_multiplier": 1.0,
+      "max_multiplier": 1.5,
+      "target_coverage": 0.6827,
+      "min_samples": 30,
+      "mode": "manual"
+    },
+    "calibration_metrics": {
+      "brier_score": 1.064,
+      "coverage_1sigma": 0.4,
+      "coverage_2sigma": 0.8,
+      "calibration_error": 0.283,
+      "over_confident_pct": 0.6,
+      "under_confident_pct": 0.2,
+      "total_valid": 5
+    },
+    "analytics_summary": {
+      "realized_pnl": 142.70
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration50_auto_tune.py",
+    "/app/test_reports/pytest/pytest_results_iteration50.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration50_auto_tune.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (All 15 UI features verified)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (5 resolved forecast records)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 50 verified the auto-tune framework for sigma overconfidence multiplier. Key findings: (1) Auto-tune is DISABLED by default (auto_tune_enabled=false in WeatherConfig). (2) System has 5 resolved samples but needs 30 for full auto-tune recommendations - status is 'insufficient_data'. (3) Management mode is 'manual' - operator controls the multiplier directly. (4) POST /apply endpoint correctly returns 400 with 'Auto-tune is disabled' message. (5) Config has all guardrails: step_size=0.05 (max change per step), min_multiplier=1.0, max_multiplier=1.5, target_coverage=68.27%. (6) Frontend shows all auto-tune info clearly: '1.25x ACTIVE' current multiplier, 'MANUAL' mode badge, 'Waiting for 30 resolved samples (5 collected)' recommendation, 'DISABLED' auto-tune badge. (7) All existing features work: Calibration, Asymmetric, By Type tabs all functional."
+}

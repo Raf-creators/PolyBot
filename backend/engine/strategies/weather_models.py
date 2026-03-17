@@ -94,6 +94,15 @@ class WeatherConfig(BaseModel):
     calibration_max_adjustment_pct: float = 0.25            # cap calibration sigma within ±25% of defaults
     calibration_min_samples_per_segment: int = 30           # min samples to apply per lead/type segment
 
+    # Auto-tuning (disabled by default — enable when calibration matures)
+    auto_tune_enabled: bool = False                         # master switch for auto-adjusting the multiplier
+    auto_tune_step_size: float = 0.05                       # max change per update step (e.g. 1.25→1.20)
+    auto_tune_min_multiplier: float = 1.0                   # floor: never narrow below this
+    auto_tune_max_multiplier: float = 1.50                  # ceiling: never widen above this
+    auto_tune_target_coverage: float = 0.6827               # ideal 1σ coverage (68.27%)
+    auto_tune_coverage_tolerance: float = 0.05              # ±5% around target = "calibrated"
+    auto_tune_min_samples: int = 30                         # min total valid samples before recommending
+
     # Liquidity score filter
     min_liquidity_score: float = 35.0                       # 0-100, skip buckets scoring below this
 

@@ -1895,6 +1895,107 @@ async def get_calibration_metrics():
     return await rolling_calibration_service.compute_calibration_metrics()
 
 
+@api_router.get("/strategies/weather/calibration/auto-tune")
+async def get_auto_tune_status():
+    """Get auto-tune recommendation and status.
+
+    Returns the current vs recommended multiplier, coverage trend,
+    and whether auto-tune would apply a change.
+    """
+    if not rolling_calibration_service or not weather_trader_ref:
+        raise HTTPException(500, "Services not initialized")
+
+    cfg = weather_trader_ref.config
+    rec = await rolling_calibration_service.compute_auto_tune_recommendation(
+        current_multiplier=cfg.sigma_overconfidence_multiplier,
+        step_size=cfg.auto_tune_step_size,
+        min_multiplier=cfg.auto_tune_min_multiplier,
+        max_multiplier=cfg.auto_tune_max_multiplier,
+        target_coverage=cfg.auto_tune_target_coverage,
+        coverage_tolerance=cfg.auto_tune_coverage_tolerance,
+        min_samples=cfg.auto_tune_min_samples,
+    )
+
+    # Determine management mode
+    if cfg.auto_tune_enabled and rec.get("can_auto_apply"):
+        mode = "auto"
+    elif cfg.auto_tune_enabled:
+        mode = "auto_pending"  # enabled but not enough data
+    else:
+        mode = "manual"
+
+    return {
+        **rec,
+        "auto_tune_enabled": cfg.auto_tune_enabled,
+        "management_mode": mode,
+        "mode_label": {
+            "manual": "Manual — operator controls the multiplier",
+            "auto_pending": "Auto (pending) — enabled but waiting for data",
+            "auto": "Auto — multiplier adjusts automatically",
+        }.get(mode, mode),
+    }
+
+
+@api_router.post("/strategies/weather/calibration/auto-tune/apply")
+async def apply_auto_tune():
+    """Apply the auto-tune recommendation (one step).
+
+    Requires auto_tune_enabled=True and sufficient samples.
+    Changes the multiplier by at most one step_size per call.
+    """
+    if not rolling_calibration_service or not weather_trader_ref:
+        raise HTTPException(500, "Services not initialized")
+
+    cfg = weather_trader_ref.config
+    if not cfg.auto_tune_enabled:
+        raise HTTPException(400, "Auto-tune is disabled. Enable it first via config.")
+
+    rec = await rolling_calibration_service.compute_auto_tune_recommendation(
+        current_multiplier=cfg.sigma_overconfidence_multiplier,
+        step_size=cfg.auto_tune_step_size,
+        min_multiplier=cfg.auto_tune_min_multiplier,
+        max_multiplier=cfg.auto_tune_max_multiplier,
+        target_coverage=cfg.auto_tune_target_coverage,
+        coverage_tolerance=cfg.auto_tune_coverage_tolerance,
+        min_samples=cfg.auto_tune_min_samples,
+    )
+
+    if not rec.get("can_auto_apply"):
+        raise HTTPException(400, f"Cannot apply: {rec.get('reason', 'insufficient data')}")
+
+    if not rec.get("would_change"):
+        return {"status": "no_change", "reason": rec.get("reason"), "multiplier": cfg.sigma_overconfidence_multiplier}
+
+    old_mult = cfg.sigma_overconfidence_multiplier
+    new_mult = rec["recommended_multiplier"]
+    weather_trader_ref.config.sigma_overconfidence_multiplier = new_mult
+
+    # Persist to MongoDB config
+    db = engine.persistence._db if engine and engine.persistence else None
+    if db is not None:
+        await db.configs.update_one(
+            {"_id": "engine_config"},
+            {"$set": {"strategies.weather_trader.sigma_overconfidence_multiplier": new_mult}},
+        )
+
+    import logging
+    logging.getLogger("services.auto_tune").info(
+        f"[AUTO-TUNE] Multiplier adjusted: {old_mult:.3f} → {new_mult:.3f} "
+        f"(direction={rec['recommended_direction']}, coverage={rec['coverage_1sigma']:.1%}, "
+        f"samples={rec['total_valid']})"
+    )
+
+    return {
+        "status": "applied",
+        "old_multiplier": old_mult,
+        "new_multiplier": new_mult,
+        "direction": rec["recommended_direction"],
+        "reason": rec["reason"],
+        "coverage_1sigma": rec["coverage_1sigma"],
+        "samples": rec["total_valid"],
+    }
+
+
 @api_router.get("/strategies/weather/calibration/{station_id}")
 async def get_station_calibration(station_id: str):
     """Get calibration data for a specific station."""

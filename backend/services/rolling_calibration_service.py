@@ -595,3 +595,103 @@ class RollingCalibrationService:
             "calibration_curve": calibration_curve,
             "sigma_evolution": sigma_evolution,
         }
+
+
+    async def compute_auto_tune_recommendation(
+        self,
+        current_multiplier: float,
+        step_size: float = 0.05,
+        min_multiplier: float = 1.0,
+        max_multiplier: float = 1.5,
+        target_coverage: float = 0.6827,
+        coverage_tolerance: float = 0.05,
+        min_samples: int = 30,
+    ) -> Dict[str, Any]:
+        """Compute the recommended overconfidence multiplier adjustment.
+
+        Uses the most recent calibration metrics to determine whether
+        the multiplier should move up, down, or stay.
+
+        Rules:
+        - If coverage < target - tolerance → underconfident → nudge DOWN
+          (model sigma is too large, narrow it)
+        - If coverage > target + tolerance → overconfident → nudge UP
+          (model sigma is too small, widen it)
+        - If within tolerance band → hold steady
+
+        Returns a dict with recommendation, reasoning, and history.
+        """
+        metrics = await self.compute_calibration_metrics()
+
+        total_valid = metrics.get("total_valid", 0)
+        coverage = metrics.get("coverage_1sigma")
+        brier = metrics.get("brier_score")
+
+        # Not enough data — no recommendation
+        if total_valid < min_samples or coverage is None:
+            return {
+                "status": "insufficient_data",
+                "current_multiplier": current_multiplier,
+                "recommended_multiplier": current_multiplier,
+                "recommended_direction": "hold",
+                "reason": f"Only {total_valid}/{min_samples} resolved samples — need more data",
+                "coverage_1sigma": coverage,
+                "brier_score": brier,
+                "total_valid": total_valid,
+                "min_samples_required": min_samples,
+                "can_auto_apply": False,
+                "step_size": step_size,
+            }
+
+        # Determine direction
+        lower_bound = target_coverage - coverage_tolerance
+        upper_bound = target_coverage + coverage_tolerance
+
+        if coverage < lower_bound:
+            # Coverage too low → sigma too small → model overconfident → increase multiplier
+            direction = "increase"
+            new_mult = min(current_multiplier + step_size, max_multiplier)
+            reason = (
+                f"Coverage {coverage:.1%} < target {target_coverage:.1%} "
+                f"(model overconfident) — recommend widening sigma"
+            )
+        elif coverage > upper_bound:
+            # Coverage too high → sigma too large → model underconfident → decrease multiplier
+            direction = "decrease"
+            new_mult = max(current_multiplier - step_size, min_multiplier)
+            reason = (
+                f"Coverage {coverage:.1%} > target {target_coverage:.1%} "
+                f"(model underconfident) — recommend narrowing sigma"
+            )
+        else:
+            # Within tolerance — hold
+            direction = "hold"
+            new_mult = current_multiplier
+            reason = (
+                f"Coverage {coverage:.1%} within target band "
+                f"[{lower_bound:.1%}, {upper_bound:.1%}] — no adjustment needed"
+            )
+
+        new_mult = round(new_mult, 3)
+        changed = abs(new_mult - current_multiplier) > 0.001
+
+        return {
+            "status": "recommendation_ready",
+            "current_multiplier": current_multiplier,
+            "recommended_multiplier": new_mult,
+            "recommended_direction": direction,
+            "would_change": changed,
+            "change_amount": round(new_mult - current_multiplier, 3) if changed else 0,
+            "reason": reason,
+            "coverage_1sigma": round(coverage, 4),
+            "target_coverage": target_coverage,
+            "coverage_tolerance": coverage_tolerance,
+            "target_band": [round(lower_bound, 4), round(upper_bound, 4)],
+            "brier_score": round(brier, 4) if brier is not None else None,
+            "total_valid": total_valid,
+            "min_samples_required": min_samples,
+            "can_auto_apply": total_valid >= min_samples,
+            "step_size": step_size,
+            "min_multiplier": min_multiplier,
+            "max_multiplier": max_multiplier,
+        }

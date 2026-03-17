@@ -42,13 +42,14 @@ export default function Weather() {
   const [asymSummary, setAsymSummary] = useState(null);
   const [calMetrics, setCalMetrics] = useState(null);
   const [weatherByType, setWeatherByType] = useState(null);
+  const [autoTune, setAutoTune] = useState(null);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt, at] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
@@ -58,6 +59,7 @@ export default function Weather() {
         axios.get(`${API_BASE}/strategies/weather-asymmetric/summary`),
         axios.get(`${API_BASE}/strategies/weather/calibration/metrics`),
         axios.get(`${API_BASE}/analytics/weather-by-type`),
+        axios.get(`${API_BASE}/strategies/weather/calibration/auto-tune`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
@@ -69,6 +71,7 @@ export default function Weather() {
       setAsymSummary(asym.data);
       setCalMetrics(cm.data);
       setWeatherByType(wbt.data);
+      setAutoTune(at.data);
     } catch {}
   }, [demoMode]);
 
@@ -381,7 +384,7 @@ export default function Weather() {
         <TabsContent value="calibration" className="mt-4">
           <div className="space-y-5">
             {/* Sigma Pipeline Status */}
-            <SigmaPipelineSection pipeline={sigmaPipeline} calMetrics={calMetrics} />
+            <SigmaPipelineSection pipeline={sigmaPipeline} calMetrics={calMetrics} autoTune={autoTune} />
             <CalibrationMetricsSection metrics={calMetrics} />
             <ShadowSummarySection summary={shadowSummary} config={config} isShadow={isShadow} execMode={execMode} />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -1081,9 +1084,10 @@ function CalibrationMetricsSection({ metrics }) {
 }
 
 
-function SigmaPipelineSection({ pipeline, calMetrics }) {
+function SigmaPipelineSection({ pipeline, calMetrics, autoTune }) {
   const p = pipeline || {};
   const m = calMetrics || {};
+  const at = autoTune || {};
   const isActive = p.overconfidence_active;
   const mult = p.overconfidence_multiplier || 1.0;
   const maxAdj = p.calibration_max_adjustment_pct || 0.25;
@@ -1091,77 +1095,178 @@ function SigmaPipelineSection({ pipeline, calMetrics }) {
   const totalValid = m.total_valid || 0;
   const samplesProgress = Math.min(totalValid / minSamples * 100, 100);
 
-  // Determine calibration status
-  let calStatus = 'insufficient';
+  // Auto-tune data
+  const atEnabled = at.auto_tune_enabled || false;
+  const mgmtMode = at.management_mode || 'manual';
+  const recMult = at.recommended_multiplier;
+  const recDirection = at.recommended_direction || 'hold';
+  const wouldChange = at.would_change || false;
+  const coverage = at.coverage_1sigma;
+  const targetBand = at.target_band || [0.6327, 0.7327];
+
+  // Mode label and color
+  const modeConfig = {
+    manual: { label: 'MANUAL', color: 'text-zinc-400', border: 'border-zinc-700', bg: 'bg-zinc-900/50' },
+    auto_pending: { label: 'AUTO (PENDING)', color: 'text-amber-400', border: 'border-amber-700/40', bg: 'bg-amber-950/20' },
+    auto: { label: 'AUTO', color: 'text-emerald-400', border: 'border-emerald-700/40', bg: 'bg-emerald-950/20' },
+  };
+  const mc = modeConfig[mgmtMode] || modeConfig.manual;
+
+  // Calibration status
   let calLabel = 'Insufficient Data';
   let calColor = 'text-zinc-500';
   if (totalValid >= minSamples) {
-    calStatus = 'active';
     calLabel = 'Active';
     calColor = 'text-emerald-400';
   } else if (totalValid > 0) {
-    calStatus = 'blending';
     calLabel = `Blending (${totalValid}/${minSamples})`;
     calColor = 'text-amber-400';
   }
 
   return (
-    <SectionCard title="Sigma Pipeline" testId="section-sigma-pipeline">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Overconfidence Correction */}
-        <div data-testid="sigma-overconfidence" className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-400 text-xs font-medium">Overconfidence Correction</span>
-            <Badge variant="outline" className={`text-[9px] ${isActive ? 'border-amber-500/30 text-amber-400' : 'border-zinc-700 text-zinc-600'}`}>
-              {isActive ? 'ACTIVE' : 'OFF'}
-            </Badge>
-          </div>
-          <div className="text-2xl font-mono font-bold text-amber-300">
-            {mult.toFixed(2)}x
-          </div>
-          <div className="text-[10px] text-zinc-600">
-            {isActive
-              ? `All sigma values widened by ${((mult - 1) * 100).toFixed(0)}% (temporary, reduce when calibration matures)`
-              : 'No overconfidence correction applied'}
-          </div>
-        </div>
+    <SectionCard title="Sigma Pipeline & Auto-Tune" testId="section-sigma-pipeline">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left: Current State */}
+        <div className="space-y-4">
+          <div className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">Current State</div>
 
-        {/* Calibration Guardrails */}
-        <div data-testid="sigma-guardrails" className="space-y-2">
-          <div className="text-zinc-400 text-xs font-medium">Calibration Guardrails</div>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Current Multiplier */}
+            <div data-testid="sigma-current-mult">
+              <span className="text-zinc-500 text-xs block mb-1">Current Multiplier</span>
+              <span className="text-3xl font-mono font-bold text-amber-300">{mult.toFixed(2)}x</span>
+              <div className="mt-1">
+                <Badge variant="outline" className={`text-[9px] ${isActive ? 'border-amber-500/30 text-amber-400' : 'border-zinc-700 text-zinc-600'}`}>
+                  {isActive ? 'ACTIVE' : 'NEUTRAL'}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Management Mode */}
+            <div data-testid="sigma-mgmt-mode">
+              <span className="text-zinc-500 text-xs block mb-1">Management</span>
+              <div className={`inline-block px-3 py-1.5 rounded-md border text-sm font-mono font-bold ${mc.color} ${mc.border} ${mc.bg}`}>
+                {mc.label}
+              </div>
+              <div className="text-[10px] text-zinc-600 mt-1">
+                {mgmtMode === 'manual' && 'Operator sets multiplier directly'}
+                {mgmtMode === 'auto_pending' && 'Auto-tune enabled, waiting for data'}
+                {mgmtMode === 'auto' && 'Multiplier adjusts per step automatically'}
+              </div>
+            </div>
+          </div>
+
+          {/* Guardrails */}
           <div className="space-y-1.5 text-xs">
             <div className="flex justify-between">
-              <span className="text-zinc-500">Max Adjustment</span>
+              <span className="text-zinc-500">Max Cal. Adjustment</span>
               <span className="text-zinc-300 font-mono">&plusmn;{(maxAdj * 100).toFixed(0)}%</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-zinc-500">Min Samples</span>
-              <span className="text-zinc-300 font-mono">{minSamples}</span>
+              <span className="text-zinc-500">Calibration Samples</span>
+              <span className={`font-mono ${calColor}`}>{calLabel}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-zinc-500">Current Samples</span>
-              <span className={`font-mono ${totalValid >= minSamples ? 'text-emerald-400' : 'text-amber-400'}`}>{totalValid}</span>
+            <div className="w-full bg-zinc-800 rounded-full h-1.5">
+              <div
+                className={`h-1.5 rounded-full transition-all duration-500 ${samplesProgress >= 100 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                style={{ width: `${samplesProgress}%` }}
+              />
             </div>
           </div>
         </div>
 
-        {/* Calibration Status */}
-        <div data-testid="sigma-cal-status" className="space-y-2">
-          <div className="text-zinc-400 text-xs font-medium">Calibration Status</div>
-          <div className={`text-lg font-mono font-bold ${calColor}`}>{calLabel}</div>
-          <div className="w-full bg-zinc-800 rounded-full h-1.5 mt-1">
-            <div
-              className={`h-1.5 rounded-full transition-all duration-500 ${samplesProgress >= 100 ? 'bg-emerald-500' : 'bg-amber-500'}`}
-              style={{ width: `${samplesProgress}%` }}
-            />
-          </div>
-          <div className="text-[10px] text-zinc-600">
-            {calStatus === 'active'
-              ? 'Calibration adjustments applied (capped within guardrails)'
-              : calStatus === 'blending'
-              ? 'Blending calibration with defaults proportionally'
-              : 'Using default sigma values only'}
-          </div>
+        {/* Right: Auto-Tune Recommendation */}
+        <div className="space-y-4">
+          <div className="text-zinc-500 text-[10px] uppercase tracking-wider font-medium">Auto-Tune Recommendation</div>
+
+          {at.status === 'insufficient_data' ? (
+            <div className="space-y-3">
+              <div className="text-zinc-600 text-sm">
+                Waiting for {minSamples} resolved samples ({totalValid} collected)
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <span className="text-zinc-500 block">Samples</span>
+                  <span className="text-amber-400 font-mono text-lg">{totalValid}/{minSamples}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-500 block">Auto-Tune</span>
+                  <Badge variant="outline" className={`text-[9px] ${atEnabled ? 'border-amber-500/30 text-amber-400' : 'border-zinc-700 text-zinc-600'}`}>
+                    {atEnabled ? 'ENABLED (WAITING)' : 'DISABLED'}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Recommended Multiplier */}
+              <div className="grid grid-cols-3 gap-3">
+                <div data-testid="sigma-recommended-mult">
+                  <span className="text-zinc-500 text-xs block">Recommended</span>
+                  <span className={`text-2xl font-mono font-bold ${wouldChange ? (recDirection === 'decrease' ? 'text-emerald-400' : 'text-amber-400') : 'text-zinc-400'}`}>
+                    {recMult != null ? `${recMult.toFixed(2)}x` : '—'}
+                  </span>
+                </div>
+                <div data-testid="sigma-direction">
+                  <span className="text-zinc-500 text-xs block">Direction</span>
+                  <span className={`text-lg font-mono font-bold ${
+                    recDirection === 'decrease' ? 'text-emerald-400' : recDirection === 'increase' ? 'text-amber-400' : 'text-zinc-500'
+                  }`}>
+                    {recDirection === 'decrease' ? 'NARROW' : recDirection === 'increase' ? 'WIDEN' : 'HOLD'}
+                  </span>
+                </div>
+                <div data-testid="sigma-step-size">
+                  <span className="text-zinc-500 text-xs block">Step Size</span>
+                  <span className="text-zinc-300 font-mono text-lg">{(at.step_size || 0.05).toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Coverage vs Target */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-zinc-500">1σ Coverage</span>
+                  <span className={`font-mono ${
+                    coverage != null && Math.abs(coverage - 0.6827) < 0.05 ? 'text-emerald-400'
+                    : coverage != null && coverage < 0.6327 ? 'text-red-400'
+                    : 'text-amber-400'
+                  }`}>
+                    {coverage != null ? `${(coverage * 100).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                {coverage != null && (
+                  <div className="relative w-full h-3 bg-zinc-800 rounded-full overflow-hidden">
+                    {/* Target band */}
+                    <div className="absolute h-full bg-emerald-900/40 rounded"
+                      style={{ left: `${targetBand[0] * 100}%`, width: `${(targetBand[1] - targetBand[0]) * 100}%` }} />
+                    {/* Current coverage marker */}
+                    <div className="absolute top-0 h-full w-0.5 bg-white rounded"
+                      style={{ left: `${Math.min(coverage * 100, 100)}%` }} />
+                    {/* Labels */}
+                    <div className="absolute text-[8px] text-emerald-500/80 font-mono"
+                      style={{ left: `${targetBand[0] * 100 + 1}%`, top: '-1px' }}>target</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Reasoning */}
+              <div className="text-[10px] text-zinc-600 mt-1">
+                {at.reason}
+              </div>
+
+              {/* Multiplier range */}
+              <div className="flex items-center gap-2 text-[10px] text-zinc-600">
+                <span>Range: {at.min_multiplier?.toFixed(2)}x</span>
+                <div className="flex-1 h-1 bg-zinc-800 rounded-full relative">
+                  <div className="absolute h-1 rounded-full bg-amber-800/40"
+                    style={{
+                      left: `${((mult - (at.min_multiplier || 1.0)) / ((at.max_multiplier || 1.5) - (at.min_multiplier || 1.0))) * 100}%`,
+                      width: '4px'
+                    }} />
+                </div>
+                <span>{at.max_multiplier?.toFixed(2)}x</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </SectionCard>
