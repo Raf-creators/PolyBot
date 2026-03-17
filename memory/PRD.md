@@ -1,424 +1,142 @@
-# Polymarket Edge OS — PRD
+# Polymarket Edge OS — Product Requirements Document
 
-## Problem Statement
-Build a production-grade 24/7 automated trading platform for Polymarket markets.
+## Original Problem Statement
+Build a full-stack trading application (FastAPI + React + MongoDB) that runs on Railway as a Polymarket trading bot. The bot executes multiple trading strategies:
+- **Crypto Sniper**: Trades BTC/ETH crypto price prediction markets
+- **Weather Trader**: Trades weather temperature markets using forecast edge
+- **Arb Scanner**: Scans for structural arbitrage across all markets
+- **Market Resolver**: Closes positions at market resolution
+
+The user's primary focus is production-grade reliability, real-time dashboard updates, and comprehensive diagnostics for debugging and monitoring the live bot.
+
+## Core Requirements
+1. **Dashboard Auto-Refresh**: Near real-time UI updates when trades close (WebSocket + polling)
+2. **Position Slot Segmentation**: Per-strategy position limits (weather: 25, non-weather: 25, global: 55)
+3. **Market Freshness Filter**: Skip stale markets with no recent price movement
+4. **Liquidity/Fill Quality Checks**: Pre-trade bid/ask spread and depth validation
+5. **Strategy-Level Performance Tracking**: PnL, win rate, trade counts per strategy
+6. **Signal Rejection Diagnostics**: Track and display why signals are rejected
+7. **Discovery Watchdog**: Telegram alerts when no new markets/trades detected
+8. **Duration Prioritization**: Prefer shorter-duration markets
+9. **Capital Allocation**: Different position sizing per strategy
 
 ## Architecture
-- Frontend: React SPA, zustand, single global WebSocket, dark-mode terminal
-- Backend: FastAPI async Python, MongoDB
-- Execution: Dual adapter — PaperAdapter (default) + LiveAdapter (py-clob-client)
-
-## Implemented Phases
-
-### Phase 1-3 — Engine, Feeds, Arb Strategy
-### Phase 4 — Dashboard (AUDITED)
-### Phase 5A — Crypto Sniper Strategy (AUDITED)
-### Phase 5B — Sniper Dashboard
-### P&L Curve + Trade Ticker
-### Phase 6 — Telegram Alerts (Configured + Noise Reduced, 2026-03-16)
-- Credentials set in `backend/.env`, auto-enabled on startup
-- Only TRADE EXECUTED and TRADE CLOSED sent to Telegram
-- Removed: signals, weather alerts, risk, system events, scanner noise
-- Weather alerts still stored in-memory + logged, not dispatched to Telegram
-### Phase 7 — Config Persistence (MongoDB)
-### Phase 8 — Live Polymarket Execution Adapter
-### Phase 8A — Order Lifecycle, Partial Fills, Wallet Visibility
-### Phase 8B — Final Live Trading Safeguards (2026-03-13)
-
-### Phase 9 — Rich Analytics & Strategy Performance Dashboard (2026-03-13)
-- **Backend analytics service** (`/app/backend/services/analytics_service.py`): Pure computation layer computing portfolio summary, per-strategy metrics, execution quality, and time-series analytics from in-memory trade state.
-- **4 API endpoints**:
-  - `GET /api/analytics/summary` — Total PnL, realized/unrealized, drawdown, win rate, profit factor, Sharpe, expectancy, streaks, fees, volume
-  - `GET /api/analytics/strategies` — Per-strategy (arb_scanner, crypto_sniper) breakdown with same metrics + avg edge in bps
-  - `GET /api/analytics/execution-quality` — Fill ratio, slippage, rejection reasons, latency, partial fills
-  - `GET /api/analytics/timeseries` — Daily PnL, equity curve, drawdown curve, trade frequency, rolling 7D/30D PnL, executions by strategy
-- **Frontend Analytics page** (`/analytics`): 4-tab dashboard (Overview, Strategies, Execution, Charts) with recharts visualizations
-- **Bug fixed**: `compute_timeseries` empty-state return had mismatched keys (`rolling_7d` vs `rolling_7d_pnl`) and missing `drawdown_curve`/`executions_by_strategy`
-- **Test endpoints**: `POST /api/test/inject-trades` and `POST /api/test/clear-trades` for populating synthetic data
-- Testing: **17/17 backend (100%), all frontend UI tests passed**
-
-## Order Lifecycle States
 ```
-submitted        → Order sent to CLOB, awaiting match
-open             → Order live on book
-partially_filled → Some shares matched, order still active
-filled           → All shares matched, complete
-cancelled        → Cancelled (manual, system, or offline)
-rejected         → Rejected (preflight, risk, slippage, CLOB error)
-expired          → Expired on CLOB
+/app
+├── backend/
+│   ├── engine/
+│   │   ├── risk.py              # Per-strategy position limits, market freshness filter
+│   │   ├── state.py             # In-memory state manager
+│   │   ├── paper.py             # Paper trading adapter (sets strategy_id on Position)
+│   │   └── strategies/
+│   │       ├── crypto_sniper.py # BTC/ETH crypto trading
+│   │       ├── weather_trader.py# Global weather market trading
+│   │       ├── weather_parser.py# Dynamic global station discovery (40+ cities)
+│   │       ├── weather_feeds.py # Gamma API + Open-Meteo global weather discovery
+│   │       ├── arb_scanner.py   # Binary + multi-outcome + cross-market arb detection
+│   │       └── arb_models.py    # Arb data models
+│   ├── services/
+│   │   ├── strategy_tracker.py  # Per-strategy performance + watchdog + rejection diagnostics
+│   │   ├── telegram_notifier.py # All-strategy trade close notifications
+│   │   ├── market_resolver_service.py # Position resolution at market close
+│   │   └── persistence.py       # MongoDB state persistence
+│   ├── server.py                # FastAPI app with all endpoints
+│   └── models.py                # Pydantic models (Position has strategy_id)
+└── frontend/
+    └── src/
+        ├── hooks/
+        │   ├── useApi.js        # API hooks (arb diagnostics, signal quality, watchdog, tracker)
+        │   └── useWebSocket.js  # WS trade_closed event listener
+        ├── state/
+        │   └── dashboardStore.js# Zustand store with arbDiagnostics, signalQuality, watchdog
+        └── pages/
+            ├── Overview.jsx     # Dashboard with auto-refresh
+            ├── Arbitrage.jsx    # Arb scanner diagnostics (raw edges, rejection log)
+            ├── Analytics.jsx    # Signal Quality + Watchdog tabs
+            ├── Sniper.jsx       # Crypto sniper signals
+            └── Weather.jsx      # Weather strategy signals
 ```
 
-## Safety Protections
-1. POLYMARKET_PRIVATE_KEY required for live mode
-2. Kill switch blocks live mode switch
-3. Preflight: auth + mode + kill switch + size cap + slippage
-4. Conservative LIVE_DEFAULTS: max_order=2, max_position=5, max_exposure=20
-5. Risk engine gates ALL orders
-6. Partial fills tracked (never treated as complete)
-7. Slippage protection: rejects orders > max_live_slippage_bps
-8. Cancel support for open/partial orders
-9. Paper fallback if live adapter loses auth
-10. Errors tracked and surfaced in health
+## What's Been Implemented (as of 2026-03-17)
 
-## Remaining Before Real-Money Launch
-- ~~Full CLOB WebSocket fill notifications (currently polling 5s)~~ ✓ Done (P6)
-- Multi-wallet support
-- Rate limit awareness for CLOB API
-- Manual order entry (for ad-hoc trades)
+### Session 1-3: Core Platform
+- Full-stack FastAPI + React + MongoDB architecture
+- Multiple trading strategies (Crypto Sniper, Weather Trader, Arb Scanner)
+- Paper trading engine with position management
+- Real-time WebSocket data streaming
+- PnL tracking and analytics pipeline
+- Telegram notifications for trade alerts
 
-## Phase 10 — Weather Trading Strategy
-### Architecture (Complete, 2026-03-13)
-- Full architecture designed: `/app/memory/PHASE10_WEATHER_ARCHITECTURE.md`
+### Session 4: Analytics Pipeline Fix
+- Fixed test data injection, state persistence across restarts
+- Fixed market data availability for resolver
+- Deployment diagnostics endpoint (/api/diagnostics)
 
-### Step 1 — Models (Complete, 2026-03-13)
-- `weather_models.py`: WeatherConfig, StationInfo, StationType, Season, TempBucket, WeatherMarketClassification, ForecastSnapshot, SigmaCalibration, BucketProbability, WeatherSignal, WeatherExecution, WeatherSignalStatus
-- All follow existing conventions (Pydantic BaseModel, new_id, utc_now)
-- Multi-outcome bucket support (5-7 buckets per market vs binary)
+### Session 5: Production Optimizations (CURRENT)
+1. **Position Slot Segmentation**: max_weather=25, max_nonweather=25, max_global=55
+   - Position model now has strategy_id field
+   - Paper adapter sets strategy_id on new positions
+   - Risk engine classifies positions by strategy_id or keyword fallback
+   - Diagnostics: headroom, by_strategy, blocked_by_position_limit counts
+2. **Dashboard Auto-Refresh**: 5s polling + WebSocket trade_closed push
+   - No-cache middleware prevents stale API responses
+3. **Arb Scanner Debug + Expansion**:
+   - Root cause: Binary YES/NO arb doesn't exist (market makers too efficient)
+   - Added multi-outcome weather event detection (67 groups found)
+   - Added cross-market duplicate detection
+   - Comprehensive diagnostics: raw_edges, rejection_log, per-scan metrics
+   - Found 575+ raw edges across 45+ scans, 99 eligible (blocked by risk - global limit)
+4. **Weather Strategy Global Expansion**:
+   - Dynamic station discovery: 40+ cities globally
+   - Auto-creates StationInfo for London, Tokyo, Seoul, Hong Kong, Paris, etc.
+   - Celsius support for international markets
+   - Broad Gamma API search beyond hardcoded slugs
+5. **Telegram All-Strategy Fix**:
+   - Sends formatted trade close for ALL strategies (crypto, weather, arb, resolver)
+   - Includes strategy name, market, side, entry/exit, PnL, ROI, timestamp
+6. **Signal Quality + Rejection Visibility**:
+   - New API: /api/analytics/signal-quality with per-strategy rejection reasons
+   - UI: Analytics > Signal Quality tab with rejection breakdown
+   - UI: Position Slots section with headroom and blocked counts
+7. **Market Freshness Filter**:
+   - Risk engine checks min_market_freshness_seconds (120s default)
+   - Bid/ask spread check (max_spread_bps: 500)
+   - Liquidity ratio check (max_size_to_liquidity_ratio: 0.25)
+8. **Discovery Watchdog**:
+   - Background task checks every 5 min for activity gaps
+   - Telegram alerts if no markets (30min), trades opened (60min), trades closed (120min)
+   - UI: Analytics > Watchdog tab with timestamps and thresholds
 
-### Step 2 — Station Registry + Market Parser (Complete, 2026-03-13)
-- `weather_parser.py`: STATION_REGISTRY (8 stations), lookup_station(), classify_weather_market(), parse_temp_buckets(), validate_buckets()
-- Regex city/date extraction with alias fallback
-- Bucket parsing: "X or below", "X-Y F", "X or higher", degree symbols, en-dashes
-- Clean rejection reasons for all failure paths
-- Contiguous bucket coverage validation (gap + overlap detection)
-- **85/85 tests passed**: `/app/backend/tests/test_phase10_weather_models_parser.py`
+## Key API Endpoints
+- `GET /api/diagnostics` — Environment + build info
+- `GET /api/analytics/strategy-tracker` — Full diagnostics (performance, slots, rejections, watchdog)
+- `GET /api/analytics/signal-quality` — Per-strategy signal generation/rejection
+- `GET /api/analytics/watchdog` — Discovery watchdog timestamps
+- `GET /api/strategies/arb/diagnostics` — Arb scanner raw edges, rejection log, multi-outcome groups
+- `GET /api/strategies/arb/health` — Arb scanner metrics
+- `GET /api/strategies/weather/health` — Weather classification stats + global coverage
+- `POST /api/config/update` — Live risk config modification
 
-### Step 3 — Pricing Engine (Complete, 2026-03-13)
-- `weather_pricing.py`: normal_cdf, calibrate_sigma, compute_bucket_probability, compute_all_bucket_probabilities, compute_edge_bps, evaluate_all_buckets, kelly_size, compute_weather_confidence, blend_forecasts
-- Distribution-based bucket probabilities with continuity correction (±0.5F)
-- Sigma calibration by lead time (5 brackets), season (4), station type (coastal/inland)
-- Probability normalization enforced (sum = 1.0)
-- Quarter-Kelly sizing with floor/ceiling guards
-- Multi-source forecast blending with inter-model disagreement inflation
-- **63/63 tests passed**: `/app/backend/tests/test_phase10_weather_pricing.py`
+## Database Schema
+- **trades**: Closed trade records with strategy_id, pnl, timestamps
+- **configs**: Risk configuration (per-strategy limits persisted)
+- **snapshots**: Open positions with strategy_id, market data cache
 
-### Step 4 — Weather Feeds (Complete, 2026-03-13)
-- `weather_feeds.py`: WeatherFeedManager with Open-Meteo (primary) + NWS METAR (secondary)
-- Forecast caching with configurable TTL, staleness detection, eviction
-- Open-Meteo: hourly temp fetch → daily high extraction → ForecastSnapshot
-- NWS: METAR observation fetch → C→F conversion
-- Graceful failure handling (HTTP errors, network errors, malformed responses)
-- Health/observability dict for monitoring
-- Bulk fetch with rate limiting (5 req/sec)
-- **27/27 tests passed**: `/app/backend/tests/test_phase10_weather_feeds.py`
+## P0 Remaining Tasks
+None — all requested features implemented and tested.
 
-### Step 5 — Weather Trader Strategy (Complete, 2026-03-13)
-- `weather_trader.py`: WeatherTrader(BaseStrategy) with 5-stage scan loop
-- Classification from StateManager markets (multi-outcome weather detection)
-- Forecast ingestion via WeatherFeedManager (Stage 2)
-- Bucket probability modeling via pricing engine (Stage 3)
-- EV evaluation + multi-filter pipeline (Stage 4): edge, liquidity, confidence, lead time, sigma, freshness, cooldown, kill switch, concurrency
-- Execution via RiskEngine → ExecutionEngine → fill tracking via EventBus
-- Full metrics tracking: scans, classifications, forecasts, rejections by reason, executions, fills
-- **21/21 tests passed**: `/app/backend/tests/test_phase10_weather_trader.py`
+## P1 Backlog
+- Duration Prioritization: Prefer shorter-duration markets
+- Capital Allocation per strategy: Configurable position sizing
+- Fix "stopped" strategy status display on Overview page
+- Improve weather market classification (reduce 26 failures from global expansion)
 
-### Step 6 — Server Integration (Complete, 2026-03-13)
-- Strategy registration in engine startup (`server.py`)
-- Config persistence: `build_snapshot` / `apply_to_engine` in ConfigService
-- Granular config update via `PUT /api/config` for `weather_trader`
-- 7 API endpoints: signals, executions, health, config, forecasts, stations, inject-test
-- **7/7 API tests passed**: `/app/backend/tests/test_phase10_weather_api.py`
+## P2 Future Tasks
+- Copy Trading skeleton: Backend models + API endpoints
+- Manual Order Entry: UI + API for manual trade execution
+- Live trading mode integration (currently paper-only in preview)
 
-### Step 7 — Weather Dashboard (Complete, 2026-03-13)
-- `/weather` page with dark terminal style matching existing dashboard
-- 7 stat cards: Markets, Tradable, Rejected, Executed, Filled, Forecasts, Scan Latency
-- 5 tabs: Signals, Rejected, Executions, Forecasts, Health
-- Health tab: 6 sections (Calibration status with default NWS MOS sigma table, Scanner Metrics, Feed Health, Rejection Reasons, Strategy Config, Classified Markets)
-- Empty states render safely when engine idle
-- CloudSun icon in sidebar nav between Sniper and Positions
-- Spread-sum validation added to trader (max_spread_sum config)
-- Calibration status exposed in health API (using_defaults, calibrated_stations, note)
-
-### Step 8 — Full Integration Testing (Complete, 2026-03-13)
-- Testing agent: 26/26 backend + all frontend UI tests passed (100%)
-- All 7 weather API endpoints verified (correct response shapes)
-- No regression: all existing pages and APIs working
-- Empty states validated across all tabs
-- `/app/test_reports/iteration_16.json`
-
-### Phase 10A — Paper-Mode Validation (Complete, 2026-03-13)
-- Full report: `/app/memory/PHASE10A_VALIDATION_REPORT.md`
-- Ran against live Polymarket Gamma API + Open-Meteo
-- 135 markets discovered, 15 events classified, 15/15 forecasts fetched
-- 50 tradable signals generated, 10 paper executions, 10 fills (100%)
-- Rejection breakdown: stale_market 84%, edge 13.4%, risk 1.4%, max_buckets 1.1%
-- Zero parser errors, zero Open-Meteo errors, zero crashes
-- **Architecture fix applied:** Adapted to Polymarket's event-based binary market structure
-- **Verdict: READY for cautious shadow-mode testing**
-
-### Demo Mode (Complete, 2026-03-13)
-- Safe, isolated demo data system for dashboard preview
-- Backend: `DemoDataService` generates realistic 7-day trading history in-memory (no MongoDB)
-- Frontend: Toggle on Settings page, localStorage persistence, DEMO MODE badge in TopBar
-- Generates: ~200 trades, ~13 positions, equity curve $4K->$14.7K with drawdowns
-- All 3 strategies populated (ArbScanner, CryptoSniper, WeatherTrader)
-- Separate `/api/demo/*` endpoints — zero modification to real trading logic
-- Engine controls disabled in demo mode
-- Regenerate button for new randomized data
-- Testing: 23/23 backend + all frontend tests passed (100%)
-- `/app/test_reports/iteration_17.json`
-
-## Prioritized Backlog
-### P0 — Shadow-Mode Testing (Complete, 2026-03-14)
-- Shadow config overrides: min_edge=500bps, kelly=0.15, max_stale=600s, cooldown=2400s, max_concurrent=4
-- Forecast accuracy service: MongoDB `forecast_accuracy` collection, records forecasts on every scan, manual resolution endpoint
-- Calibration visibility: Calibration tab on Weather page with shadow summary, calibration health, per-station accuracy, accuracy log
-- New endpoints: `/api/strategies/weather/shadow-summary`, `/shadow/enable`, `/shadow/reset`, `/accuracy/history`, `/accuracy/calibration`, `/accuracy/unresolved`, `/accuracy/resolve`
-- Live run results: 25 markets classified, 18 signals generated (500bps+ threshold), 4 shadow executions filled
-- 30 forecast accuracy records collected (1 resolved: KLGA forecast=47.3F actual=43F error=-4.3F)
-- Testing: 30/30 backend + all frontend tests passed (100%)
-- `/app/test_reports/iteration_18.json`
-
-### P1 — Historical Calibration Bootstrap (Complete, 2026-03-15)
-- Fetched 90 days of historical forecast vs observed data from Open-Meteo APIs
-- Computed empirical sigma per station: KLGA 2.78F, KORD 1.83F, KATL 2.15F, KDFW 2.05F, KMIA 1.23F (0-24h)
-- Lead-time scaling: sigma grows ~sqrt(lead_days), from 0-24h to 120-168h
-- Seasonal factors computed (winter/spring/summer/fall)
-- Stored in MongoDB `weather_sigma_calibration` (5 stations, 91 samples each)
-- WeatherTrader auto-loads calibrations on engine start; replaces default NWS MOS table
-- API: `/calibration/run`, `/calibration/status`, `/calibration/{station_id}`, `/calibration/reload`
-- Weather page: Sigma Calibration section with Run/Reload buttons, Calibrated Sigma Values per station
-- Testing: 22/22 backend + all frontend passed (100%) — `/app/test_reports/iteration_19.json`
-
-### P2 — CLOB WebSocket Integration (Complete, 2026-03-15)
-- Real-time market data via `wss://ws-subscriptions-clob.polymarket.com/ws/market`
-- ClobWebSocketClient: auto-connect, heartbeat/ping, exponential backoff reconnect
-- WeatherTrader auto-subscribes discovered token IDs (265 tokens from 5 cities)
-- Results: 5108 messages, 4990 price updates, 102 book updates, 5 trades — zero stale_market rejections
-- Health endpoint: `/api/health/clob-ws` + integrated into weather health
-- Weather Health tab shows CLOB WebSocket card with live metrics
-- Polling fallback preserved (MarketDataFeed unchanged)
-- Testing: 30/30 backend + all frontend passed (100%) — `/app/test_reports/iteration_20.json`
-
-### P3 — Real-time Weather Signal Alerting (Complete, 2026-03-15)
-- **WeatherAlertService** (`/app/backend/services/weather_alert_service.py`): Detects 5 alert types from CLOB WS data stream
-  - `PRICE_MOVE`: Large price changes (>300bps default)
-  - `EDGE_CHANGE`: Significant edge shifts (>200bps default)
-  - `BECAME_TRADABLE`: Market crossing tradability threshold
-  - `NO_LONGER_TRADABLE`: Market falling below tradability
-  - `SPREAD_DEVIATION`: Bucket spread-sum approaching rejection threshold
-- **Spam control**: Per-market debounce with configurable cooldown (default 300s per alert_key = type:station:date:bucket)
-- **Config**: 4 new `WeatherConfig` fields persisted via existing MongoDB config system
-  - `weather_alerts_enabled` (bool, default true), `min_weather_alert_edge_bps` (200), `min_weather_alert_price_move_bps` (300), `weather_alert_cooldown_seconds` (300)
-- **Telegram**: Formatted messages via existing `TelegramNotifier.send_message()` (fire-and-forget)
-- **API**: `GET /api/strategies/weather/alerts` returns `{alerts: [], stats: {...}}`
-- **Dashboard**: "Alerts" tab on Weather page with stats bar, alert feed, type badges, and empty state
-- **Settings**: Weather Trader config section with ON/OFF toggle for alerts, editable threshold fields
-- **No changes** to core trading logic, execution behavior, or risk engine
-- Testing: 22/22 backend API + all frontend UI passed (100%) + 15/15 unit tests — `/app/test_reports/iteration_21.json`
-
-### P4 — Rolling Calibration System (Complete, 2026-03-15)
-- **RollingCalibrationService** (`/app/backend/services/rolling_calibration_service.py`): Aggregates resolved `forecast_accuracy` records by station + lead-time bracket + season to compute rolling sigma values and bias estimates
-- **Tri-level calibration priority**: rolling_live > historical_bootstrap > default_sigma_table
-  - WeatherTrader loads historical calibrations first, then overlays rolling calibrations for stations with sufficient data
-  - Each station's calibration source is tracked and reported in health endpoint
-- **Minimum sample safety**: Requires `rolling_min_samples` (default 15) resolved records per station before producing a rolling calibration. Falls back to historical/default when sparse
-- **Recalculation policy** (configurable, whichever fires first):
-  - Time-based: every `rolling_recalc_interval_hours` (default 168h = weekly)
-  - Record-count-based: after `rolling_recalc_after_n_records` (default 20) new resolved records
-- **Bias tracking**: Per-station, per-lead-bracket, per-season mean forecast error tracked and exposed
-- **Config**: 4 new `WeatherConfig` fields: `rolling_calibration_enabled` (bool), `rolling_min_samples` (15), `rolling_recalc_interval_hours` (168), `rolling_recalc_after_n_records` (20)
-- **Storage**: `weather_rolling_calibration` MongoDB collection (separate from raw forecast_accuracy and historical bootstrap)
-- **API endpoints**:
-  - `GET /api/strategies/weather/calibration/rolling/status`
-  - `POST /api/strategies/weather/calibration/rolling/run`
-  - `POST /api/strategies/weather/calibration/rolling/reload`
-- **Dashboard**: 
-  - Calibration tab: "Rolling Live Calibration" section with stats, per-station bias/sigma details, Run Now/Reload buttons
-  - Health tab: Dynamic "Calibration Source" card showing active source badge, station counts, source breakdown
-  - Strategy Config: Shows rolling calibration settings
-- **Settings**: Rolling calibration toggle and numeric threshold fields
-- Testing: 31/31 backend API + all frontend UI passed (100%) + 8/8 unit tests — `/app/test_reports/iteration_22.json`
-
-### P5 — Volume/Liquidity Heatmap (Complete, 2026-03-15)
-- **LiquidityService** (`/app/backend/services/liquidity_service.py`): Per-token and per-event liquidity scoring (0-100)
-  - Score formula: spread width (40%), orderbook depth (30%), 24h volume (30%)
-  - Reference normalization: REF_SPREAD=4c, REF_DEPTH=$1000, REF_VOLUME=$5000
-- **Heatmap API**: `GET /api/markets/liquidity-heatmap` aggregates weather market tiles by condition_id (city+date), with per-bucket scores and summary stats
-- **Scores API**: `GET /api/markets/liquidity-scores` returns `{token_id: score}` for all tracked markets
-- **Strategy awareness**: WeatherTrader refreshes liquidity scores each scan cycle via `refresh_liquidity_scores()`
-- **Liquidity threshold filter**: `min_liquidity_score` config (default 35) rejects markets scoring below threshold with `liquidity_too_low` reason. Exposed in health metrics. 0 disables.
-- **Markets page**: Complete rewrite with dual-tab layout:
-  - "Liquidity Heatmap" tab: city-grouped tiles with color-coded score badges (DRY/SPARSE/THIN/MODERATE/GOOD/DEEP), mini bucket bars, click-to-detail dialog
-  - "All Markets" tab: existing searchable market table
-- **Detail dialog**: Per-bucket breakdown showing mid price, spread, liquidity, and individual scores
-- **Signals table**: Shows `Liq` column with color-coded liquidity score per signal
-- **Rejected signals**: `liquidity_too_low` rejections highlighted in orange
-- Testing: 20/20 backend API + all frontend UI tests (100%) + 12/12 liquidity unit tests + 3 rejection threshold tests — `/app/test_reports/iteration_23.json`
-
-### P6 — CLOB WebSocket Fill Updates (Complete, 2026-03-16)
-- **ClobFillWsClient** (`/app/backend/engine/clob_fill_ws.py`): WebSocket client for Polymarket CLOB user/trade channel
-  - Connects to `wss://ws-subscriptions-clob.polymarket.com/ws/user` with API credentials
-  - Processes trade events: MATCHED, MINED, CONFIRMED, FAILED
-  - Heartbeat ping (10s), exponential backoff reconnect (2s base, 60s max)
-  - Market subscription management (subscribe/unsubscribe condition_ids)
-  - Graceful degradation: no credentials → not connected, no errors, system falls back to polling
-- **LiveAdapter integration** (`/app/backend/engine/live_adapter.py`):
-  - `set_fill_ws()` + `on_ws_fill()` callback for real-time fill processing
-  - Fill delta computation, position/trade updates, EventBus emission
-  - Dual fill method: `websocket+polling` when WS connected, `polling` when not
-  - Reduced polling interval when WS active (30s vs 5s)
-  - ws_fill_count / poll_fill_count tracking for observability
-- **ExecutionEngine** (`/app/backend/engine/execution.py`): `live_adapter_status` property exposes fill_ws_health, fill_update_method
-- **WeatherTrader**: Receives fill events via EventBus ORDER_UPDATE — works with both WS and polling sources
-- **API endpoints**:
-  - `GET /api/health/fill-ws` — Full health: connected, has_credentials, trade_events, confirmed_fills, etc.
-  - `GET /api/status` — stats.health includes fill_ws_connected, fill_ws_has_credentials, fill_ws_health, fill_update_method
-  - `GET /api/execution/status` — live_adapter includes fill_ws_health, fill_update_method, poll_interval_seconds
-- **WebSocket broadcast**: Includes fill WS health data in every snapshot (2s interval)
-- **Frontend Overview page**: System Status shows "Fill Updates: polling" and "Fill WS: no credentials/connected/disconnected"
-- Testing: 29/29 backend API + all frontend UI passed (100%) — `/app/test_reports/iteration_24.json`
-
-### P7 — Global Analytics Dashboard (Complete, 2026-03-16)
-- **GlobalAnalyticsService** (`/app/backend/services/global_analytics_service.py`): Aggregates shadow-mode strategy quality metrics
-  - Strategy performance: signals, executions, fills, win rate, PnL, per-strategy breakdown (weather, arb, sniper)
-  - Forecast quality: global MAE/bias, error distribution histogram, per-station metrics from MongoDB forecast_accuracy
-  - Liquidity insights: avg/min/max liquidity scores, rejection breakdown with percentages
-  - Timeseries: cumulative PnL curve, daily PnL, signal frequency by strategy
-- **API endpoint**: `GET /api/analytics/global` — returns full report with 4 sections
-- **Frontend**: `/global-analytics` page with 4 tabs:
-  - Performance: 6 stat cards + aggregate performance + per-strategy cards (weather, arb, sniper)
-  - Forecast Quality: MAE/bias/calibration stat cards + error distribution histogram (color-coded: green <=2F, yellow <=4F, red >4F) + station metrics table
-  - Liquidity: score cards + rejection breakdown with progress bars + horizontal bar chart
-  - Charts: cumulative PnL area chart + daily P&L bar chart + stacked signal frequency chart
-- **Navigation**: Globe icon in sidebar between Analytics and Risk
-- Testing: 25/25 backend + 100% frontend passed — `/app/test_reports/iteration_25.json`
-
-### P8 — Automated Forecast Resolution (Complete, 2026-03-16)
-- **AutoResolverService** (`/app/backend/services/auto_resolver_service.py`):
-  - Background job: first pass 30s after startup, then every 6h (configurable via `AUTO_RESOLVER_INTERVAL_HOURS`)
-  - Scans `forecast_accuracy` for unresolved records whose target_date <= yesterday (UTC)
-  - Groups by station → batch-fetches observed daily highs from Open-Meteo Archive API
-  - Resolves via existing `ForecastAccuracyService.resolve_forecast()` (computes error, abs_error, marks resolved)
-  - Triggers `RollingCalibrationService.run_rolling_calibration()` after resolving new records
-  - Safety: never overwrites resolved records, never fabricates data, graceful on API errors
-  - Rate-limited: 0.5s between station API calls
-- **Results on first run**: 9 records auto-resolved across 5 stations (KATL, KDFW, KLGA, KMIA, KORD)
-  - Global MAE improved from 4.3F → 1.7F
-  - Global Bias improved from -4.3F → -0.1F
-  - Error distribution now spans 9 bins (was 1)
-- **API endpoints**:
-  - `GET /api/health/auto-resolver` — health with running, interval, total_runs, pending_records, etc.
-  - `POST /api/auto-resolver/run` — manual trigger, returns {resolved, pending, skipped, errors}
-  - Weather health (`/api/strategies/weather/health`) now includes `auto_resolver` object
-  - Global analytics (`/api/analytics/global`) now includes `auto_resolver` object
-- **Frontend**: Forecast Quality tab in Global Analytics shows Auto-Resolver section with status, interval, run counts, pending
-- Testing: 22/22 backend + 100% frontend passed — `/app/test_reports/iteration_26.json`
-
-### P9 — Crypto Sniper Classifier + Targeted Slug Discovery (Complete, 2026-03-16)
-- **Slug classification**: `{asset}-updown-{window}-{ts}`, `{asset}-up-or-down-{date}`, `{asset}-above-{price}`, `will-{asset}-hit-{price}`
-- **Question fallback**: "hit/reach/dip", "above/below", "between X and Y", "Up or Down"
-- **Strike parsing**: "k" (x1000), "m" (x1M)
-- **Targeted Slug Discovery** (`market_data.py`):
-  - Layer 1 (Broad): `/markets?limit=500` every 60s
-  - Layer 2 (Targeted Slug Construction): For each (asset × window) combo, compute current time boundary, generate exact slugs for current + next 3 windows, query `GET /events?slug={exact_slug}` — returns 0 or 1 event per query. Runs every 15s.
-  - CLOB midpoint enrichment for top-volume + crypto markets every 15s
-  - `CRYPTO_UPDOWN_COMBOS`: btc/eth × 5m/15m/1h/4h = 8 combos × 4 lookahead = 32 slug queries
-  - Stats: `GET /api/health/discovery` — includes `crypto_active_slugs` list
-- **Live results**: 24 active markets discovered (BTC=12, ETH=12) across 5m/15m/4h. 1h confirmed not available on Polymarket. 25 classified, 25 evaluated, 57 signals generated.
-- **Previous approach (replaced)**: Paginated 3000 `/events` — too slow and missed short-lived markets
-- Testing: 16/16 backend — `/app/test_reports/iteration_31.json`
-
-### P9A — Crypto Sniper Shadow Execution (Complete, 2026-03-16)
-- **Root cause of blocked executions**: Global `max_concurrent_positions=10` was fully consumed by weather trader positions; sniper signals passed all strategy filters but were rejected by the risk engine
-- **Risk config changes**: `max_concurrent_positions` 10→30, `max_market_exposure` 50→100 (conservative increase for paper mode)
-
-
-### P9C — Railway Deployment Configuration (Complete, 2026-03-16)
-- **Deployment files**: `requirements.txt` (19 packages), `Procfile`, `railway.toml`, `nixpacks.toml`
-- **Auto-start engine**: All background services boot automatically during FastAPI lifespan
-- **Dynamic PORT**: `__main__` block reads `PORT` env var for Railway networking
-- **MONGO_URI support**: Checks `MONGO_URI` first (Railway), falls back to `MONGO_URL` (Emergent)
-- **Health endpoint**: `GET /health` and `GET /api/health` return `{status: "ok", engine, strategies, resolver, mode}`
-
-### P9D — Frontend on Railway + Telegram Cleanup (Complete, 2026-03-16)
-- **Frontend serving**: React build served by FastAPI with static mount + SPA catch-all (`index.html` for all non-API routes)
-- **Build config**: `railway.toml` buildCmd installs Node/yarn, builds frontend with `REACT_APP_BACKEND_URL=` (same-origin)
-- **SPA routing**: All 10 dashboard pages work with page refresh (Overview, Positions, Analytics, Global Analytics, Weather, Sniper, Arbitrage, Risk, Markets, Settings)
-- **Frontend API**: `constants.js` defaults `BACKEND_URL` to empty string → same-origin API calls
-- **Telegram cleanup**: Rewritten to ONLY send on trade close/resolution:
-  - Listens for: `ORDER_UPDATE` (status=closed), `SYSTEM_EVENT` (market_resolver)
-  - Ignores: signals, opens, scanner activity, diagnostics
-  - Alert format: strategy, market, side/outcome, entry/exit price, PnL, ROI%, timestamp
-- Testing: 23/23 backend + 10/10 frontend visual — `/app/test_reports/iteration_35.json`
-
-### P9E — Analytics Pipeline Fix (Complete, 2026-03-16)
-- **Root Cause (Production)**: Dashboard showed 0 closed trades, 0 PnL, 0 win rate after every Railway restart because:
-  1. **No startup reconstruction**: `PersistenceService` wrote trades to MongoDB via 10s write-behind flush, but **never loaded them back on startup**. `StateManager.__init__()` started with empty `trades=[]`, `daily_pnl=0`, `win_count=0`.
-  2. **Timeseries included open trades**: `GlobalAnalyticsService.get_signal_timeseries()` iterated ALL trades (including pnl=0 open trades), flattening the cumulative PnL equity curve.
-  3. **Test inject bypassed counters**: `POST /test/inject-trades` used `state.trades.append()` instead of `state.add_trade()`, so stats counters never incremented.
-- **Fixes Applied**:
-  - `persistence.py`: Added `load_state_from_db()` — loads all trades from MongoDB `trades` collection, reconstructs `win_count`, `loss_count`, `daily_pnl` (today only) counters, loads positions from `positions_snapshots`, sets `_last_trade_idx` to prevent duplication on flush
-  - `server.py`: Calls `await engine.persistence.load_state_from_db(state)` during lifespan startup before strategies register
-  - `global_analytics_service.py`: `get_signal_timeseries()` filters to closed trades (pnl!=0) for cumulative PnL; signal frequency uses all trades
-  - `server.py`: `inject-trades` now uses `state.add_trade()`; `clear-trades` recomputes counters
-- **Production Behavior After Fix**: After Railway restart, dashboard immediately shows historical 356 closed trades, 200W/156L (56.2% win rate), +$178.21 realized PnL, full equity curve, matching Telegram alerts
-- **Data Consistency**: `/api/status`, `/api/analytics/global`, `/api/analytics/pnl-history` all return matching close_count, win_rate, realized_pnl
-- Testing: 11/11 backend + 8/8 frontend (100%) — `/app/test_reports/iteration_37.json`
-
-### P9F — Diagnostics & Environment Visibility (Complete, 2026-03-16)
-- **Root Cause of Railway vs Emergent Discrepancy**:
-  1. Railway is running OLD code (pre-`load_state_from_db` fix) — doesn't have `/api/diagnostics` endpoint
-  2. Railway and Emergent use **completely separate MongoDB databases** (Railway: external MongoDB, Emergent: `test_database@localhost:27017`)
-  3. Railway starts fresh in-memory state on every deploy with 0 trades loaded from DB
-  4. Code changes require user to "Save to Github" → Railway auto-deploys from GitHub
-- **Fixes Applied**:
-  - `server.py`: Added `/api/diagnostics` endpoint showing git_commit, environment (railway/emergent_preview/local), DB name+host, server_start_time, trades_loaded_from_db count, `has_persistence_reload` flag
-  - `server.py`: Added `_detect_environment()`, `_detect_git_commit()`, `_load_build_info()` helpers
-  - `Dockerfile`: Generates `build_info.json` with timestamps, embeds `REACT_APP_BUILD_TIME` in frontend build
-  - `DiagnosticsFooter.jsx`: Fixed footer bar showing env/commit/db/boot/loaded-trades/db-reload-status
-  - `AppShell.jsx`, `dashboardStore.js`, `useApi.js`: Wired diagnostics data fetch
-- **What User Must Do**: Push to GitHub via "Save to Github" to deploy the `load_state_from_db` + diagnostics fixes to Railway. After Railway redeploy, the diagnostics footer will confirm the code version and database being used.
-- Testing: 14/14 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_38.json`
-
-### P9G — Production Resolver & Market Snapshot Persistence (Complete, 2026-03-16)
-- **Root Cause of Stale Chart on Railway**:
-  1. **Market data not persisted for positions**: After restart, positions are loaded from the snapshot but their associated `MarketSnapshot` objects (containing `end_date`, `condition_id`, `complement_token_id`) are NOT loaded. The `state.markets` dict starts empty. The resolver calls `get_market(token_id)` → returns None → skips all positions.
-  2. **MarketSnapshot loading bug**: Initial implementation used `mdoc.pop("token_id")` which removed the required `token_id` field before constructing the model, causing silent failure.
-  3. **No diagnostic visibility**: The resolver silently skipped positions without logging WHY, making it impossible to diagnose from the dashboard.
-  4. **No staleness info on pnl-history**: No way to tell if the chart data is stale (last close could be hours ago).
-- **Fixes Applied**:
-  - `persistence.py`: `_flush()` now persists market snapshots alongside position snapshots; `load_state_from_db()` loads them back on startup using `MarketSnapshot(**mdoc)`
-  - `market_resolver_service.py`: Added `skip_reasons` dict tracking `no_market`, `no_end_date`, `not_expired`, `already_checked` — exposed in `_stats['skip_reasons']`
-  - `server.py`: `/api/analytics/pnl-history` now returns `latest_close_at` and `server_time` for staleness detection; `/api/diagnostics` includes resolver stats
-- **Result**: After restart, `no_market` skips reduced from 36→11 (25 market snapshots loaded from DB). Remaining 11 positions lack market data in both DB and live feed. 25 weather positions correctly skipped with `no_end_date` (handled by auto_resolver, not market_resolver).
-- Testing: 13/13 backend + 13/13 frontend (100%) — `/app/test_reports/iteration_39.json`
-
-### P9H — Crypto Sniper Market Discovery Fix (Complete, 2026-03-17)
-- **Root Cause**: `RiskConfig.max_concurrent_positions` defaulted to 10. On Railway, 10 weather positions loaded from DB snapshot filled all 10 slots → risk engine rejected every crypto signal with `"max concurrent positions"`. Sniper discovered 25 markets and generated 505 signals but 0 executed.
-- **Fixes Applied**:
-  - `models.py`: Changed `max_concurrent_positions` default from 10 to 25 (allows 10 weather + 15 crypto)
-  - `config_service.py`: Added migration — if DB config has `max_concurrent_positions==10` (old default), auto-upgrades to new default of 25 on startup
-- **Result**: After fix + vol warmup (~4min), sniper generated 112 signals, opened 16 new crypto positions, resolver closed 4 expired positions in real-time. PnL curve updated with latest close at 23:50 UTC.
-- Testing: 14/14 backend + 5/5 frontend (100%) — `/app/test_reports/iteration_40.json`
-
-### P9I — P&L Chart Timestamp Fix (Complete, 2026-03-17)
-- **Root Cause**: `formatChartTime()` used `toLocaleTimeString()` which: (a) showed only HH:MM with no date — so data from March 16 looked "old" when viewed on March 17, (b) used browser local time instead of UTC — timestamps didn't match Telegram/server times.
-- **Fixes Applied**:
-  - `PnlChart.jsx`: Replaced `toLocaleTimeString` with explicit UTC formatting (`getUTCHours`/`getUTCMinutes`). Added `formatChartDate` (MM/DD HH:MM) and `buildTickFormatter` that auto-switches to date format when data spans >18h. Tooltip always shows full `MM/DD HH:MM UTC`. Chart header displays "last close MM/DD HH:MM UTC" staleness indicator.
-  - `dashboardStore.js`: Added `latest_close_at` and `server_time` to `pnlHistory` default.
-- Testing: 8/8 backend + 5/5 frontend (100%) — `/app/test_reports/iteration_41.json`
-
-### P10 — Future
-- **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
-- **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
-- **Live results**: 23 executions, 23 fills (100% fill rate), PnL tracking active across 19 open positions
-- **Safety preserved**: Paper mode enforced (no live credentials), conservative sizing ($3 default), bounded positions (max 30), bounded exposure ($100)
-- Testing: 12/12 backend — `/app/test_reports/iteration_32.json`
-
-### P9B — Global Market Resolver (Complete, 2026-03-16)
-- **MarketResolverService** (`/app/backend/services/market_resolver_service.py`):
-  - Runs every 30s, iterates ALL open positions regardless of strategy
-  - For expired positions (end_date < now), queries Gamma API using `clob_token_ids` (not condition_id, which is non-unique across Polymarket)
-  - When market is closed + outcomePrices show 1/0 split: computes realized PnL, records closing TradeRecord (strategy_id=resolver), removes position from state
-  - Handles both sides of a market (Up/Down) via complement_token_id sibling resolution
-  - Stats: `GET /api/health/market-resolver`, manual trigger: `POST /api/market-resolver/run`
-- **Positions API enriched** (`GET /api/positions`): Now includes `end_date`, `time_to_expiry_seconds`, `expired`, `resolved` per position
-- **Frontend Positions UI** (`Positions.jsx`):
-  - "Expires In" column: countdown (s/m/h/d) for crypto positions, "—" for weather
-  - "Status" column: Active (green), Expiring (amber, <5m), Expired (red) badges
-  - "Expired" stat card in header
-- **Live results**: 2 positions resolved (BTC+ETH 5m), +$7.90 realized PnL, 2 wins / 0 losses
-- Testing: 15/15 backend + frontend — `/app/test_reports/iteration_33.json`
-- Copy trading skeleton
-- Manual order entry
+## Testing Status
+- Backend: 29/29 tests passed (iteration_42)
+- Frontend: All UI features verified
+- No known regressions
