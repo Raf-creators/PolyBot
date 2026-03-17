@@ -1,0 +1,176 @@
+{
+  "summary": "Iteration 49: Tested all 5 priorities - Controlled Calibration (P1), Overconfidence Sigma Widening (P2), Calibration Metrics Segmentation (P3), Asymmetric Weather Summary (P4), Weather-by-Type PnL (P5). All 14 backend tests pass, all frontend UI features verified.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "P1+P2: GET /api/strategies/weather/health returns sigma_pipeline with overconfidence_multiplier=1.25 - PASS",
+      "P1+P2: sigma_pipeline has calibration_max_adjustment_pct=0.25 (±25% cap) - PASS",
+      "P1+P2: sigma_pipeline has calibration_min_samples=30 - PASS",
+      "P1+P2: sigma_pipeline status='widened_temporary' when multiplier > 1.0 - PASS",
+      "P1+P2: Config has sigma_overconfidence_multiplier, calibration_max_adjustment_pct, calibration_min_samples_per_segment - PASS",
+      "P3: GET /api/strategies/weather/calibration/metrics returns brier_score, coverage_1sigma, calibration_error - PASS",
+      "P3: Calibration metrics has by_lead_bracket breakdown - PASS",
+      "P3: Calibration metrics has by_market_type breakdown - PASS",
+      "P3: Calibration metrics has calibration_curve and sigma_evolution - PASS",
+      "P4: GET /api/strategies/weather-asymmetric/summary returns open_positions, realized_pnl, unrealized_pnl, wins, losses, win_rate, config, metrics - PASS",
+      "P4: Asymmetric config has enabled, max_market_price, min_model_prob, min_edge fields - PASS",
+      "P5: GET /api/analytics/weather-by-type returns all 4 types (temperature, precipitation, snowfall, wind) - PASS",
+      "P5: Each weather type has buy_count, close_count, realized_pnl, unrealized_pnl, wins, losses, win_rate - PASS",
+      "GET /api/health returns status=ok - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with stats grid showing 54 open positions - PASS",
+      "Calibration tab shows Sigma Pipeline section with 1.25x overconfidence multiplier ACTIVE badge - PASS",
+      "Calibration tab shows Calibration Guardrails: ±25% Max Adjustment, 30 Min Samples, 5 Current Samples - PASS",
+      "Calibration tab shows Calibration Status: Blending (5/30) - model blending calibration with defaults - PASS",
+      "Calibration tab shows Brier Score 1.064, 1σ Coverage 40.0%, 2σ Coverage 80.0%, Calibration Error 0.283 - PASS",
+      "Calibration tab shows Over-confident 60% and Under-confident 20% metrics - PASS",
+      "Calibration tab shows Calibration by Forecast Horizon: 0-24h with avg_error=2.34F, avg_sigma=1.84F, sigma_rec=3.47F, OVERCONFIDENT badge - PASS",
+      "Calibration tab shows Calibration by Market Type: TEMPERATURE n=5 with coverage 40.0%, brier 1.0639 - PASS",
+      "Calibration tab shows Calibration Curve: Pred 1.84F vs Actual 2.34F, Ratio 1.27x - PASS",
+      "Asymmetric tab shows summary cards: 0 Open Positions, +$0.00 Realized/Unrealized, 0 Signals, 0% Win Rate - PASS",
+      "Asymmetric tab shows config: ENABLED, 25¢ Max Price, 40% Min Model Prob, 15% Min Edge, $5 Default Size, 10 Max Positions - PASS",
+      "Asymmetric tab shows Open Asymmetric Positions table (empty with helpful message) - PASS",
+      "Asymmetric tab shows Performance section with Total Risk $0.00, Max Reward $0.00 - PASS",
+      "By Type tab shows all 4 weather types as cards - PASS",
+      "By Type tab TEMPERATURE card shows: 778/0 Buys/Closes, 9 Open, +$0.00 Realized, -$0.10 Unrealized, $264.5 Total Size - PASS",
+      "By Type tab shows PRECIPITATION, SNOWFALL, WIND cards with 'No X trades yet' messages - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "P1_Controlled_Calibration": {
+      "status": "PASS",
+      "details": [
+        "calibration_max_adjustment_pct=0.25 caps sigma adjustments within ±25% of defaults",
+        "calibration_min_samples_per_segment=30 requires 30 samples before using calibrated sigma",
+        "Current status shows Blending (5/30) - using weighted blend until 30 samples reached",
+        "Weather health endpoint correctly exposes all calibration guardrails in sigma_pipeline section"
+      ]
+    },
+    "P2_Overconfidence_Sigma_Widening": {
+      "status": "PASS",
+      "details": [
+        "sigma_overconfidence_multiplier=1.25 widens all sigma values by 25%",
+        "sigma_pipeline.status='widened_temporary' clearly indicates widening is active",
+        "sigma_pipeline.overconfidence_active=true confirms feature is enabled",
+        "Frontend shows '1.25x' with ACTIVE badge and explanation: 'All sigma values widened by 25%'"
+      ]
+    },
+    "P3_Calibration_Metrics_Segmentation": {
+      "status": "PASS",
+      "details": [
+        "by_lead_bracket segments metrics by forecast horizon (0-24h, 24-48h, etc.)",
+        "by_market_type segments by weather type (temperature currently has all 5 records)",
+        "calibration_curve shows predicted vs actual error with ratio for visual calibration assessment",
+        "sigma_evolution tracks recent forecasts with z-scores for trend analysis",
+        "Frontend displays all segments with proper formatting and OVERCONFIDENT/UNDERCONFIDENT badges"
+      ]
+    },
+    "P4_Asymmetric_Weather_Summary": {
+      "status": "PASS",
+      "details": [
+        "GET /api/strategies/weather-asymmetric/summary returns complete asymmetric strategy data",
+        "Config exposed: enabled=true, max_market_price=0.25, min_model_prob=0.4, min_edge=0.15, default_size=5, max_positions=10",
+        "Performance metrics: realized_pnl, unrealized_pnl, wins, losses, win_rate all present",
+        "Frontend shows Total Risk and Max Reward calculations for open positions",
+        "No asymmetric positions yet (requires contracts priced ≤25¢ with ≥40% model probability)"
+      ]
+    },
+    "P5_Weather_By_Type_PnL": {
+      "status": "PASS",
+      "details": [
+        "GET /api/analytics/weather-by-type returns breakdown for all 4 weather types",
+        "Temperature: 778 buys, 9 open positions, $264.54 total size, -$0.10 unrealized PnL",
+        "Precipitation, Snowfall, Wind: 0 trades each (recently added market types)",
+        "Each type has: buy_count, close_count, open_positions, total_size, realized_pnl, unrealized_pnl, wins, losses, win_rate",
+        "Frontend shows cards for each type with proper coloring (amber=temp, blue=precip, cyan=snow, teal=wind)"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "sigma_pipeline": {
+      "overconfidence_multiplier": 1.25,
+      "calibration_max_adjustment_pct": 0.25,
+      "calibration_min_samples": 30,
+      "overconfidence_active": true,
+      "status": "widened_temporary"
+    },
+    "calibration_metrics": {
+      "status": "computed",
+      "total_valid": 5,
+      "brier_score": 1.0639,
+      "coverage_1sigma": 0.4,
+      "coverage_2sigma": 0.8,
+      "calibration_error": 0.2827,
+      "over_confident_pct": 0.6,
+      "under_confident_pct": 0.2,
+      "by_lead_bracket": ["0_24"],
+      "by_market_type": ["temperature"]
+    },
+    "asymmetric_summary": {
+      "open_positions": [],
+      "position_count": 0,
+      "realized_pnl": 0,
+      "unrealized_pnl": 0,
+      "config": {
+        "enabled": true,
+        "max_market_price": 0.25,
+        "min_model_prob": 0.4,
+        "min_edge": 0.15,
+        "default_size": 5,
+        "max_positions": 10
+      }
+    },
+    "weather_by_type": {
+      "temperature": {"buy_count": 778, "close_count": 0, "open_positions": 9, "total_size": 264.54, "realized_pnl": 0, "unrealized_pnl": -0.0986},
+      "precipitation": {"buy_count": 0, "close_count": 0, "open_positions": 0, "realized_pnl": 0},
+      "snowfall": {"buy_count": 0, "close_count": 0, "open_positions": 0, "realized_pnl": 0},
+      "wind": {"buy_count": 0, "close_count": 0, "open_positions": 0, "realized_pnl": 0}
+    },
+    "analytics_summary": {
+      "realized_pnl": 142.7047,
+      "total_pnl": 142.7047,
+      "trade_count": 2902
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration49_sigma_calibration.py",
+    "/app/test_reports/pytest/pytest_results_iteration49.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration49_sigma_calibration.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (All UI features verified working)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (5 resolved forecast records, 778 weather trades)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 49 verified all 5 priorities: (1) Controlled calibration with ±25% adjustment cap working - calibrate_sigma() enforces max_adjustment_pct=0.25 guardrail. (2) 1.25x overconfidence sigma widening active - all sigmas multiplied by 1.25 until calibration matures (shown in sigma_pipeline.status='widened_temporary'). (3) Calibration metrics segmented by lead_bracket and market_type - Brier score 1.06, 1σ coverage 40% indicates model is overconfident. (4) Asymmetric summary endpoint working - no positions yet (strict criteria: price≤25¢, prob≥40%, edge≥15%). (5) Weather-by-type breakdown shows 778 temperature trades, 0 for other types (precipitation/snowfall/wind added recently). 54 open weather positions total, realized PnL at $142.70 overall. Sigma trace appears in signal explanations when weather scans run."
+}

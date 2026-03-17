@@ -622,18 +622,27 @@ class WeatherTrader(BaseStrategy):
             month = datetime.now(timezone.utc).month
 
         mtype_str = mtype.value if hasattr(mtype, 'value') else str(mtype)
+        oc_mult = self.config.sigma_overconfidence_multiplier
+        max_adj = self.config.calibration_max_adjustment_pct
+        min_samp = self.config.calibration_min_samples_per_segment
+
         if mtype == WeatherMarketType.TEMPERATURE:
             station = STATION_REGISTRY.get(cm.station_id)
             station_type = station.station_type if station else StationType.INLAND
             calibration = self._calibrations.get(cm.station_id)
-            sigma = calibrate_sigma(lead_hours, month, station_type, calibration)
+            sigma, sigma_trace = calibrate_sigma(
+                lead_hours, month, station_type, calibration,
+                overconfidence_multiplier=oc_mult,
+                max_adjustment_pct=max_adj,
+                min_samples_for_cal=min_samp,
+            )
         else:
-            sigma = get_amount_sigma(mtype_str, lead_hours)
+            sigma, sigma_trace = get_amount_sigma(mtype_str, lead_hours, overconfidence_multiplier=oc_mult)
 
         if sigma > self.config.max_sigma:
             return [self._reject_signal(cm, forecast, mu, sigma, lead_hours, 0, 0,
                                         f"sigma_too_high ({sigma:.1f}F)",
-                                        bucket_label="(all)")]
+                                        bucket_label="(all)", sigma_trace=sigma_trace)]
 
         # --- Compute bucket probabilities ---
         if mtype == WeatherMarketType.TEMPERATURE:
@@ -665,7 +674,7 @@ class WeatherTrader(BaseStrategy):
             if spread_sum_deviation > self.config.max_spread_sum:
                 return [self._reject_signal(cm, forecast, mu, sigma, lead_hours, 0, 0,
                                             f"spread_sum_deviation ({spread_sum_deviation:.3f} > {self.config.max_spread_sum})",
-                                            bucket_label="(all)")]
+                                            bucket_label="(all)", sigma_trace=sigma_trace)]
 
         # --- Evaluate each bucket ---
         buckets_traded = 0
@@ -722,14 +731,14 @@ class WeatherTrader(BaseStrategy):
             if data_age > self.config.max_stale_market_seconds:
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
-                    f"stale_market ({data_age:.0f}s)", bucket_label=bucket.label))
+                    f"stale_market ({data_age:.0f}s)", bucket_label=bucket.label, sigma_trace=sigma_trace))
                 continue
 
             # --- Liquidity ---
             if liquidity < self.config.min_liquidity:
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
-                    f"low_liquidity ({liquidity:.0f})", bucket_label=bucket.label))
+                    f"low_liquidity ({liquidity:.0f})", bucket_label=bucket.label, sigma_trace=sigma_trace))
                 continue
 
             # --- Liquidity score filter ---
@@ -741,7 +750,7 @@ class WeatherTrader(BaseStrategy):
                     f"liquidity_too_low (score {liq_score:.0f} < {self.config.min_liquidity_score:.0f})",
                     bucket_label=bucket.label,
                     model_prob=prob, market_price=market_price,
-                    liquidity_score=liq_score))
+                    liquidity_score=liq_score, sigma_trace=sigma_trace))
                 continue
 
             # --- Edge threshold ---
@@ -779,6 +788,7 @@ class WeatherTrader(BaseStrategy):
                             "expected_payoff_pct": expected_payoff,
                             "risk_reward": f"Risk ${asym_size * market_price:.2f} for potential ${asym_size * (1.0 - market_price):.2f}",
                             "confidence": round(bucket_confidence, 3),
+                            "sigma_trace": sigma_trace,
                             "thesis": f"Asymmetric: Market prices {bucket.label} at {market_price:.0%} but model says {prob:.0%}. "
                                       f"If correct, {expected_payoff:.0f}% return. Hold to resolution.",
                         }
@@ -815,7 +825,7 @@ class WeatherTrader(BaseStrategy):
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     f"edge {edge_bps:.0f}bps < {self.config.min_edge_bps:.0f}bps",
                     bucket_label=bucket.label,
-                    model_prob=prob, market_price=market_price))
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
             # --- Confidence ---
@@ -852,6 +862,7 @@ class WeatherTrader(BaseStrategy):
                             "raw_edge": round(raw_edge, 4),
                             "expected_payoff_pct": expected_payoff,
                             "confidence": round(bucket_confidence, 3),
+                            "sigma_trace": sigma_trace,
                             "thesis": f"Asymmetric: Market prices {bucket.label} at {market_price:.0%} but model says {prob:.0%}. "
                                       f"If correct, {expected_payoff:.0f}% return. Hold to resolution.",
                         }
@@ -883,7 +894,7 @@ class WeatherTrader(BaseStrategy):
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     f"confidence {confidence:.3f} < {self.config.min_confidence}",
                     bucket_label=bucket.label,
-                    model_prob=prob, market_price=market_price))
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
             # --- Cooldown ---
@@ -895,7 +906,7 @@ class WeatherTrader(BaseStrategy):
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     "kill_switch_active", bucket_label=bucket.label,
-                    model_prob=prob, market_price=market_price))
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
             # --- Concurrency ---
@@ -903,7 +914,7 @@ class WeatherTrader(BaseStrategy):
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     "max_concurrent_signals", bucket_label=bucket.label,
-                    model_prob=prob, market_price=market_price))
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
             # --- Max buckets per market ---
@@ -911,7 +922,7 @@ class WeatherTrader(BaseStrategy):
                 signals.append(self._reject_signal(
                     cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
                     "max_buckets_per_market", bucket_label=bucket.label,
-                    model_prob=prob, market_price=market_price))
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
             # --- Tradable signal ---
@@ -957,6 +968,7 @@ class WeatherTrader(BaseStrategy):
                 "confidence": round(confidence, 3),
                 "liquidity_score": round(liq_score, 1),
                 "quality_score": quality_score,
+                "sigma_trace": sigma_trace,
                 "thesis": self._build_thesis(mu, sigma, bucket, prob, market_price, edge_bps),
             }
 
@@ -1000,7 +1012,7 @@ class WeatherTrader(BaseStrategy):
         self, cm, forecast, mu, sigma, lead_hours,
         forecast_age_min, data_age, reason,
         bucket_label="", model_prob=0.0, market_price=0.0,
-        liquidity_score=0.0,
+        liquidity_score=0.0, sigma_trace=None,
     ) -> WeatherSignal:
         """Create a rejected signal for the log and update metrics."""
         self._m["opportunities_rejected"] += 1
@@ -1025,6 +1037,8 @@ class WeatherTrader(BaseStrategy):
             "market_price": round(market_price, 4),
             "rejection_reason": reason,
         }
+        if sigma_trace:
+            explanation["sigma_trace"] = sigma_trace
 
         return WeatherSignal(
             condition_id=cm.condition_id,
@@ -1295,6 +1309,17 @@ class WeatherTrader(BaseStrategy):
                 getattr(self.config, k, None) == v
                 for k, v in SHADOW_CONFIG_OVERRIDES.items()
             ),
+            "sigma_pipeline": {
+                "overconfidence_multiplier": self.config.sigma_overconfidence_multiplier,
+                "calibration_max_adjustment_pct": self.config.calibration_max_adjustment_pct,
+                "calibration_min_samples": self.config.calibration_min_samples_per_segment,
+                "overconfidence_active": self.config.sigma_overconfidence_multiplier != 1.0,
+                "status": (
+                    "widened_temporary" if self.config.sigma_overconfidence_multiplier > 1.0
+                    else "narrowed_temporary" if self.config.sigma_overconfidence_multiplier < 1.0
+                    else "neutral"
+                ),
+            },
             "feed_health": self._feed.health,
             "clob_ws_health": self._clob_ws.health if self._clob_ws else {"connected": False, "note": "not_configured"},
             "alert_stats": self._alert_service.get_stats() if self._alert_service else {"enabled": False},

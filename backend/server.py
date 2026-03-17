@@ -1621,6 +1621,102 @@ async def get_weather_stations():
     return weather_trader_ref.get_stations()
 
 
+@api_router.get("/analytics/weather-by-type")
+async def get_weather_by_market_type():
+    """PnL and trade breakdown by weather market type (temp, precip, snow, wind).
+
+    Parses the market question text of weather trades to identify the market type,
+    then aggregates realized PnL, unrealized PnL, trade counts, and win rates.
+    """
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+
+    type_data = {}
+    for mt in ("temperature", "precipitation", "snowfall", "wind"):
+        type_data[mt] = {
+            "buy_count": 0,
+            "close_count": 0,
+            "realized_pnl": 0.0,
+            "wins": 0,
+            "losses": 0,
+            "total_size": 0.0,
+        }
+
+    # Aggregate trades
+    for t in state.trades:
+        sid = t.strategy_id or ""
+        if sid not in ("weather_trader", "weather_asymmetric"):
+            continue
+        # Try to determine market type from the question text
+        q = t.market_question or ""
+        mt_guess = "temperature"  # default
+        ql = q.lower()
+        if "rain" in ql or "precip" in ql or "inch" in ql:
+            mt_guess = "precipitation"
+        elif "snow" in ql:
+            mt_guess = "snowfall"
+        elif "wind" in ql or "mph" in ql or "gust" in ql:
+            mt_guess = "wind"
+
+        bucket = type_data.get(mt_guess, type_data["temperature"])
+        if t.side.value == "buy":
+            bucket["buy_count"] += 1
+            bucket["total_size"] += t.size
+        else:
+            bucket["close_count"] += 1
+            bucket["realized_pnl"] += t.pnl
+            if t.pnl > 0:
+                bucket["wins"] += 1
+            elif t.pnl < 0:
+                bucket["losses"] += 1
+
+    # Add unrealized from open positions
+    for pos in state.positions.values():
+        sid = getattr(pos, "strategy_id", "") or ""
+        if sid not in ("weather_trader", "weather_asymmetric"):
+            continue
+        q = pos.market_question or ""
+        mt_guess = "temperature"
+        ql = q.lower()
+        if "rain" in ql or "precip" in ql or "inch" in ql:
+            mt_guess = "precipitation"
+        elif "snow" in ql:
+            mt_guess = "snowfall"
+        elif "wind" in ql or "mph" in ql or "gust" in ql:
+            mt_guess = "wind"
+
+        bucket = type_data.get(mt_guess, type_data["temperature"])
+        snap = state.get_market(pos.token_id)
+        current_price = snap.mid_price if snap else pos.current_price
+        unrealized = round((current_price - pos.avg_cost) * pos.size, 4) if current_price else 0
+        bucket["unrealized_pnl"] = bucket.get("unrealized_pnl", 0.0) + unrealized
+        bucket["open_positions"] = bucket.get("open_positions", 0) + 1
+
+    # Format output
+    result = {}
+    for mt, data in type_data.items():
+        realized = round(data["realized_pnl"], 4)
+        unrealized = round(data.get("unrealized_pnl", 0), 4)
+        closes = data["close_count"]
+        w = data["wins"]
+        l = data["losses"]
+        result[mt] = {
+            "buy_count": data["buy_count"],
+            "close_count": closes,
+            "open_positions": data.get("open_positions", 0),
+            "total_size": round(data["total_size"], 2),
+            "realized_pnl": realized,
+            "unrealized_pnl": unrealized,
+            "total_pnl": round(realized + unrealized, 4),
+            "wins": w,
+            "losses": l,
+            "win_rate": round(w / max(w + l, 1) * 100, 1),
+        }
+
+    return result
+
+
+
 # ---- Forecast Accuracy & Calibration Endpoints ----
 
 

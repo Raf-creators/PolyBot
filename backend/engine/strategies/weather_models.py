@@ -88,6 +88,12 @@ class WeatherConfig(BaseModel):
     rolling_recalc_interval_hours: float = 168.0            # recalculate weekly (168h)
     rolling_recalc_after_n_records: int = 20                # OR recalculate after N new records
 
+    # Overconfidence correction (temporary, reduce when calibration matures)
+    sigma_overconfidence_multiplier: float = 1.25           # global sigma widening (1.0 = off, 1.25 = +25%)
+    # Controlled calibration guardrails
+    calibration_max_adjustment_pct: float = 0.25            # cap calibration sigma within ±25% of defaults
+    calibration_min_samples_per_segment: int = 30           # min samples to apply per lead/type segment
+
     # Liquidity score filter
     min_liquidity_score: float = 35.0                       # 0-100, skip buckets scoring below this
 

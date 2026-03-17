@@ -90,47 +90,72 @@ def calibrate_sigma(
     month: int,
     station_type: StationType,
     calibration: Optional[SigmaCalibration] = None,
-) -> float:
-    """Compute calibrated forecast standard deviation in degrees F.
+    overconfidence_multiplier: float = 1.0,
+    max_adjustment_pct: float = 0.25,
+    min_samples_for_cal: int = 30,
+) -> tuple:
+    """Compute calibrated forecast sigma in degrees F.
 
-    Combines:
-      1. Base sigma from lead-time bracket (from calibration or defaults)
-      2. Seasonal multiplier
-      3. Station-type multiplier (coastal vs inland)
-
-    Returns sigma clamped to [_SIGMA_FLOOR, _SIGMA_CEILING].
-    If calibration data is weak (sample_count < 30), blends toward defaults.
+    Returns ``(sigma, trace)`` where *trace* is a dict describing every
+    step of the pipeline so callers can log / display it.
     """
-    # Base sigma from lead-time bracket
     bracket = _lead_hours_to_bracket(lead_hours)
+    default_sigma = _DEFAULT_SIGMA_TABLE[bracket]
 
-    if calibration and calibration.sample_count >= 30:
-        base_sigma = calibration.sigma_by_lead_hours.get(
-            bracket,
-            _DEFAULT_SIGMA_TABLE[bracket],
-        )
+    source = "default"
+    cal_sample_count = 0
+    cal_raw_sigma = None
+    capped = False
+
+    if calibration and calibration.sample_count >= min_samples_for_cal:
+        raw_cal = calibration.sigma_by_lead_hours.get(bracket, default_sigma)
+        cal_raw_sigma = raw_cal
+        cal_sample_count = calibration.sample_count
+        lower = default_sigma * (1.0 - max_adjustment_pct)
+        upper = default_sigma * (1.0 + max_adjustment_pct)
+        base_sigma = max(lower, min(raw_cal, upper))
+        capped = (raw_cal < lower or raw_cal > upper)
+        source = "calibrated_capped" if capped else "calibrated"
         seasonal_table = calibration.seasonal_factors
         type_factor = calibration.station_type_factor
     elif calibration and calibration.sample_count > 0:
-        # Partial calibration: blend with defaults
-        weight = calibration.sample_count / 30.0
-        cal_sigma = calibration.sigma_by_lead_hours.get(bracket, _DEFAULT_SIGMA_TABLE[bracket])
-        default_sigma = _DEFAULT_SIGMA_TABLE[bracket]
-        base_sigma = weight * cal_sigma + (1 - weight) * default_sigma
+        cal_raw_sigma = calibration.sigma_by_lead_hours.get(bracket, default_sigma)
+        cal_sample_count = calibration.sample_count
+        weight = calibration.sample_count / float(min_samples_for_cal)
+        base_sigma = weight * cal_raw_sigma + (1 - weight) * default_sigma
+        source = "blended"
         seasonal_table = _DEFAULT_SEASONAL_FACTORS
         type_factor = _STATION_TYPE_FACTORS.get(station_type, 1.0)
     else:
-        # No calibration: pure defaults
-        base_sigma = _DEFAULT_SIGMA_TABLE[bracket]
+        base_sigma = default_sigma
         seasonal_table = _DEFAULT_SEASONAL_FACTORS
         type_factor = _STATION_TYPE_FACTORS.get(station_type, 1.0)
 
-    # Seasonal factor
     season = get_season(month)
     seasonal_factor = seasonal_table.get(season.value, 1.0)
+    sigma_before_oc = base_sigma * seasonal_factor * type_factor
 
-    sigma = base_sigma * seasonal_factor * type_factor
-    return max(_SIGMA_FLOOR, min(sigma, _SIGMA_CEILING))
+    # Apply overconfidence multiplier (temporary global widening)
+    sigma_after_oc = sigma_before_oc * overconfidence_multiplier
+
+    final = max(_SIGMA_FLOOR, min(sigma_after_oc, _SIGMA_CEILING))
+
+    trace = {
+        "bracket": bracket,
+        "default_sigma": round(default_sigma, 3),
+        "base_sigma": round(base_sigma, 3),
+        "seasonal_factor": round(seasonal_factor, 3),
+        "type_factor": round(type_factor, 3),
+        "sigma_before_oc": round(sigma_before_oc, 3),
+        "overconfidence_multiplier": overconfidence_multiplier,
+        "sigma_after_oc": round(sigma_after_oc, 3),
+        "final_sigma": round(final, 3),
+        "source": source,
+        "capped": capped,
+        "calibration_raw_sigma": round(cal_raw_sigma, 3) if cal_raw_sigma is not None else None,
+        "sample_count": cal_sample_count,
+    }
+    return final, trace
 
 
 # ---- Bucket Probability ----
@@ -185,32 +210,39 @@ def compute_bucket_probability(
 #   P(X > t) ~ exp(-t / scale) for t > 0, scaled by P(rain).
 
 _PRECIP_SIGMA_TABLE = {
-    "24h": 0.3,     # inches uncertainty at 1 day lead
-    "48h": 0.5,
-    "72h": 0.7,
-    "120h": 1.0,
-    "168h": 1.5,
+    "0_24": 0.3,     # inches uncertainty at 1 day lead
+    "24_48": 0.5,
+    "48_72": 0.7,
+    "72_120": 1.0,
+    "120_168": 1.5,
 }
 
 _SNOW_SIGMA_TABLE = {
-    "24h": 1.0,     # inches uncertainty at 1 day lead
-    "48h": 2.0,
-    "72h": 3.0,
-    "120h": 4.0,
-    "168h": 5.0,
+    "0_24": 1.0,     # inches uncertainty at 1 day lead
+    "24_48": 2.0,
+    "48_72": 3.0,
+    "72_120": 4.0,
+    "120_168": 5.0,
 }
 
 _WIND_SIGMA_TABLE = {
-    "24h": 3.0,     # mph uncertainty at 1 day lead
-    "48h": 5.0,
-    "72h": 7.0,
-    "120h": 10.0,
-    "168h": 12.0,
+    "0_24": 3.0,     # mph uncertainty at 1 day lead
+    "24_48": 5.0,
+    "48_72": 7.0,
+    "72_120": 10.0,
+    "120_168": 12.0,
 }
 
 
-def get_amount_sigma(market_type: str, lead_hours: float) -> float:
-    """Get forecast sigma for non-temperature market types."""
+def get_amount_sigma(
+    market_type: str,
+    lead_hours: float,
+    overconfidence_multiplier: float = 1.0,
+) -> tuple:
+    """Get forecast sigma for non-temperature market types.
+
+    Returns ``(sigma, trace)`` with full pipeline visibility.
+    """
     tables = {
         "precipitation": _PRECIP_SIGMA_TABLE,
         "snowfall": _SNOW_SIGMA_TABLE,
@@ -218,7 +250,23 @@ def get_amount_sigma(market_type: str, lead_hours: float) -> float:
     }
     table = tables.get(market_type, _PRECIP_SIGMA_TABLE)
     bracket = _lead_hours_to_bracket(lead_hours)
-    return table.get(bracket, list(table.values())[-1])
+    base_sigma = table.get(bracket, list(table.values())[-1])
+
+    sigma_after_oc = base_sigma * overconfidence_multiplier
+    final = max(0.01, sigma_after_oc)
+
+    trace = {
+        "bracket": bracket,
+        "default_sigma": round(base_sigma, 3),
+        "base_sigma": round(base_sigma, 3),
+        "overconfidence_multiplier": overconfidence_multiplier,
+        "sigma_after_oc": round(sigma_after_oc, 3),
+        "final_sigma": round(final, 3),
+        "source": "default",
+        "capped": False,
+        "sample_count": 0,
+    }
+    return final, trace
 
 
 def compute_amount_bucket_probability(
