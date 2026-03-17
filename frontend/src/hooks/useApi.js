@@ -38,6 +38,10 @@ export function useApi() {
   const setDiagnostics = useDashboardStore((s) => s.setDiagnostics);
   const applyDemoSnapshot = useDashboardStore((s) => s.applyDemoSnapshot);
   const setWsSnapshot = useDashboardStore((s) => s.setWsSnapshot);
+  const setArbDiagnostics = useDashboardStore((s) => s.setArbDiagnostics);
+  const setSignalQuality = useDashboardStore((s) => s.setSignalQuality);
+  const setWatchdog = useDashboardStore((s) => s.setWatchdog);
+  const setStrategyTracker = useDashboardStore((s) => s.setStrategyTracker);
 
   // Polling fallback for stats — works even when WebSocket is down
   const fetchStatus = useCallback(async () => {
@@ -194,6 +198,34 @@ export function useApi() {
     } catch {}
   }, [setDiagnostics]);
 
+  const fetchArbDiagnostics = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/strategies/arb/diagnostics`);
+      setArbDiagnostics(data);
+    } catch {}
+  }, [prefix, setArbDiagnostics]);
+
+  const fetchSignalQuality = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/analytics/signal-quality`);
+      setSignalQuality(data);
+    } catch {}
+  }, [prefix, setSignalQuality]);
+
+  const fetchWatchdog = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/analytics/watchdog`);
+      setWatchdog(data);
+    } catch {}
+  }, [prefix, setWatchdog]);
+
+  const fetchStrategyTracker = useCallback(async () => {
+    try {
+      const { data } = await api.get(`${prefix}/analytics/strategy-tracker`);
+      setStrategyTracker(data);
+    } catch {}
+  }, [prefix, setStrategyTracker]);
+
   // Load the demo status snapshot (overrides WS-driven top-level state)
   const loadDemoSnapshot = useCallback(async () => {
     try {
@@ -236,6 +268,10 @@ export function useApi() {
     fetchWeatherSignals, fetchWeatherExecutions, fetchWeatherHealth, fetchWeatherForecasts, fetchWeatherAlerts,
     fetchPnlHistory, fetchTickerFeed, fetchWalletStatus,
     fetchDiagnostics,
+    fetchArbDiagnostics,
+    fetchSignalQuality,
+    fetchWatchdog,
+    fetchStrategyTracker,
     loadDemoSnapshot,
     startEngine, stopEngine,
     activateKillSwitch, deactivateKillSwitch,

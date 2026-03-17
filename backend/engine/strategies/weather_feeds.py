@@ -200,86 +200,133 @@ class WeatherFeedManager:
     async def discover_weather_events(self, cities: List[str], days_ahead: int = 5) -> List[dict]:
         """Discover active Polymarket weather temperature events via Gamma API.
 
-        Searches for events matching "highest-temperature-in-{city}" slugs.
-        Returns raw market dicts ready for classify_binary_weather_markets.
+        Uses TWO strategies for full coverage:
+        1. Known city slug probing (fastest, handles known cities)
+        2. Broad keyword search (catches global/unknown cities)
         """
         if not self._session:
             return []
 
         all_markets = []
+        seen_conditions = set()
         from datetime import datetime, timezone
+        import json as _json
 
+        # ---- Strategy 1: Known city slug probing ----
         city_slug_map = {
-            "New York City": "nyc",
-            "Chicago": "chicago",
-            "Los Angeles": "los-angeles",
-            "Atlanta": "atlanta",
-            "Dallas": "dallas",
-            "Miami": "miami",
-            "Denver": "denver",
-            "San Francisco": "san-francisco",
+            "New York City": "nyc", "Chicago": "chicago",
+            "Los Angeles": "los-angeles", "Atlanta": "atlanta",
+            "Dallas": "dallas", "Miami": "miami",
+            "Denver": "denver", "San Francisco": "san-francisco",
+            "Houston": "houston", "Phoenix": "phoenix",
+            "Philadelphia": "philadelphia", "San Antonio": "san-antonio",
+            "San Diego": "san-diego", "Seattle": "seattle",
+            "Boston": "boston", "Nashville": "nashville",
+            "Washington": "washington-dc", "Las Vegas": "las-vegas",
+            "Portland": "portland", "Minneapolis": "minneapolis",
+            "London": "london", "Hong Kong": "hong-kong",
+            "Buenos Aires": "buenos-aires", "Tokyo": "tokyo",
+            "Sydney": "sydney", "Paris": "paris",
+            "Dubai": "dubai", "Singapore": "singapore",
+            "Toronto": "toronto", "Mumbai": "mumbai",
+            "Berlin": "berlin", "Moscow": "moscow",
+            "Seoul": "seoul", "Bangkok": "bangkok",
         }
 
         today = datetime.now(timezone.utc).date()
 
-        for city_name in cities:
+        for city_name in list(set(cities)) + [c for c in city_slug_map if c not in cities]:
             city_slug = city_slug_map.get(city_name)
             if not city_slug:
-                continue
+                # Auto-generate slug from city name
+                city_slug = city_name.lower().replace(" ", "-").replace("'", "")
 
             for day_offset in range(0, days_ahead + 1):
                 target = today + timedelta(days=day_offset)
                 month_name = target.strftime("%B").lower()
-                day_num = target.day
-                year = target.year
-                slug = f"highest-temperature-in-{city_slug}-on-{month_name}-{day_num}-{year}"
+                slug = f"highest-temperature-in-{city_slug}-on-{month_name}-{target.day}-{target.year}"
 
-                try:
-                    async with self._session.get(
-                        GAMMA_API_EVENTS,
-                        params={"slug": slug},
-                    ) as resp:
-                        if resp.status != 200:
-                            continue
+                markets = await self._fetch_slug_markets(slug, seen_conditions)
+                all_markets.extend(markets)
+                await asyncio.sleep(0.1)
+
+        # ---- Strategy 2: Broad keyword search via Gamma search ----
+        search_terms = ["highest temperature", "high temperature", "weather temperature"]
+        for term in search_terms:
+            try:
+                async with self._session.get(
+                    GAMMA_API_EVENTS,
+                    params={"tag": "temperature", "closed": "false", "limit": 100},
+                ) as resp:
+                    if resp.status == 200:
                         events = await resp.json()
-
-                    for event in events:
-                        for m in event.get("markets", []):
-                            clob_ids = m.get("clobTokenIds", "")
-                            if isinstance(clob_ids, str):
-                                import json as _json
-                                try:
-                                    clob_ids = _json.loads(clob_ids)
-                                except (ValueError, TypeError):
-                                    clob_ids = []
-
-                            outcome_prices = m.get("outcomePrices", "")
-                            if isinstance(outcome_prices, str):
-                                import json as _json
-                                try:
-                                    outcome_prices = _json.loads(outcome_prices)
-                                except (ValueError, TypeError):
-                                    outcome_prices = []
-
-                            yes_token = clob_ids[0] if len(clob_ids) > 0 else ""
-                            yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0
-
-                            all_markets.append({
-                                "question": m.get("question", ""),
-                                "condition_id": m.get("conditionId", ""),
-                                "yes_token_id": yes_token,
-                                "mid_price": yes_price,
-                                "liquidity": float(m.get("liquidity", 0)),
-                            })
-
-                except Exception as e:
-                    logger.debug(f"Weather event discovery error for {slug}: {e}")
-                    continue
-
-                await asyncio.sleep(0.15)  # rate limit
+                        for event in (events if isinstance(events, list) else []):
+                            for m in event.get("markets", []):
+                                q = (m.get("question", "") or "").lower()
+                                if "temperature" in q or "temp" in q:
+                                    market = self._parse_gamma_market(m)
+                                    if market and market["condition_id"] not in seen_conditions:
+                                        seen_conditions.add(market["condition_id"])
+                                        all_markets.append(market)
+            except Exception as e:
+                logger.debug(f"Broad weather search error for '{term}': {e}")
+            await asyncio.sleep(0.2)
 
         self._health["weather_events_discovered"] = len(all_markets)
+        self._health["weather_cities_probed"] = len(city_slug_map)
         return all_markets
+
+    async def _fetch_slug_markets(self, slug: str, seen: set) -> List[dict]:
+        """Fetch markets for a specific event slug."""
+        results = []
+        try:
+            async with self._session.get(
+                GAMMA_API_EVENTS, params={"slug": slug},
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                events = await resp.json()
+
+            for event in (events if isinstance(events, list) else []):
+                for m in event.get("markets", []):
+                    market = self._parse_gamma_market(m)
+                    if market and market["condition_id"] not in seen:
+                        seen.add(market["condition_id"])
+                        results.append(market)
+        except Exception as e:
+            logger.debug(f"Slug discovery error for {slug}: {e}")
+        return results
+
+    def _parse_gamma_market(self, m: dict) -> Optional[dict]:
+        """Parse a Gamma API market dict into our standard format."""
+        import json as _json
+        clob_ids = m.get("clobTokenIds", "")
+        if isinstance(clob_ids, str):
+            try:
+                clob_ids = _json.loads(clob_ids)
+            except (ValueError, TypeError):
+                clob_ids = []
+
+        outcome_prices = m.get("outcomePrices", "")
+        if isinstance(outcome_prices, str):
+            try:
+                outcome_prices = _json.loads(outcome_prices)
+            except (ValueError, TypeError):
+                outcome_prices = []
+
+        yes_token = clob_ids[0] if len(clob_ids) > 0 else ""
+        yes_price = float(outcome_prices[0]) if len(outcome_prices) > 0 else 0
+
+        if not yes_token:
+            return None
+
+        return {
+            "question": m.get("question", ""),
+            "condition_id": m.get("conditionId", ""),
+            "yes_token_id": yes_token,
+            "mid_price": yes_price,
+            "liquidity": float(m.get("liquidity", 0)),
+        }
 
     def get_cached_forecast(self, station_id: str, target_date: str) -> Optional[ForecastSnapshot]:
         """Return cached forecast without any network call. Returns None if not cached or stale."""

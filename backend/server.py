@@ -209,11 +209,6 @@ async def lifespan(app: FastAPI):
     await engine.persistence.load_state_from_db(state)
     _trades_loaded_from_db = len(state.trades)
 
-    # Populate strategy tracker from loaded trades (historical performance)
-    for t in state.trades:
-        if t.pnl and t.pnl != 0:
-            strategy_tracker.record_close(t.strategy_id or "unknown", t.pnl)
-
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)
@@ -271,6 +266,9 @@ async def lifespan(app: FastAPI):
         signals_enabled=telegram_notifier.configured,
     )
     await telegram_notifier.start(state, bus)
+
+    # Start strategy tracker with event handlers and watchdog
+    await strategy_tracker.start(state, bus, telegram_notifier)
 
     # Weather alert service
     weather_alert_service = WeatherAlertService()
@@ -471,14 +469,16 @@ async def get_diagnostics():
 @api_router.get("/analytics/strategy-tracker")
 async def get_strategy_tracker():
     """Per-strategy performance, signal diagnostics, and watchdog timestamps."""
-    data = strategy_tracker.snapshot()
+    data = strategy_tracker.get_full_diagnostics()
 
-    # Add per-strategy position counts
-    weather_count = 0
-    nonweather_count = 0
-    by_strategy = {}
-    if state:
+    # Add per-strategy position counts from risk engine
+    if engine and engine.risk_engine:
+        data["position_slots"] = engine.risk_engine.get_slot_diagnostics()
+    elif state:
         from engine.risk import _is_weather_position
+        weather_count = 0
+        nonweather_count = 0
+        by_strategy = {}
         for pos in state.positions.values():
             sid = getattr(pos, "strategy_id", "unknown") or "unknown"
             by_strategy[sid] = by_strategy.get(sid, 0) + 1
@@ -486,19 +486,47 @@ async def get_strategy_tracker():
                 weather_count += 1
             else:
                 nonweather_count += 1
-
-    data["position_slots"] = {
-        "weather": weather_count,
-        "nonweather": nonweather_count,
-        "by_strategy": by_strategy,
-        "limits": {
-            "max_weather": state.risk_config.max_weather_positions if state else 0,
-            "max_nonweather": state.risk_config.max_nonweather_positions if state else 0,
-            "max_global": state.risk_config.max_concurrent_positions if state else 0,
-        },
-    }
+        data["position_slots"] = {
+            "weather_count": weather_count,
+            "nonweather_count": nonweather_count,
+            "total": weather_count + nonweather_count,
+            "by_strategy": by_strategy,
+            "limits": {
+                "max_weather": state.risk_config.max_weather_positions,
+                "max_nonweather": state.risk_config.max_nonweather_positions,
+                "max_global": state.risk_config.max_concurrent_positions,
+            },
+        }
 
     return data
+
+
+
+@api_router.get("/analytics/signal-quality")
+async def get_signal_quality():
+    """Signal quality report: generated, rejected, by reason per strategy."""
+    return strategy_tracker.get_signal_quality()
+
+
+@api_router.get("/analytics/rejection-log")
+async def get_rejection_log(limit: int = 100):
+    """Recent signal rejection log with timestamps and details."""
+    return strategy_tracker.get_rejection_log(limit)
+
+
+@api_router.get("/analytics/watchdog")
+async def get_watchdog():
+    """Discovery watchdog: activity timestamps and thresholds."""
+    return strategy_tracker.get_watchdog()
+
+
+@api_router.get("/strategies/arb/diagnostics")
+async def get_arb_diagnostics():
+    """Full arb scanner diagnostics: raw edges, rejections, multi-outcome groups."""
+    if not arb_scanner_ref:
+        return {"error": "arb scanner not initialized"}
+    return arb_scanner_ref.get_diagnostics()
+
 
 
 @api_router.get("/status")

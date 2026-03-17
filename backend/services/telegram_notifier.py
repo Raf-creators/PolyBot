@@ -1,7 +1,10 @@
 """Telegram notification service for Polymarket Edge OS.
 
-Only sends alerts when a trade/position is CLOSED or RESOLVED with
-realized PnL. All other events are silently ignored.
+Sends alerts for ALL trade closures across ALL strategies:
+- crypto_sniper
+- weather_trader
+- arb_scanner
+- resolver (market resolution)
 """
 
 import asyncio
@@ -31,6 +34,7 @@ class TelegramNotifier:
         self._send_times: list = []
         self._total_sent = 0
         self._total_failed = 0
+        self._last_trade_count = 0  # track trades to detect new closes
 
     @property
     def configured(self) -> bool:
@@ -67,8 +71,11 @@ class TelegramNotifier:
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
         bus.on(EventType.SYSTEM_EVENT, self._on_system_event)
 
+        # Initialize trade count so we don't re-send for loaded trades
+        self._last_trade_count = len(state.trades) if state else 0
+
         status = "enabled" if self.configured else "disabled (no credentials)"
-        logger.info(f"Telegram notifier started [{status}] — close-only alerts")
+        logger.info(f"Telegram notifier started [{status}] — all-strategy alerts")
 
     async def stop(self):
         if self._bus:
@@ -124,21 +131,20 @@ class TelegramNotifier:
     # ---- Event Handlers ----
 
     async def _on_order_update(self, event):
-        """Only react to 'closed' status — ignore filled/submitted/etc."""
+        """React to 'closed' status from any strategy."""
         if not self.enabled:
             return
         if event.data.get("status") == "closed":
             self._send_trade_closed(event.data)
 
     async def _on_system_event(self, event):
-        """Handle resolver-generated closes."""
+        """Handle resolver-generated closes — send per-trade notifications."""
         if not self.enabled:
             return
         if event.source == "market_resolver" and event.data.get("action") == "positions_resolved":
             count = event.data.get("count", 0)
-            pnl = event.data.get("pnl", 0)
             if count > 0:
-                self._send_resolver_summary(count, pnl)
+                self._send_resolver_trades(count)
 
     def _send_trade_closed(self, data: dict):
         order_id = data.get("order_id", "?")
@@ -154,7 +160,7 @@ class TelegramNotifier:
         size = data.get("size", 1)
 
         if trade:
-            strategy = trade.strategy_id.replace("_", " ").upper()
+            strategy = (trade.strategy_id or "unknown").replace("_", " ").upper()
             market = (trade.market_question or order_id[:16])[:60]
             outcome = trade.outcome or trade.side.value
             if not entry_price:
@@ -164,6 +170,49 @@ class TelegramNotifier:
             pnl = trade.pnl if trade.pnl else pnl
             size = trade.size
 
+        self._send_formatted_close(strategy, market, outcome, entry_price, exit_price, pnl, size)
+
+    def _send_resolver_trades(self, count: int):
+        """Send individual Telegram messages for each resolver trade."""
+        if not self._state:
+            return
+
+        resolver_trades = []
+        for t in reversed(self._state.trades):
+            if t.strategy_id == "resolver":
+                resolver_trades.append(t)
+                if len(resolver_trades) >= count:
+                    break
+
+        for t in resolver_trades:
+            # Determine the original strategy that opened this position
+            # The resolver trade's signal_reason contains the winning outcome
+            strategy = "RESOLVER"
+            market = (t.market_question or "?")[:60]
+
+            # Infer original strategy from market question
+            q = (t.market_question or "").lower()
+            if any(kw in q for kw in ("temperature", "highest temp", "weather", "°f")):
+                strategy = "WEATHER TRADER"
+            elif any(kw in q for kw in ("btc", "bitcoin", "eth", "ethereum", "up or down")):
+                strategy = "CRYPTO SNIPER"
+            elif "arb" in q:
+                strategy = "ARB SCANNER"
+
+            outcome = t.outcome or "?"
+            entry_price = 0
+            exit_price = t.price  # settlement price (0 or 1)
+            pnl = t.pnl or 0
+            size = t.size
+
+            # Try to reconstruct entry price from PnL
+            if size > 0 and exit_price is not None:
+                entry_price = round(exit_price - (pnl / size), 4) if size != 0 else 0
+
+            self._send_formatted_close(strategy, market, outcome, entry_price, exit_price, pnl, size)
+
+    def _send_formatted_close(self, strategy, market, outcome, entry_price, exit_price, pnl, size):
+        """Send a consistently formatted trade close notification."""
         cost = entry_price * size if entry_price and size else 0
         roi = (pnl / cost * 100) if cost > 0 else 0
         pnl_sign = "+" if pnl >= 0 else ""
@@ -183,45 +232,6 @@ class TelegramNotifier:
             f"Time: {ts}"
         )
         self._fire(text)
-
-    def _send_resolver_summary(self, count: int, pnl: float):
-        pnl_sign = "+" if pnl >= 0 else ""
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-        # Also send individual resolution details from recent trades
-        resolver_trades = []
-        if self._state:
-            for t in reversed(self._state.trades):
-                if t.strategy_id == "resolver":
-                    resolver_trades.append(t)
-                    if len(resolver_trades) >= count:
-                        break
-
-        if resolver_trades:
-            for t in resolver_trades:
-                cost = t.price * t.size if t.price else 0
-                roi = (t.pnl / cost * 100) if cost > 0 and t.pnl else 0
-                pnl_s = "+" if (t.pnl or 0) >= 0 else ""
-                roi_s = "+" if roi >= 0 else ""
-                won = "WON" if (t.pnl or 0) >= 0 else "LOST"
-                text = (
-                    f"<b>MARKET RESOLVED — {won}</b>\n"
-                    f"Market: {(t.market_question or '?')[:60]}\n"
-                    f"Outcome: {t.outcome or '?'}\n"
-                    f"Settlement: {t.price:.4f}\n"
-                    f"PnL: <b>{pnl_s}${t.pnl:.2f}</b>\n"
-                    f"ROI: {roi_s}{roi:.1f}%\n"
-                    f"Time: {ts}"
-                )
-                self._fire(text)
-        else:
-            text = (
-                f"<b>POSITIONS RESOLVED</b>\n"
-                f"Count: {count}\n"
-                f"PnL: <b>{pnl_sign}${pnl:.2f}</b>\n"
-                f"Time: {ts}"
-            )
-            self._fire(text)
 
     def _find_trade(self, order_id):
         if self._state:

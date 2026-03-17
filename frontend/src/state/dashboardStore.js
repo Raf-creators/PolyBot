@@ -46,6 +46,18 @@ export const useDashboardStore = create((set, get) => ({
   // Diagnostics info (fetched from /api/diagnostics)
   diagnostics: null,
 
+  // Arb diagnostics (fetched from /api/strategies/arb/diagnostics)
+  arbDiagnostics: {},
+
+  // Signal quality (fetched from /api/analytics/signal-quality)
+  signalQuality: {},
+
+  // Watchdog (fetched from /api/analytics/watchdog)
+  watchdog: {},
+
+  // Strategy tracker (fetched from /api/analytics/strategy-tracker)
+  strategyTracker: {},
+
   // Connection state
   wsConnected: false,
   lastWsUpdate: null,
@@ -96,6 +108,10 @@ export const useDashboardStore = create((set, get) => ({
   setTickerFeed: (data) => set({ tickerFeed: data }),
   setWalletStatus: (data) => set({ walletStatus: data }),
   setDiagnostics: (data) => set({ diagnostics: data }),
+  setArbDiagnostics: (data) => set({ arbDiagnostics: data }),
+  setSignalQuality: (data) => set({ signalQuality: data }),
+  setWatchdog: (data) => set({ watchdog: data }),
+  setStrategyTracker: (data) => set({ strategyTracker: data }),
 
   // Apply a full demo snapshot to all state slices
   applyDemoSnapshot: (demoStatus) => set({

@@ -389,7 +389,7 @@ class WeatherTrader(BaseStrategy):
                         self._clob_ws.subscribe_tokens(ws_tokens)
                 self._m["gamma_events_discovered"] = len(raw_markets)
         except Exception as e:
-            logger.warning(f"Gamma event discovery error: {e}")
+            logger.warning(f"Gamma event discovery error: {e}", exc_info=True)
             self._m["gamma_discovery_error"] = str(e)
 
         self._m["classification_failures"] = sum(fail_reasons.values())

@@ -10,12 +10,15 @@ from the strategy scan loop without risk of exceptions breaking the loop.
 """
 
 import re
+import logging
 from datetime import datetime, timezone, date as date_type
 from typing import Dict, List, Optional, Tuple
 
 from engine.strategies.weather_models import (
     StationInfo, StationType, TempBucket, WeatherMarketClassification,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---- Station Registry ----
@@ -95,8 +98,97 @@ def lookup_station(city_name: str) -> Optional[StationInfo]:
     return None
 
 
+# Dynamic station cache for globally discovered cities
+_DYNAMIC_STATIONS: Dict[str, StationInfo] = {}
+
+# Expanded global city coordinates for common weather market cities
+_GLOBAL_CITY_COORDS: Dict[str, dict] = {
+    "london": {"lat": 51.5074, "lon": -0.1278, "tz": "Europe/London", "state": "UK"},
+    "hong kong": {"lat": 22.3193, "lon": 114.1694, "tz": "Asia/Hong_Kong", "state": "HK"},
+    "buenos aires": {"lat": -34.6037, "lon": -58.3816, "tz": "America/Argentina/Buenos_Aires", "state": "AR"},
+    "tokyo": {"lat": 35.6762, "lon": 139.6503, "tz": "Asia/Tokyo", "state": "JP"},
+    "sydney": {"lat": -33.8688, "lon": 151.2093, "tz": "Australia/Sydney", "state": "AU"},
+    "paris": {"lat": 48.8566, "lon": 2.3522, "tz": "Europe/Paris", "state": "FR"},
+    "dubai": {"lat": 25.2048, "lon": 55.2708, "tz": "Asia/Dubai", "state": "AE"},
+    "singapore": {"lat": 1.3521, "lon": 103.8198, "tz": "Asia/Singapore", "state": "SG"},
+    "toronto": {"lat": 43.6532, "lon": -79.3832, "tz": "America/Toronto", "state": "CA"},
+    "mumbai": {"lat": 19.0760, "lon": 72.8777, "tz": "Asia/Kolkata", "state": "IN"},
+    "berlin": {"lat": 52.5200, "lon": 13.4050, "tz": "Europe/Berlin", "state": "DE"},
+    "moscow": {"lat": 55.7558, "lon": 37.6173, "tz": "Europe/Moscow", "state": "RU"},
+    "seoul": {"lat": 37.5665, "lon": 126.9780, "tz": "Asia/Seoul", "state": "KR"},
+    "bangkok": {"lat": 13.7563, "lon": 100.5018, "tz": "Asia/Bangkok", "state": "TH"},
+    "houston": {"lat": 29.7604, "lon": -95.3698, "tz": "America/Chicago", "state": "TX"},
+    "phoenix": {"lat": 33.4484, "lon": -112.0740, "tz": "America/Phoenix", "state": "AZ"},
+    "philadelphia": {"lat": 39.9526, "lon": -75.1652, "tz": "America/New_York", "state": "PA"},
+    "san antonio": {"lat": 29.4241, "lon": -98.4936, "tz": "America/Chicago", "state": "TX"},
+    "san diego": {"lat": 32.7157, "lon": -117.1611, "tz": "America/Los_Angeles", "state": "CA"},
+    "seattle": {"lat": 47.6062, "lon": -122.3321, "tz": "America/Los_Angeles", "state": "WA"},
+    "boston": {"lat": 42.3601, "lon": -71.0589, "tz": "America/New_York", "state": "MA"},
+    "nashville": {"lat": 36.1627, "lon": -86.7816, "tz": "America/Chicago", "state": "TN"},
+    "washington": {"lat": 38.9072, "lon": -77.0369, "tz": "America/New_York", "state": "DC"},
+    "washington dc": {"lat": 38.9072, "lon": -77.0369, "tz": "America/New_York", "state": "DC"},
+    "las vegas": {"lat": 36.1699, "lon": -115.1398, "tz": "America/Los_Angeles", "state": "NV"},
+    "portland": {"lat": 45.5155, "lon": -122.6789, "tz": "America/Los_Angeles", "state": "OR"},
+    "minneapolis": {"lat": 44.9778, "lon": -93.2650, "tz": "America/Chicago", "state": "MN"},
+    "detroit": {"lat": 42.3314, "lon": -83.0458, "tz": "America/Detroit", "state": "MI"},
+    "austin": {"lat": 30.2672, "lon": -97.7431, "tz": "America/Chicago", "state": "TX"},
+    "charlotte": {"lat": 35.2271, "lon": -80.8431, "tz": "America/New_York", "state": "NC"},
+    "el paso": {"lat": 31.7619, "lon": -106.4850, "tz": "America/Denver", "state": "TX"},
+    "memphis": {"lat": 35.1495, "lon": -90.0490, "tz": "America/Chicago", "state": "TN"},
+    "new orleans": {"lat": 29.9511, "lon": -90.0715, "tz": "America/Chicago", "state": "LA"},
+    "tampa": {"lat": 27.9506, "lon": -82.4572, "tz": "America/New_York", "state": "FL"},
+    "orlando": {"lat": 28.5383, "lon": -81.3792, "tz": "America/New_York", "state": "FL"},
+    "st. louis": {"lat": 38.6270, "lon": -90.1994, "tz": "America/Chicago", "state": "MO"},
+    "st louis": {"lat": 38.6270, "lon": -90.1994, "tz": "America/Chicago", "state": "MO"},
+    "pittsburgh": {"lat": 40.4406, "lon": -79.9959, "tz": "America/New_York", "state": "PA"},
+    "milwaukee": {"lat": 43.0389, "lon": -87.9065, "tz": "America/Chicago", "state": "WI"},
+    "sacramento": {"lat": 38.5816, "lon": -121.4944, "tz": "America/Los_Angeles", "state": "CA"},
+}
+
+
+def get_or_create_station(city_name: str) -> Optional[StationInfo]:
+    """Look up station in registry or create a dynamic one for global cities.
+
+    Priority: STATION_REGISTRY > _DYNAMIC_STATIONS > _GLOBAL_CITY_COORDS > None
+    """
+    # Check static registry first
+    station = lookup_station(city_name)
+    if station:
+        return station
+
+    # Check dynamic cache
+    key = city_name.strip().lower()
+    if key in _DYNAMIC_STATIONS:
+        return _DYNAMIC_STATIONS[key]
+
+    # Check global coordinates table
+    coords = _GLOBAL_CITY_COORDS.get(key)
+    if coords:
+        station_id = f"DYN_{key.upper().replace(' ', '_')[:10]}"
+        info = StationInfo(
+            station_id=station_id,
+            city=city_name.strip().title(),
+            state=coords["state"],
+            latitude=coords["lat"],
+            longitude=coords["lon"],
+            elevation_ft=0,
+            timezone=coords["tz"],
+            station_type=StationType.COASTAL,
+            wunderground_slug="",
+            aliases=[city_name.strip()],
+        )
+        _DYNAMIC_STATIONS[key] = info
+        # Also register in STATION_REGISTRY so forecasts can find it
+        STATION_REGISTRY[station_id] = info
+        _ALIAS_TO_STATION[key] = station_id
+        logger.info(f"Dynamic station created: {station_id} ({city_name}) @ {coords['lat']},{coords['lon']}")
+        return info
+
+    return None
+
+
 def get_all_stations() -> List[StationInfo]:
-    """Return all registered stations."""
+    """Return all registered stations (static + dynamic)."""
     return list(STATION_REGISTRY.values())
 
 
@@ -404,6 +496,15 @@ def classify_weather_market(
             city_from_regex = m.group("city").strip().rstrip("?.,!")
             break
 
+    # Also try the "in <city> be" pattern for real Polymarket format
+    if not city_from_regex:
+        m = re.search(
+            r'temp(?:erature)?\s+in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+be\s+',
+            question, re.IGNORECASE,
+        )
+        if m:
+            city_from_regex = m.group("city").strip()
+
     # Step 3: Resolve station
     station_id = None
     if city_from_regex:
@@ -414,7 +515,14 @@ def classify_weather_market(
         station_id = _extract_city(question)
 
     if not station_id:
-        return None, f"unknown_city: {city_from_regex or '(none extracted)'}"
+        # Try dynamic station creation for global cities
+        city_text = city_from_regex or ""
+        if city_text:
+            station = get_or_create_station(city_text)
+            if station:
+                station_id = station.station_id
+        if not station_id:
+            return None, f"unknown_city: {city_from_regex or '(none extracted)'}"
 
     station = STATION_REGISTRY[station_id]
 
@@ -459,19 +567,24 @@ def classify_weather_market(
 
 # Regex patterns for extracting bucket from full binary questions
 _BINARY_BUCKET_PATTERNS = [
-    # "be 43°F or below on"
+    # "be 43°F or below on" / "be 9°C or below on"
     re.compile(
-        r'be\s+(?P<val>\d+)\s*°?\s*[Ff]?\s*or\s+(?:below|lower|less)\s+on\s+',
+        r'be\s+(?P<val>\d+)\s*°?\s*[FfCc]?\s*or\s+(?:below|lower|less)\s+on\s+',
         re.IGNORECASE,
     ),
-    # "be 58°F or higher on"
+    # "be 58°F or higher on" / "be 18°C or higher on"
     re.compile(
-        r'be\s+(?P<val>\d+)\s*°?\s*[Ff]?\s*or\s+(?:above|higher|more|greater)\s+on\s+',
+        r'be\s+(?P<val>\d+)\s*°?\s*[FfCc]?\s*or\s+(?:above|higher|more|greater)\s+on\s+',
         re.IGNORECASE,
     ),
-    # "be between 44-45°F on" / "be between 44°F-45°F on"
+    # "be between 44-45°F on" / "be between 10-11°C on"
     re.compile(
-        r'be\s+between\s+(?P<lo>\d+)\s*°?\s*[Ff]?\s*[\-–]\s*(?P<hi>\d+)\s*°?\s*[Ff]?\s+on\s+',
+        r'be\s+between\s+(?P<lo>\d+)\s*°?\s*[FfCc]?\s*[\-–]\s*(?P<hi>\d+)\s*°?\s*[FfCc]?\s+on\s+',
+        re.IGNORECASE,
+    ),
+    # Exact value: "be 9°C on March 17?" (London format)
+    re.compile(
+        r'be\s+(?P<val>\d+)\s*°\s*[CcFf]\s+on\s+',
         re.IGNORECASE,
     ),
 ]
@@ -483,20 +596,25 @@ def parse_bucket_from_question(
 ) -> Optional[TempBucket]:
     """Extract a temperature bucket from a Polymarket binary question.
 
-    Real Polymarket weather markets are binary (Yes/No). Each bucket is
-    a separate market. The YES token represents the bucket occurring.
-
-    Returns TempBucket using the YES token_id, or None if not a bucket question.
+    Handles both °F and °C markets. For °C, values are converted to °F for
+    consistent internal representation.
     """
+    is_celsius = "°c" in question.lower() or "°C" in question
+
+    def _to_f(val: float) -> float:
+        return val * 9.0 / 5.0 + 32.0 if is_celsius else val
+
+    unit = "°C" if is_celsius else "°F"
+
     # Pattern: "be X°F or below on"
     m = _BINARY_BUCKET_PATTERNS[0].search(question)
     if m:
         val = float(m.group("val"))
         return TempBucket(
-            label=f"{int(val)}°F or below",
+            label=f"{int(val)}{unit} or below",
             token_id=yes_token_id,
             lower_bound=None,
-            upper_bound=val,
+            upper_bound=_to_f(val),
         )
 
     # Pattern: "be X°F or higher on"
@@ -504,9 +622,9 @@ def parse_bucket_from_question(
     if m:
         val = float(m.group("val"))
         return TempBucket(
-            label=f"{int(val)}°F or higher",
+            label=f"{int(val)}{unit} or higher",
             token_id=yes_token_id,
-            lower_bound=val,
+            lower_bound=_to_f(val),
             upper_bound=None,
         )
 
@@ -515,10 +633,21 @@ def parse_bucket_from_question(
     if m:
         lo, hi = float(m.group("lo")), float(m.group("hi"))
         return TempBucket(
-            label=f"{int(min(lo,hi))}-{int(max(lo,hi))}°F",
+            label=f"{int(min(lo,hi))}-{int(max(lo,hi))}{unit}",
             token_id=yes_token_id,
-            lower_bound=min(lo, hi),
-            upper_bound=max(lo, hi),
+            lower_bound=_to_f(min(lo, hi)),
+            upper_bound=_to_f(max(lo, hi)),
+        )
+
+    # Pattern: exact value "be 9°C on" (London format)
+    m = _BINARY_BUCKET_PATTERNS[3].search(question)
+    if m:
+        val = float(m.group("val"))
+        return TempBucket(
+            label=f"{int(val)}{unit}",
+            token_id=yes_token_id,
+            lower_bound=_to_f(val - 0.5),
+            upper_bound=_to_f(val + 0.5),
         )
 
     return None
@@ -558,6 +687,31 @@ def classify_binary_weather_markets(
 
         # Extract city
         station_id = _extract_city(question)
+        if not station_id:
+            # Pattern for real Polymarket: "temperature in <city> be ..."
+            import re as _re
+            city_m = _re.search(
+                r'temp(?:erature)?\s+in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+be\s+',
+                question, _re.IGNORECASE,
+            )
+            if city_m:
+                city_text = city_m.group("city").strip()
+                # Try known aliases first
+                station_id = _extract_city(city_text)
+                if not station_id:
+                    station_obj = get_or_create_station(city_text)
+                    if station_obj:
+                        station_id = station_obj.station_id
+            # Fallback: try _WEATHER_PATTERNS
+            if not station_id:
+                for pattern in _WEATHER_PATTERNS:
+                    pm = pattern.search(question)
+                    if pm:
+                        city_text = pm.group("city").strip().rstrip("?.,!")
+                        station_obj = get_or_create_station(city_text)
+                        if station_obj:
+                            station_id = station_obj.station_id
+                        break
         if not station_id:
             errors.append(f"unknown_city: {question[:60]}")
             continue

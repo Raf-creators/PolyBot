@@ -1,4 +1,5 @@
 import logging
+import time
 from collections import defaultdict
 
 from models import Event, EventType, OrderRecord, OrderStatus
@@ -15,6 +16,9 @@ def _is_weather_position(pos) -> bool:
     sid = getattr(pos, "strategy_id", "") or ""
     if sid in WEATHER_STRATEGIES:
         return True
+    if sid and sid not in WEATHER_STRATEGIES:
+        return False  # explicit non-weather strategy
+    # Fallback to keyword matching for legacy positions without strategy_id
     q = (getattr(pos, "market_question", "") or "").lower()
     return any(kw in q for kw in WEATHER_KEYWORDS)
 
@@ -26,6 +30,8 @@ class RiskEngine:
         self._state = None
         self._bus = None
         self._running = False
+        # Diagnostics: track rejections by reason
+        self._slot_blocks = defaultdict(int)  # strategy_bucket -> count
 
     async def start(self, state, bus):
         self._state = state
@@ -46,12 +52,37 @@ class RiskEngine:
         """Count open positions per strategy bucket."""
         weather = 0
         nonweather = 0
+        by_strategy = defaultdict(int)
         for pos in self._state.positions.values():
+            sid = getattr(pos, "strategy_id", "") or "unknown"
+            by_strategy[sid] += 1
             if _is_weather_position(pos):
                 weather += 1
             else:
                 nonweather += 1
-        return weather, nonweather
+        return weather, nonweather, dict(by_strategy)
+
+    def get_slot_diagnostics(self) -> dict:
+        """Return detailed position slot diagnostics."""
+        weather, nonweather, by_strategy = self._count_positions_by_bucket()
+        cfg = self._state.risk_config if self._state else None
+        return {
+            "weather_count": weather,
+            "nonweather_count": nonweather,
+            "total": weather + nonweather,
+            "by_strategy": by_strategy,
+            "limits": {
+                "max_weather": cfg.max_weather_positions if cfg else 0,
+                "max_nonweather": cfg.max_nonweather_positions if cfg else 0,
+                "max_global": cfg.max_concurrent_positions if cfg else 0,
+            },
+            "headroom": {
+                "weather": max(0, (cfg.max_weather_positions if cfg else 0) - weather),
+                "nonweather": max(0, (cfg.max_nonweather_positions if cfg else 0) - nonweather),
+                "global": max(0, (cfg.max_concurrent_positions if cfg else 0) - weather - nonweather),
+            },
+            "blocked_by_position_limit": dict(self._slot_blocks),
+        }
 
     # ---- main check ----
 
@@ -76,21 +107,45 @@ class RiskEngine:
 
         # Per-strategy-bucket slot check (only for NEW positions)
         if order.token_id not in self._state.positions:
-            weather_count, nonweather_count = self._count_positions_by_bucket()
+            weather_count, nonweather_count, _ = self._count_positions_by_bucket()
             strategy = getattr(order, "strategy_id", "") or ""
             is_weather = strategy in WEATHER_STRATEGIES
 
             if is_weather:
                 if weather_count >= cfg.max_weather_positions:
+                    self._slot_blocks["weather"] += 1
                     return False, f"weather positions ({weather_count}) >= max {cfg.max_weather_positions}"
             else:
                 if nonweather_count >= cfg.max_nonweather_positions:
+                    self._slot_blocks["nonweather"] += 1
                     return False, f"nonweather positions ({nonweather_count}) >= max {cfg.max_nonweather_positions}"
 
             # Global fallback
             total = weather_count + nonweather_count
             if total >= cfg.max_concurrent_positions:
+                self._slot_blocks["global"] += 1
                 return False, f"max concurrent positions ({total}) >= {cfg.max_concurrent_positions}"
+
+        # Market freshness check
+        market = self._state.get_market(order.token_id)
+        if market and cfg.min_market_freshness_seconds > 0:
+            from engine.strategies.arb_pricing import compute_data_age
+            age = compute_data_age(market.updated_at)
+            if age > cfg.min_market_freshness_seconds:
+                return False, f"stale market data ({age:.0f}s > {cfg.min_market_freshness_seconds}s)"
+
+        # Spread check
+        if market and cfg.max_spread_bps > 0:
+            if market.best_bid and market.best_ask:
+                spread_bps = ((market.best_ask - market.best_bid) / max(market.mid_price or 0.5, 0.01)) * 10000
+                if spread_bps > cfg.max_spread_bps:
+                    return False, f"spread {spread_bps:.0f}bps > max {cfg.max_spread_bps}bps"
+
+        # Liquidity ratio check
+        if market and cfg.max_size_to_liquidity_ratio > 0 and market.liquidity > 0:
+            ratio = order.size / market.liquidity
+            if ratio > cfg.max_size_to_liquidity_ratio:
+                return False, f"size/liquidity ratio {ratio:.2f} > max {cfg.max_size_to_liquidity_ratio}"
 
         # Daily loss limit
         if self._state.daily_pnl <= -cfg.max_daily_loss:

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 from models import (
     Event, EventType, OrderRecord, OrderSide,
@@ -20,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class ArbScanner(BaseStrategy):
-    """Binary complement arbitrage scanner.
+    """Expanded arbitrage scanner.
 
-    Scans loaded binary markets for opportunities where:
-        YES_ask + NO_ask < 1.00 after modeled costs.
-    Executes paired paper trades with full lifecycle tracking.
+    Scans ALL loaded markets for:
+    1. Binary complement (YES_ask + NO_ask < 1.00)
+    2. Multi-outcome sum (sum of all outcome prices < 1.00)
+    3. Duplicate/cross-market price discrepancies
     """
 
     def __init__(self, config: Optional[ArbConfig] = None):
@@ -39,14 +41,25 @@ class ArbScanner(BaseStrategy):
         self._active_executions: Dict[str, ArbExecution] = {}
         self._completed_executions: List[ArbExecution] = []
         self._order_to_execution: Dict[str, str] = {}
-        self._cooldown: Dict[str, float] = {}  # condition_id -> last exec timestamp
-        self._cooldown_seconds = 120.0  # no re-execution within 2 minutes
+        self._cooldown: Dict[str, float] = {}
+        self._cooldown_seconds = 120.0
+
+        # Diagnostics — raw scan data from last pass
+        self._diag = {
+            "markets_scanned": 0,
+            "binary_pairs_found": 0,
+            "multi_outcome_groups_found": 0,
+            "combinations_generated": 0,
+            "raw_edges": [],          # last N raw edge candidates
+            "rejection_log": [],      # last N rejected with reasons
+        }
 
         # Metrics
         self._m = {
             "last_scan_time": None,
             "total_scans": 0,
             "pairs_scanned": 0,
+            "multi_groups_scanned": 0,
             "raw_edges_found": 0,
             "eligible_count": 0,
             "executed_count": 0,
@@ -86,12 +99,12 @@ class ArbScanner(BaseStrategy):
         logger.info("ArbScanner stopped")
 
     async def on_market_update(self, event):
-        pass  # Arb scanner uses its own scan loop
+        pass
 
     # ---- Scan Loop ----
 
     async def _scan_loop(self):
-        await asyncio.sleep(8)  # let market data settle
+        await asyncio.sleep(8)
         while self._running:
             try:
                 scan_results = self._run_scan()
@@ -117,14 +130,40 @@ class ArbScanner(BaseStrategy):
             if now - ts < self._cooldown_seconds
         }
 
-        pairs = self._find_binary_pairs()
-        self._m["pairs_scanned"] = len(pairs)
+        # Reset per-scan diagnostics
+        raw_edges = []
+        rejection_log = []
+
+        # ---- 1. Binary complement scan ----
+        binary_pairs = self._find_binary_pairs()
+        self._m["pairs_scanned"] = len(binary_pairs)
+        self._diag["binary_pairs_found"] = len(binary_pairs)
 
         results = []
-        for condition_id, (yes_snap, no_snap) in pairs.items():
-            opp = self._evaluate_pair(condition_id, yes_snap, no_snap)
+        for condition_id, (yes_snap, no_snap) in binary_pairs.items():
+            opp = self._evaluate_pair(condition_id, yes_snap, no_snap, raw_edges, rejection_log)
             if opp:
                 results.append(opp)
+
+        # ---- 2. Multi-outcome sum scan ----
+        multi_groups = self._find_multi_outcome_groups()
+        self._m["multi_groups_scanned"] = len(multi_groups)
+        self._diag["multi_outcome_groups_found"] = len(multi_groups)
+
+        for condition_id, outcomes in multi_groups.items():
+            opp = self._evaluate_multi_outcome(condition_id, outcomes, raw_edges, rejection_log)
+            if opp:
+                results.append(opp)
+
+        # ---- 3. Duplicate/cross-market scan ----
+        cross_opps = self._find_cross_market_arbs(raw_edges, rejection_log)
+        results.extend(cross_opps)
+
+        total_combos = len(binary_pairs) + len(multi_groups)
+        self._diag["markets_scanned"] = len(self._state.markets)
+        self._diag["combinations_generated"] = total_combos
+        self._diag["raw_edges"] = raw_edges[-50:]
+        self._diag["rejection_log"] = rejection_log[-50:]
 
         # Prepend new results, keep last 300
         self._opportunities = results + self._opportunities
@@ -133,9 +172,10 @@ class ArbScanner(BaseStrategy):
 
         return results
 
-    # ---- Market Pairing ----
+    # ---- Market Grouping ----
 
     def _find_binary_pairs(self) -> Dict:
+        """Find YES/NO binary pairs by condition_id."""
         by_condition: Dict[str, Dict] = {}
 
         for snap in self._state.markets.values():
@@ -157,9 +197,91 @@ class ArbScanner(BaseStrategy):
             if "yes" in d and "no" in d
         }
 
+    def _find_multi_outcome_groups(self) -> Dict:
+        """Find multi-outcome markets by grouping weather event buckets.
+
+        Weather markets on Polymarket are binary (YES/NO) per bucket, but the
+        event groups 5-7 buckets. If sum(YES prices) < 1.0, buying all YES
+        outcomes guarantees profit.
+
+        Groups by extracting (city, date) from question text.
+        """
+        import re
+
+        # Pattern: "highest temperature in <city> be X°F ... on <date>"
+        weather_pattern = re.compile(
+            r'(?:highest|high)\s+temp.*?in\s+(.+?)\s+be\s+.*?on\s+(.+?)[\?$]',
+            re.IGNORECASE,
+        )
+
+        by_event: Dict[str, List] = {}
+
+        for snap in self._state.markets.values():
+            q = snap.question or ""
+            m = weather_pattern.search(q)
+            if not m:
+                continue
+
+            city = m.group(1).strip().lower()
+            date_str = m.group(2).strip().lower().rstrip("?")
+            event_key = f"{city}|{date_str}"
+
+            # Use mid_price as the YES price
+            if snap.mid_price and 0 < snap.mid_price < 1.0:
+                if event_key not in by_event:
+                    by_event[event_key] = []
+                by_event[event_key].append(snap)
+
+        # Only keep events with 3+ buckets
+        return {
+            key: snaps for key, snaps in by_event.items()
+            if len(snaps) >= 3
+        }
+
+    def _find_cross_market_arbs(self, raw_edges, rejection_log) -> List[ArbOpportunity]:
+        """Detect duplicate markets with same question but different prices."""
+        by_question: Dict[str, List] = defaultdict(list)
+        for snap in self._state.markets.values():
+            q = (snap.question or "").strip().lower()
+            if q and snap.mid_price and snap.mid_price > 0:
+                by_question[q].append(snap)
+
+        results = []
+        for question, snaps in by_question.items():
+            if len(snaps) < 2:
+                continue
+            # Group by outcome within same question
+            by_outcome: Dict[str, List] = defaultdict(list)
+            for s in snaps:
+                key = (s.outcome or "").strip().lower()
+                by_outcome[key].append(s)
+
+            for outcome, group in by_outcome.items():
+                if len(group) < 2:
+                    continue
+                # Sort by price — lowest and highest
+                sorted_g = sorted(group, key=lambda x: x.mid_price or 0)
+                low = sorted_g[0]
+                high = sorted_g[-1]
+                spread = (high.mid_price or 0) - (low.mid_price or 0)
+                spread_bps = round(spread * 10000, 2)
+
+                if spread_bps > 50:  # significant cross-market spread
+                    raw_edges.append({
+                        "type": "cross_market",
+                        "question": question[:60],
+                        "outcome": outcome,
+                        "low_price": low.mid_price,
+                        "high_price": high.mid_price,
+                        "spread_bps": spread_bps,
+                        "low_token": low.token_id[:16],
+                        "high_token": high.token_id[:16],
+                    })
+        return results
+
     # ---- Opportunity Evaluation ----
 
-    def _evaluate_pair(self, condition_id, yes_snap, no_snap):
+    def _evaluate_pair(self, condition_id, yes_snap, no_snap, raw_edges, rejection_log):
         yes_price = yes_snap.mid_price
         no_price = no_snap.mid_price
 
@@ -170,13 +292,26 @@ class ArbScanner(BaseStrategy):
         if yes_price >= 1.0 or no_price >= 1.0:
             return None
 
-        # Cooldown: skip recently-traded pairs
+        # Cooldown
         if condition_id in self._cooldown:
             return None
 
         # Gross edge
         gross_edge = 1.0 - (yes_price + no_price)
         gross_edge_bps = round(gross_edge * 10000, 2)
+
+        # Log ALL raw edges (even negative) for diagnostics
+        if abs(gross_edge_bps) > 5:  # only log meaningful values
+            raw_edges.append({
+                "type": "binary",
+                "condition_id": condition_id[:16],
+                "question": (yes_snap.question or "")[:60],
+                "yes_price": round(yes_price, 4),
+                "no_price": round(no_price, 4),
+                "sum": round(yes_price + no_price, 4),
+                "gross_edge_bps": gross_edge_bps,
+            })
+
         if gross_edge_bps <= 0:
             return None
 
@@ -187,7 +322,7 @@ class ArbScanner(BaseStrategy):
         no_age = compute_data_age(no_snap.updated_at)
         max_age = max(yes_age, no_age)
 
-        # Liquidity — use the weaker side (bottleneck)
+        # Liquidity
         liquidity = min(yes_snap.liquidity, no_snap.liquidity)
         volume = min(yes_snap.volume_24h, no_snap.volume_24h)
 
@@ -236,6 +371,17 @@ class ArbScanner(BaseStrategy):
             self._m["rejected_count"] += 1
             bucket = (rejection_reason or "unknown").split(" ")[0]
             self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+            rejection_log.append({
+                "type": "binary",
+                "condition_id": condition_id[:16],
+                "question": (yes_snap.question or "")[:60],
+                "gross_edge_bps": gross_edge_bps,
+                "fees_bps": fees_bps,
+                "slippage_bps": slippage_bps,
+                "net_edge_bps": net_edge_bps,
+                "liquidity": liquidity,
+                "reason": rejection_reason,
+            })
 
         opp = ArbOpportunity(
             condition_id=condition_id,
@@ -256,10 +402,126 @@ class ArbScanner(BaseStrategy):
             rejection_reason=rejection_reason,
         )
 
-        # Persist to state log for write-behind
         if hasattr(self._state, "arb_opportunities_log"):
             self._state.arb_opportunities_log.append(opp.model_dump())
 
+        return opp
+
+    def _evaluate_multi_outcome(self, condition_id, outcomes, raw_edges, rejection_log):
+        """Evaluate multi-outcome market where sum of all bucket prices < 1.0.
+
+        If buying all outcomes costs less than guaranteed 1.0 payout, that's an arb.
+        """
+        if condition_id in self._cooldown:
+            return None
+
+        total_cost = 0.0
+        min_liquidity = float("inf")
+        min_volume = float("inf")
+        max_age = 0.0
+        valid_outcomes = []
+
+        for snap in outcomes:
+            price = snap.mid_price or 0
+            if price <= 0 or price >= 1.0:
+                continue
+            total_cost += price
+            min_liquidity = min(min_liquidity, snap.liquidity)
+            min_volume = min(min_volume, snap.volume_24h)
+            max_age = max(max_age, compute_data_age(snap.updated_at))
+            valid_outcomes.append(snap)
+
+        if len(valid_outcomes) < 3:
+            return None
+
+        gross_edge = 1.0 - total_cost
+        gross_edge_bps = round(gross_edge * 10000, 2)
+
+        # Log for diagnostics
+        question = valid_outcomes[0].question if valid_outcomes else ""
+        raw_edges.append({
+            "type": "multi_outcome",
+            "condition_id": condition_id[:16],
+            "question": (question or "")[:60],
+            "outcome_count": len(valid_outcomes),
+            "total_cost": round(total_cost, 4),
+            "gross_edge_bps": gross_edge_bps,
+        })
+
+        if gross_edge_bps <= 0:
+            return None
+
+        self._m["raw_edges_found"] += 1
+
+        # Cost modeling (simplified for multi-outcome)
+        size = min(self.config.default_size, self.config.max_arb_size)
+        trading_fees_bps = round(total_cost * self.config.maker_taker_rate * 10000, 2)
+        slippage_bps = estimate_slippage(
+            min_liquidity, min_volume, size, self.config.slippage_base_bps,
+        )
+
+        net_edge_bps = round(gross_edge_bps - trading_fees_bps - slippage_bps, 2)
+
+        is_tradable = True
+        rejection_reason = None
+
+        if net_edge_bps < self.config.min_net_edge_bps:
+            is_tradable = False
+            rejection_reason = f"net_edge {net_edge_bps:.1f}bps < min {self.config.min_net_edge_bps}bps"
+        elif min_liquidity < self.config.min_liquidity:
+            is_tradable = False
+            rejection_reason = f"liquidity {min_liquidity:.0f} < min {self.config.min_liquidity}"
+        elif max_age > self.config.max_stale_age_seconds:
+            is_tradable = False
+            rejection_reason = f"stale data {max_age:.0f}s"
+        elif self._state.risk_config.kill_switch_active:
+            is_tradable = False
+            rejection_reason = "kill_switch active"
+
+        if is_tradable:
+            self._m["eligible_count"] += 1
+            logger.info(
+                f"[ARB] Multi-outcome arb: {question[:50]}... "
+                f"{len(valid_outcomes)} outcomes, cost={total_cost:.4f} "
+                f"net_edge={net_edge_bps:.1f}bps"
+            )
+        else:
+            self._m["rejected_count"] += 1
+            bucket = (rejection_reason or "unknown").split(" ")[0]
+            self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+            rejection_log.append({
+                "type": "multi_outcome",
+                "condition_id": condition_id[:16],
+                "question": (question or "")[:60],
+                "outcomes": len(valid_outcomes),
+                "gross_edge_bps": gross_edge_bps,
+                "net_edge_bps": net_edge_bps,
+                "liquidity": min_liquidity,
+                "reason": rejection_reason,
+            })
+
+        if not is_tradable:
+            return None
+
+        # Create opportunity with first outcome as the "yes" side (placeholder)
+        opp = ArbOpportunity(
+            condition_id=condition_id,
+            question=question,
+            yes_token_id=valid_outcomes[0].token_id,
+            no_token_id=valid_outcomes[-1].token_id,
+            yes_price=round(total_cost, 6),
+            no_price=0,
+            gross_edge_bps=gross_edge_bps,
+            estimated_fees_bps=trading_fees_bps,
+            estimated_slippage_bps=slippage_bps,
+            execution_penalty_bps=0,
+            net_edge_bps=net_edge_bps,
+            liquidity_estimate=min_liquidity,
+            confidence_score=compute_confidence(min_liquidity, max_age, abs(gross_edge), min_volume),
+            recommended_size=size,
+            is_tradable=True,
+            rejection_reason=None,
+        )
         return opp
 
     # ---- Paired Execution ----
@@ -286,7 +548,6 @@ class ArbScanner(BaseStrategy):
             strategy_id=self.strategy_id,
         )
 
-        # Pre-flight risk check for both legs
         ok_y, reason_y = self._risk_engine.check_order(yes_order)
         if not ok_y:
             opp.is_tradable = False
@@ -303,7 +564,6 @@ class ArbScanner(BaseStrategy):
             self._m["rejection_reasons"]["risk"] = self._m["rejection_reasons"].get("risk", 0) + 1
             return
 
-        # Create execution record
         execution = ArbExecution(
             opportunity_id=opp.id,
             condition_id=opp.condition_id,
@@ -321,7 +581,6 @@ class ArbScanner(BaseStrategy):
         self._m["executed_count"] += 1
         self._cooldown[opp.condition_id] = time.time()
 
-        # Emit signal event for notification system (non-blocking)
         await self._bus.emit(Event(
             type=EventType.SIGNAL,
             source=self.strategy_id,
@@ -377,7 +636,6 @@ class ArbScanner(BaseStrategy):
                 execution.no_fill_price = fill_price
 
             if execution.yes_fill_price is not None and execution.no_fill_price is not None:
-                # Both legs filled — pair complete
                 execution.status = ArbPairStatus.COMPLETED
                 execution.completed_at = utc_now()
                 total_cost = execution.yes_fill_price + execution.no_fill_price
@@ -402,17 +660,12 @@ class ArbScanner(BaseStrategy):
             self._finalize_execution(execution)
 
     def _finalize_execution(self, execution: ArbExecution):
-        """Move execution from active to completed and log for persistence."""
         self._active_executions.pop(execution.id, None)
         self._completed_executions.append(execution)
         if len(self._completed_executions) > 200:
             self._completed_executions = self._completed_executions[-200:]
-
-        # Clean up order mappings
         self._order_to_execution.pop(execution.yes_order_id, None)
         self._order_to_execution.pop(execution.no_order_id, None)
-
-        # Persist to state log for write-behind
         if hasattr(self._state, "arb_executions_log"):
             self._state.arb_executions_log.append(execution.model_dump())
 
@@ -427,6 +680,16 @@ class ArbScanner(BaseStrategy):
     def get_completed_executions(self, limit: int = 50) -> List[dict]:
         return [e.model_dump() for e in self._completed_executions[-limit:]]
 
+    def get_diagnostics(self) -> dict:
+        """Comprehensive arb diagnostics for debugging zero-trade scenarios."""
+        return {
+            **self._diag,
+            "metrics": self._m,
+            "config": self.config.model_dump(),
+            "active_executions": len(self._active_executions),
+            "total_completed": len(self._completed_executions),
+        }
+
     def get_health(self) -> dict:
         return {
             **self._m,
@@ -434,6 +697,14 @@ class ArbScanner(BaseStrategy):
             "active_executions": len(self._active_executions),
             "total_completed_executions": len(self._completed_executions),
             "running": self._running,
+            "diagnostics": {
+                "markets_scanned": self._diag["markets_scanned"],
+                "binary_pairs_found": self._diag["binary_pairs_found"],
+                "multi_outcome_groups_found": self._diag["multi_outcome_groups_found"],
+                "combinations_generated": self._diag["combinations_generated"],
+                "raw_edges_count": len(self._diag["raw_edges"]),
+                "rejection_log_count": len(self._diag["rejection_log"]),
+            },
         }
 
     def get_config(self) -> StrategyConfig:

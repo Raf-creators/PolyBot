@@ -86,6 +86,7 @@ class Position(BaseModel):
     token_id: str
     market_question: str = ""
     outcome: str = ""
+    strategy_id: str = ""
     size: float = 0.0
     avg_cost: float = 0.0
     current_price: float = 0.0
@@ -133,7 +134,7 @@ class RiskConfig(BaseModel):
     max_loss_per_strategy: float = 50.0
     max_position_size: float = 25.0
     max_market_exposure: float = 150.0
-    max_concurrent_positions: int = 50          # global fallback
+    max_concurrent_positions: int = 55          # global safety cap
     max_weather_positions: int = 25             # per-strategy bucket
     max_nonweather_positions: int = 25          # crypto + arb bucket
     max_order_size: float = 10.0

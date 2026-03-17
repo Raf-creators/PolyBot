@@ -17,7 +17,10 @@ import {
 export default function Analytics() {
   const pnlHistory = useDashboardStore((s) => s.pnlHistory);
   const demoMode = useDashboardStore((s) => s.demoMode);
-  const { fetchPnlHistory } = useApi();
+  const signalQuality = useDashboardStore((s) => s.signalQuality);
+  const watchdog = useDashboardStore((s) => s.watchdog);
+  const strategyTracker = useDashboardStore((s) => s.strategyTracker);
+  const { fetchPnlHistory, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker } = useApi();
   const [summary, setSummary] = useState(null);
   const [strategies, setStrategies] = useState({});
   const [execQuality, setExecQuality] = useState(null);
@@ -39,7 +42,10 @@ export default function Analytics() {
       setExecQuality(eq.data);
       setTimeseries(ts.data);
     } catch {}
-  }, [prefix]);
+    fetchSignalQuality();
+    fetchWatchdog();
+    fetchStrategyTracker();
+  }, [prefix, fetchSignalQuality, fetchWatchdog, fetchStrategyTracker]);
 
   useEffect(() => {
     fetchPnlHistory();
@@ -59,7 +65,9 @@ export default function Analytics() {
         <TabsList className="bg-zinc-900 border border-zinc-800">
           <TabsTrigger value="overview" className="text-xs data-[state=active]:bg-zinc-800">Overview</TabsTrigger>
           <TabsTrigger value="strategies" className="text-xs data-[state=active]:bg-zinc-800">Strategies</TabsTrigger>
+          <TabsTrigger value="signals" className="text-xs data-[state=active]:bg-zinc-800">Signal Quality</TabsTrigger>
           <TabsTrigger value="execution" className="text-xs data-[state=active]:bg-zinc-800">Execution</TabsTrigger>
+          <TabsTrigger value="watchdog" className="text-xs data-[state=active]:bg-zinc-800">Watchdog</TabsTrigger>
           <TabsTrigger value="charts" className="text-xs data-[state=active]:bg-zinc-800">Charts</TabsTrigger>
         </TabsList>
 
@@ -71,8 +79,16 @@ export default function Analytics() {
           <StrategiesSection strategies={strategies} />
         </TabsContent>
 
+        <TabsContent value="signals" className="mt-4 space-y-4">
+          <SignalQualitySection signalQuality={signalQuality} strategyTracker={strategyTracker} />
+        </TabsContent>
+
         <TabsContent value="execution" className="mt-4 space-y-4">
           <ExecutionSection eq={execQuality} />
+        </TabsContent>
+
+        <TabsContent value="watchdog" className="mt-4 space-y-4">
+          <WatchdogSection watchdog={watchdog} strategyTracker={strategyTracker} />
         </TabsContent>
 
         <TabsContent value="charts" className="mt-4 space-y-4">
@@ -294,6 +310,220 @@ function ChartsSection({ ts, pnlHistory }) {
         <div className="text-center py-8 text-zinc-600 text-sm">
           Generate trades to see time-based charts
         </div>
+      )}
+    </div>
+  );
+}
+
+
+function SignalQualitySection({ signalQuality, strategyTracker }) {
+  const signals = signalQuality || {};
+  const stPerf = (strategyTracker || {}).performance || {};
+  const stSlots = (strategyTracker || {}).position_slots || {};
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {Object.entries(signals).map(([strategy, data]) => (
+          <SectionCard key={strategy} title={strategy.replace(/_/g, ' ').toUpperCase()} testId={`signal-quality-${strategy}`}>
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Signals Generated</span>
+                <span className="text-zinc-300 font-mono">{data.signals_generated}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Accepted</span>
+                <span className="text-emerald-400 font-mono">{data.signals_accepted}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Rejected</span>
+                <span className="text-red-400 font-mono">{data.signals_rejected}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Acceptance Rate</span>
+                <span className={`font-mono ${data.acceptance_rate > 10 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {data.acceptance_rate}%
+                </span>
+              </div>
+
+              {data.rejection_reasons && Object.keys(data.rejection_reasons).length > 0 && (
+                <>
+                  <div className="border-t border-zinc-800 pt-2 mt-2 text-zinc-500">Rejection Reasons:</div>
+                  {Object.entries(data.rejection_reasons).sort(([,a],[,b]) => b - a).map(([reason, count]) => (
+                    <div key={reason} className="flex justify-between pl-2">
+                      <span className="text-zinc-500">{reason}</span>
+                      <span className="text-zinc-400 font-mono">{count}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </SectionCard>
+        ))}
+      </div>
+
+      {/* Position Slots */}
+      {stSlots.by_strategy && (
+        <SectionCard title="Position Slots" testId="section-position-slots">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="space-y-2">
+              <div className="text-zinc-500 font-medium">Weather Bucket</div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Active</span>
+                <span className="text-zinc-300 font-mono">{stSlots.weather_count || 0} / {stSlots.limits?.max_weather || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Headroom</span>
+                <span className={`font-mono ${(stSlots.headroom?.weather || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {stSlots.headroom?.weather || 0}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-zinc-500 font-medium">Non-Weather Bucket</div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Active</span>
+                <span className="text-zinc-300 font-mono">{stSlots.nonweather_count || 0} / {stSlots.limits?.max_nonweather || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Headroom</span>
+                <span className={`font-mono ${(stSlots.headroom?.nonweather || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {stSlots.headroom?.nonweather || 0}
+                </span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="text-zinc-500 font-medium">Global</div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Total</span>
+                <span className="text-zinc-300 font-mono">{stSlots.total || 0} / {stSlots.limits?.max_global || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Headroom</span>
+                <span className={`font-mono ${(stSlots.headroom?.global || 0) > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {stSlots.headroom?.global || 0}
+                </span>
+              </div>
+            </div>
+          </div>
+          {stSlots.by_strategy && Object.keys(stSlots.by_strategy).length > 0 && (
+            <div className="mt-4 pt-3 border-t border-zinc-800">
+              <div className="text-zinc-500 text-xs mb-2">Positions by Strategy:</div>
+              <div className="flex flex-wrap gap-3">
+                {Object.entries(stSlots.by_strategy).sort(([,a],[,b]) => b - a).map(([sid, cnt]) => (
+                  <span key={sid} className="text-xs bg-zinc-800 px-2 py-1 rounded text-zinc-300">
+                    {sid}: <span className="font-mono">{cnt}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {stSlots.blocked_by_position_limit && Object.keys(stSlots.blocked_by_position_limit).length > 0 && (
+            <div className="mt-3 pt-3 border-t border-zinc-800">
+              <div className="text-zinc-500 text-xs mb-2">Blocked by Position Limit:</div>
+              <div className="flex gap-3">
+                {Object.entries(stSlots.blocked_by_position_limit).map(([bucket, cnt]) => (
+                  <span key={bucket} className="text-xs bg-red-900/30 px-2 py-1 rounded text-red-300">
+                    {bucket}: <span className="font-mono">{cnt}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      )}
+    </div>
+  );
+}
+
+function WatchdogSection({ watchdog, strategyTracker }) {
+  const wd = watchdog || {};
+  const thresholds = wd.thresholds || {};
+
+  const items = [
+    {
+      label: 'Last New Market',
+      time: wd.last_new_market_at,
+      minutes: wd.minutes_since_new_market,
+      threshold: thresholds.no_market_alert_minutes,
+    },
+    {
+      label: 'Last Trade Opened',
+      time: wd.last_trade_opened_at,
+      minutes: wd.minutes_since_trade_opened,
+      threshold: thresholds.no_trade_open_alert_minutes,
+    },
+    {
+      label: 'Last Trade Closed',
+      time: wd.last_trade_closed_at,
+      minutes: wd.minutes_since_trade_closed,
+      threshold: thresholds.no_trade_close_alert_minutes,
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <SectionCard title="Discovery Watchdog" testId="section-watchdog">
+        <div className="space-y-4">
+          {items.map((item) => {
+            const overThreshold = item.minutes != null && item.threshold != null && item.minutes > item.threshold;
+            return (
+              <div key={item.label} className="flex justify-between items-center text-xs py-2 border-b border-zinc-800/50 last:border-0">
+                <div>
+                  <div className="text-zinc-300">{item.label}</div>
+                  <div className="text-zinc-600 text-[10px] mt-0.5">
+                    {item.time || 'Never'} | Threshold: {item.threshold || '—'} min
+                  </div>
+                </div>
+                <div className="text-right">
+                  {item.minutes != null ? (
+                    <span className={`font-mono ${overThreshold ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {item.minutes.toFixed(0)} min ago
+                    </span>
+                  ) : (
+                    <span className="text-zinc-600">N/A</span>
+                  )}
+                  {overThreshold && (
+                    <div className="text-red-400 text-[10px] mt-0.5">ALERT</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </SectionCard>
+
+      {/* Per-strategy performance from tracker */}
+      {strategyTracker?.performance && Object.keys(strategyTracker.performance).length > 0 && (
+        <SectionCard title="Strategy Performance (Tracker)" testId="section-tracker-perf">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Object.entries(strategyTracker.performance).map(([sid, perf]) => (
+              <div key={sid} className="bg-zinc-800/40 rounded p-3 text-xs space-y-1.5">
+                <div className="text-zinc-200 font-medium">{sid.replace(/_/g, ' ').toUpperCase()}</div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Total P&L</span>
+                  <span className={`font-mono ${perf.total_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    ${perf.total_pnl?.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Trades</span>
+                  <span className="text-zinc-300 font-mono">{perf.trade_count}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">Win Rate</span>
+                  <span className={`font-mono ${perf.win_rate > 50 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {perf.win_rate}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">W/L</span>
+                  <span className="text-zinc-300 font-mono">{perf.wins}/{perf.losses}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
       )}
     </div>
   );
