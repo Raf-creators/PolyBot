@@ -8,7 +8,7 @@ not binary YES/NO pairs. Each bucket has its own token_id and market price.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from enum import Enum
 from models import utc_now, new_id
 import math
@@ -237,6 +237,8 @@ class WeatherSignal(BaseModel):
     is_tradable: bool
     rejection_reason: Optional[str] = None
     liquidity_score: float = 0.0
+    quality_score: float = 0.0
+    explanation: Dict[str, Any] = Field(default_factory=dict)
     detected_at: str = Field(default_factory=utc_now)
 
 

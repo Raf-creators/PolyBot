@@ -1,0 +1,135 @@
+{
+  "summary": "Iteration 46: Weather V2 Incremental Upgrade - All features verified working. Backend: 21/21 tests passed. Frontend: All UI elements verified via Playwright.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/strategies/weather/signals returns 200 - PASS",
+      "Signals response has tradable, rejected, total_tradable, total_rejected - PASS",
+      "Signals have quality_score field (0.858 on tradable signal) - PASS",
+      "Tradable signals have explanation dict with thesis - PASS",
+      "Rejected signals have explanation with rejection_reason and forecast_summary - PASS",
+      "Explanation dict has required fields: market, location, contract_type, bucket - PASS",
+      "GET /api/strategies/weather/health returns 200 - PASS",
+      "Health response includes best_signal_this_scan after scan runs - PASS",
+      "best_signal_this_scan has required fields: station, date, bucket, edge_bps, quality_score, thesis - PASS",
+      "GET /api/positions/weather/breakdown returns 200 - PASS",
+      "Breakdown has total_open, total_unrealized_pnl, by_resolution_date, biggest_winners, biggest_losers, oldest_open, stale_positions, stale_list - PASS",
+      "by_resolution_date structure correct with count, unrealized_pnl, capital - PASS",
+      "biggest_winners and biggest_losers arrays have position data - PASS",
+      "GET /api/positions/by-strategy returns 200 - PASS",
+      "positions/by-strategy has weather bucket with 54 positions - PASS",
+      "GET /api/strategies/sniper/signals returns 200 - PASS",
+      "GET /api/strategies/sniper/health returns 200 - PASS",
+      "GET /api/analytics/strategy-attribution returns 200 - PASS",
+      "GET /api/controls returns 200, mode=paper - PASS",
+      "quality_score values in valid range [0,1] - PASS",
+      "best_signal_this_scan has highest quality_score among tradable - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with data-testid='weather-page' - PASS",
+      "Weather page stat cards: Open Positions (54, $-1.62 unrl), Tradable Signals, Forecast Coverage, Scan Latency - PASS",
+      "Weather page PnL bar shows Realized/Unrealized/Total correctly - PASS",
+      "Weather page tabs: Open Positions (54), Signals (1), Executions, Rejected (49), Forecasts (65), Calibration, Health - PASS",
+      "Weather page Open Positions tab is active by default - PASS",
+      "Weather positions table shows City, Bucket, Entry, Mark, Size, Unrl P&L, %, Edge@Entry, Resolves columns - PASS",
+      "Weather Signals tab shows BEST SIGNAL banner with station KORD, date 2026-03-19, bucket, 2424bps edge, Q:0.889 - PASS",
+      "Weather Signals table has Quality and Thesis columns - PASS",
+      "Weather Rejected tab shows color-coded rejection reasons (stale=gray, liquidity=orange, edge=amber) - PASS",
+      "Weather Rejected tab has Context column with forecast summary - PASS",
+      "Weather Position Breakdown section visible: By Resolution Date, Biggest Winners, Oldest Open - PASS",
+      "Sniper page loads with data-testid='sniper-page' - PASS",
+      "Sniper page stat cards: Open Positions (11), Tradable Signals, Markets Classified (25), Scan Latency - PASS",
+      "Sniper page PnL bar shows Realized +$50.23 / Unrealized +$0.00 / Total +$50.23 - PASS",
+      "Sniper page tabs: Open Positions (11), Signals, Rejected (50), Executions, Health - PASS",
+      "Sniper page Open Positions tab is active by default - PASS",
+      "Analytics page loads with Strategy Comparison tab - PASS",
+      "Analytics Strategy Comparison shows 3 strategy cards: CRYPTO, WEATHER, ARB - PASS",
+      "Analytics comparison table shows Realized/Unrealized/Total PnL, Open Positions, Closed Trades - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "GET /api/strategies/weather/signals returns signals with 'explanation' and 'quality_score' fields": "PASS",
+    "Tradable signals include explanation.thesis field": "PASS",
+    "Rejected signals include explanation.rejection_reason and explanation.forecast_summary": "PASS",
+    "GET /api/strategies/weather/health returns best_signal_this_scan object": "PASS",
+    "best_signal_this_scan has station, date, bucket, edge_bps, quality_score, thesis": "PASS",
+    "GET /api/positions/weather/breakdown returns breakdown with all required fields": "PASS",
+    "Weather page Signals tab shows BEST SIGNAL banner when best_signal_this_scan exists": "PASS",
+    "Weather page Signals tab table has Quality column and Thesis column": "PASS",
+    "Weather page Rejected tab shows color-coded rejection reasons and Context column": "PASS",
+    "Weather page Open Positions tab shows Position Breakdown section": "PASS",
+    "Weather page stat cards show Open Positions count with unrealized PnL subtitle": "PASS",
+    "Weather page PnL bar shows correct Realized/Unrealized/Total values": "PASS",
+    "Sniper page still renders correctly with Open Positions tab": "PASS",
+    "Analytics Strategy Comparison still renders with merged position data": "PASS"
+  },
+
+  "api_data_captured": {
+    "weather_signals": {
+      "total_tradable": 1,
+      "total_rejected": 49,
+      "sample_rejected_explanation": {
+        "market": "Will the highest temperature in Atlanta be 37°F or below on March 17?",
+        "location": "Atlanta",
+        "contract_type": "temperature_bucket",
+        "bucket": "37°F or below",
+        "forecast_summary": "Forecast high 42.0F (sigma 2.5F, lead 7h)",
+        "rejection_reason": "stale_market (409s)"
+      }
+    },
+    "best_signal_this_scan": {
+      "station": "KORD",
+      "date": "2026-03-19",
+      "bucket": "37°F or below",
+      "edge_bps": 2424,
+      "confidence": 0.96,
+      "quality_score": 0.925,
+      "thesis": "Model says 37°F or below has 25% probability but market prices it at 1%; 2424bps edge; forecast (39F) is within -0.9 sigma of bucket center"
+    },
+    "weather_position_breakdown": {
+      "total_open": 54,
+      "total_unrealized_pnl": -1.62,
+      "stale_positions": 0,
+      "by_resolution_date": "Grouped by date with count, capital, unrealized_pnl"
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration46_weather_v2.py",
+    "/app/test_reports/pytest/pytest_results_iteration46.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration46_weather_v2.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (21/21 tests passed)",
+    "frontend": "100% (All UI features verified working)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 46 Weather V2 upgrade complete: (1) Explanation layer added to all weather signals - includes forecast_summary, model_probability, market_price, edge, confidence, rejection_reason (for rejected), thesis (for tradable). (2) quality_score computed on every signal (0-1 scale combining edge 50%, confidence 30%, liquidity 20%). (3) best_signal_this_scan tracked in /api/strategies/weather/health showing top opportunity per scan. (4) /api/positions/weather/breakdown endpoint returns age/resolution analysis: total_open, total_unrealized_pnl, by_resolution_date grouping, biggest_winners, biggest_losers, oldest_open, stale_positions. Frontend updated with BEST SIGNAL banner on Signals tab, Quality/Thesis columns in signals table, color-coded rejection reasons in Rejected tab, Context column with forecast summary, PositionBreakdownSection on Open Positions tab. All existing functionality preserved. Weather thresholds: min_edge=500bps, min_confidence=0.55, max_weather_positions=25. Currently 54 open weather positions (over cap, so no new trades execute but signals still generate)."
+}

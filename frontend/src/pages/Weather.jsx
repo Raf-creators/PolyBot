@@ -38,18 +38,20 @@ export default function Weather() {
   const [rollingCalStatus, setRollingCalStatus] = useState(null);
   const [calRunning, setCalRunning] = useState(false);
   const [rollingCalRunning, setRollingCalRunning] = useState(false);
+  const [posBreakdown, setPosBreakdown] = useState(null);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal, rolCal] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal, bk] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
         axios.get(`${API_BASE}/strategies/weather/calibration/status`),
         axios.get(`${API_BASE}/strategies/weather/calibration/rolling/status`),
+        axios.get(`${API_BASE}/positions/weather/breakdown`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
@@ -57,6 +59,7 @@ export default function Weather() {
       setStationSummary(cal.data?.station_summaries || {});
       setSigmaCalStatus(sigCal.data);
       setRollingCalStatus(rolCal.data);
+      setPosBreakdown(bk.data);
     } catch {}
   }, [demoMode]);
 
@@ -153,13 +156,22 @@ export default function Weather() {
     { key: 'confidence', label: 'Conf', align: 'right', sortable: true, render: (v) => (
       <span className={`font-mono ${v >= 0.6 ? 'text-emerald-400' : v >= 0.3 ? 'text-amber-400' : 'text-zinc-500'}`}>{v > 0 ? (v * 100).toFixed(0) + '%' : '—'}</span>
     )},
+    { key: 'quality_score', label: 'Quality', align: 'right', sortable: true, render: (v) => (
+      <span className={`font-mono font-medium ${v >= 0.5 ? 'text-emerald-400' : v >= 0.25 ? 'text-amber-400' : 'text-zinc-500'}`}>{v > 0 ? v.toFixed(3) : '—'}</span>
+    )},
     { key: 'recommended_size', label: 'Size', align: 'right', render: (v) => <span className="font-mono">{v > 0 ? formatNumber(v, 1) : '—'}</span> },
+    { key: 'explanation', label: 'Thesis', render: (v) => (
+      <span className="text-zinc-500 text-[10px] max-w-[200px] truncate block" title={v?.thesis || ''}>{v?.thesis || '—'}</span>
+    )},
   ];
 
   const rejectedColumns = [
     ...signalColumns.slice(0, 5),
     { key: 'rejection_reason', label: 'Reason', render: (v) => (
-      <span className={`text-xs ${v?.includes('liquidity') ? 'text-orange-400' : 'text-zinc-500'}`}>{v}</span>
+      <span className={`text-xs font-medium ${v?.includes('liquidity') ? 'text-orange-400' : v?.includes('edge') ? 'text-amber-400' : v?.includes('confidence') ? 'text-amber-400' : v?.includes('stale') ? 'text-zinc-500' : 'text-red-400'}`}>{v}</span>
+    )},
+    { key: 'explanation', label: 'Context', render: (v) => (
+      <span className="text-zinc-600 text-[10px] max-w-[180px] truncate block" title={v?.forecast_summary || ''}>{v?.forecast_summary || '—'}</span>
     )},
     { key: 'detected_at', label: 'Detected', render: (v) => <span className="text-zinc-600">{formatTimeAgo(v)}</span> },
   ];
@@ -286,16 +298,32 @@ export default function Weather() {
         </TabsList>
 
         {/* Open Positions Tab (PRIMARY) */}
-        <TabsContent value="positions" className="mt-4">
+        <TabsContent value="positions" className="mt-4 space-y-5">
           <SectionCard title="Open Weather Positions" testId="section-weather-positions">
             <DataTable columns={positionColumns} data={weatherPositions}
               emptyMessage="No open weather positions — trades will appear here when the strategy executes"
               testId="weather-positions-table" />
           </SectionCard>
+          {posBreakdown && <PositionBreakdownSection data={posBreakdown} />}
         </TabsContent>
 
         {/* Signals Tab */}
-        <TabsContent value="signals" className="mt-4">
+        <TabsContent value="signals" className="mt-4 space-y-5">
+          {health.best_signal_this_scan && (
+            <div data-testid="best-signal-banner" className="px-4 py-3 bg-emerald-950/30 border border-emerald-800/30 rounded-lg">
+              <div className="flex items-center gap-3 text-xs">
+                <span className="text-emerald-400 font-semibold">BEST SIGNAL</span>
+                <span className="text-cyan-400 font-mono">{health.best_signal_this_scan.station}</span>
+                <span className="text-zinc-400">{health.best_signal_this_scan.date}</span>
+                <span className="text-zinc-200 font-medium">{health.best_signal_this_scan.bucket}</span>
+                <span className="text-emerald-400 font-mono">{health.best_signal_this_scan.edge_bps}bps</span>
+                <span className="text-amber-400 font-mono">Q:{health.best_signal_this_scan.quality_score?.toFixed(3)}</span>
+                {health.best_signal_this_scan.thesis && (
+                  <span className="text-zinc-500 truncate max-w-[300px]" title={health.best_signal_this_scan.thesis}>{health.best_signal_this_scan.thesis}</span>
+                )}
+              </div>
+            </div>
+          )}
           <SectionCard testId="section-weather-signals">
             <DataTable columns={signalColumns} data={signals.tradable || []}
               emptyMessage="No tradable weather signals — start engine & wait for weather markets" testId="weather-signals-table" />
@@ -594,5 +622,81 @@ function RollingCalibrationSection({ status, running, onRun, onReload }) {
         )) : <p className="text-zinc-600">No rolling calibrations computed yet.</p>}
       </div>
     </SectionCard>
+  );
+}
+
+
+function PositionBreakdownSection({ data }) {
+  const bd = data || {};
+  const resolutionEntries = Object.entries(bd.by_resolution_date || {});
+  const staleCount = bd.stale_positions || 0;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      {/* Resolution Date Breakdown */}
+      <SectionCard title="By Resolution Date" testId="section-resolution-breakdown">
+        <div className="space-y-2 text-xs">
+          {resolutionEntries.length === 0 ? (
+            <p className="text-zinc-600">No resolution data</p>
+          ) : resolutionEntries.map(([date, info]) => (
+            <div key={date} className="flex justify-between items-center">
+              <span className={`font-mono ${date === 'unknown' ? 'text-zinc-600' : 'text-zinc-300'}`}>{date}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-400">{info.count} pos</span>
+                <span className="text-zinc-500">${info.capital}</span>
+                <span className={`font-mono ${info.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {info.unrealized_pnl >= 0 ? '+' : ''}{info.unrealized_pnl?.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          ))}
+          {staleCount > 0 && (
+            <div className="pt-2 border-t border-zinc-800">
+              <span className="text-red-400 font-medium">{staleCount} stale positions</span>
+              <span className="text-zinc-600 ml-2">(past resolution)</span>
+            </div>
+          )}
+        </div>
+      </SectionCard>
+
+      {/* Biggest Winners */}
+      <SectionCard title="Biggest Winners" testId="section-biggest-winners">
+        <div className="space-y-2 text-xs">
+          {(bd.biggest_winners || []).length === 0 ? (
+            <p className="text-zinc-600">No open positions</p>
+          ) : (bd.biggest_winners || []).map((p, i) => (
+            <div key={i} className="flex justify-between items-center">
+              <span className="text-zinc-300 truncate max-w-[150px]">{p.city || p.market_question?.substring(0, 30)}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-500 font-mono">{p.size?.toFixed(1)}</span>
+                <span className={`font-mono font-medium ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl?.toFixed(3)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
+      {/* Oldest Open / Biggest Losers */}
+      <SectionCard title="Oldest Open" testId="section-oldest-open">
+        <div className="space-y-2 text-xs">
+          {(bd.oldest_open || []).length === 0 ? (
+            <p className="text-zinc-600">No open positions</p>
+          ) : (bd.oldest_open || []).map((p, i) => (
+            <div key={i} className="flex justify-between items-center">
+              <span className="text-zinc-300 truncate max-w-[120px]">{p.city || p.market_question?.substring(0, 25)}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-amber-400 font-mono">{p.hours_open != null ? `${p.hours_open.toFixed(0)}h` : '—'}</span>
+                <span className="text-zinc-500 font-mono">{p.hours_to_resolution != null ? `→${p.hours_to_resolution.toFixed(0)}h` : ''}</span>
+                <span className={`font-mono ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl?.toFixed(3)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+    </div>
   );
 }

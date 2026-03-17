@@ -284,9 +284,30 @@ class WeatherTrader(BaseStrategy):
                 # Stage 5: Execute eligible signals — sorted by edge (highest first)
                 eligible = sorted(
                     [s for s in signals if s.is_tradable],
-                    key=lambda s: s.edge_bps,
+                    key=lambda s: s.quality_score,
                     reverse=True,
                 )
+
+                # Track best opportunity this scan
+                if eligible:
+                    best = eligible[0]
+                    self._m["best_signal_this_scan"] = {
+                        "station": best.station_id,
+                        "date": best.target_date,
+                        "bucket": best.bucket_label,
+                        "edge_bps": round(best.edge_bps, 0),
+                        "confidence": round(best.confidence, 3),
+                        "quality_score": best.quality_score,
+                        "thesis": best.explanation.get("thesis", ""),
+                    }
+                    logger.info(
+                        f"[WEATHER] Best signal: {best.station_id} {best.target_date} "
+                        f"bucket={best.bucket_label} quality={best.quality_score:.3f} "
+                        f"edge={best.edge_bps:.0f}bps conf={best.confidence:.3f}"
+                    )
+                else:
+                    self._m["best_signal_this_scan"] = None
+
                 for sig in eligible:
                     if len(self._active_executions) >= self.config.max_concurrent_signals:
                         break
@@ -678,6 +699,29 @@ class WeatherTrader(BaseStrategy):
             if size <= 0:
                 continue
 
+            # Quality score: normalized composite of edge, confidence, liquidity
+            q_edge = min(edge_bps / 2000.0, 1.0)     # 2000bps = perfect
+            q_conf = confidence                        # already 0-1
+            q_liq = min(liq_score / 100.0, 1.0)       # 100 = perfect
+            quality_score = round(q_edge * 0.5 + q_conf * 0.3 + q_liq * 0.2, 4)
+
+            # Explanation: structured reasoning for debugging and UI
+            city_name = self._get_city(cm.station_id)
+            explanation = {
+                "market": cm.question[:120],
+                "location": city_name or cm.station_id,
+                "contract_type": "temperature_bucket",
+                "bucket": bucket.label,
+                "forecast_summary": f"Forecast high {mu:.1f}F (sigma {sigma:.1f}F, lead {lead_hours:.0f}h)",
+                "model_probability": round(prob, 4),
+                "market_price": round(market_price, 4),
+                "edge": round(edge_bps, 0),
+                "confidence": round(confidence, 3),
+                "liquidity_score": round(liq_score, 1),
+                "quality_score": quality_score,
+                "thesis": self._build_thesis(mu, sigma, bucket, prob, market_price, edge_bps),
+            }
+
             signal = WeatherSignal(
                 condition_id=cm.condition_id,
                 station_id=cm.station_id,
@@ -694,6 +738,8 @@ class WeatherTrader(BaseStrategy):
                 recommended_size=size,
                 is_tradable=True,
                 liquidity_score=round(liq_score, 1),
+                quality_score=quality_score,
+                explanation=explanation,
             )
             signals.append(signal)
             buckets_traded += 1
@@ -703,7 +749,8 @@ class WeatherTrader(BaseStrategy):
                 f"[WEATHER] Signal: {cm.station_id} {cm.target_date} "
                 f"bucket={bucket.label} mu={mu:.1f}F sigma={sigma:.2f} "
                 f"prob={prob:.4f} mkt={market_price:.4f} "
-                f"edge={edge_bps:.0f}bps conf={confidence:.3f} size={size}"
+                f"edge={edge_bps:.0f}bps conf={confidence:.3f} "
+                f"quality={quality_score:.3f} size={size}"
             )
 
         return signals
@@ -718,6 +765,18 @@ class WeatherTrader(BaseStrategy):
         self._m["opportunities_rejected"] += 1
         bucket = reason.split(" ")[0] if reason else "unknown"
         self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+
+        city_name = self._get_city(cm.station_id) if cm else ""
+        explanation = {
+            "market": (cm.question[:120] if cm else ""),
+            "location": city_name or (cm.station_id if cm else ""),
+            "contract_type": "temperature_bucket",
+            "bucket": bucket_label,
+            "forecast_summary": f"Forecast high {mu:.1f}F (sigma {sigma:.1f}F, lead {lead_hours:.0f}h)" if mu else "no forecast",
+            "model_probability": round(model_prob, 4),
+            "market_price": round(market_price, 4),
+            "rejection_reason": reason,
+        }
 
         return WeatherSignal(
             condition_id=cm.condition_id,
@@ -736,7 +795,40 @@ class WeatherTrader(BaseStrategy):
             is_tradable=False,
             rejection_reason=reason,
             liquidity_score=round(liquidity_score, 1),
+            quality_score=0.0,
+            explanation=explanation,
         )
+
+
+    def _build_thesis(self, mu, sigma, bucket, prob, market_price, edge_bps) -> str:
+        """Build human-readable thesis for why a contract is mispriced."""
+        label = bucket.label
+        direction = "above" if (bucket.lower_bound and not bucket.upper_bound) else "below" if (bucket.upper_bound and not bucket.lower_bound) else "in"
+
+        # Distance from forecast to bucket
+        if bucket.lower_bound is not None and bucket.upper_bound is not None:
+            mid = (bucket.lower_bound + bucket.upper_bound) / 2.0
+            dist = abs(mu - mid)
+            dist_sigma = dist / sigma if sigma > 0 else 0
+        elif bucket.lower_bound is not None:
+            dist = mu - bucket.lower_bound
+            dist_sigma = dist / sigma if sigma > 0 else 0
+        elif bucket.upper_bound is not None:
+            dist = bucket.upper_bound - mu
+            dist_sigma = dist / sigma if sigma > 0 else 0
+        else:
+            dist_sigma = 0
+
+        parts = []
+        if prob > market_price:
+            parts.append(f"Model says {label} has {prob:.0%} probability but market prices it at {market_price:.0%}")
+            parts.append(f"{edge_bps:.0f}bps edge")
+        if dist_sigma < 1.0:
+            parts.append(f"forecast ({mu:.0f}F) is within {dist_sigma:.1f} sigma of bucket center")
+        elif dist_sigma > 2.0:
+            parts.append(f"forecast ({mu:.0f}F) is {dist_sigma:.1f} sigma away, tail probability play")
+
+        return "; ".join(parts) if parts else f"Edge {edge_bps:.0f}bps on {label}"
 
     # ---- Stage 5: Execution ----
 

@@ -1027,12 +1027,15 @@ _SNIPER_Q_RE = _re.compile(
 def _parse_weather_from_question(q: str) -> dict:
     m = _WEATHER_Q_RE.search(q or "")
     if m:
-        city = m.group("city").strip().rstrip(" be")
+        city = m.group("city").strip()
+        city = _re.sub(r'\s+(be|be between|will)$', '', city, flags=_re.IGNORECASE).strip()
         return {"station_id": city, "bucket_label": m.group("bucket").strip()}
     # Simpler fallback: try to extract city from "temperature in <City>"
     simple = _re.search(r"temperature\s+in\s+([A-Za-z\s.'-]+?)(?:\s+be|\s+will|\s*\?)", q or "", _re.IGNORECASE)
     if simple:
-        return {"station_id": simple.group(1).strip().rstrip(" be"), "bucket_label": ""}
+        city = simple.group(1).strip()
+        city = _re.sub(r'\s+(be|be between|will)$', '', city, flags=_re.IGNORECASE).strip()
+        return {"station_id": city, "bucket_label": ""}
     return {}
 
 
@@ -1213,6 +1216,99 @@ async def get_positions_by_strategy():
         "total_unrealized_pnl": round(total_unrealized, 4),
         "total_open": sum(len(v) for v in by_strategy.values()),
     }
+
+
+
+@api_router.get("/positions/weather/breakdown")
+async def get_weather_position_breakdown():
+    """Age/resolution breakdown for open weather positions."""
+    if not state:
+        raise HTTPException(500, "Engine not initialized")
+    from engine.risk import classify_strategy
+    now = datetime.now(timezone.utc)
+
+    positions = []
+    for pos in state.positions.values():
+        if classify_strategy(pos) != "weather":
+            continue
+        d = {
+            "token_id": pos.token_id,
+            "market_question": pos.market_question,
+            "avg_cost": pos.avg_cost,
+            "current_price": pos.current_price,
+            "size": pos.size,
+            "unrealized_pnl": pos.unrealized_pnl,
+        }
+        market = state.get_market(pos.token_id)
+        if market:
+            d["current_price"] = market.mid_price or pos.current_price
+            if market.mid_price and pos.avg_cost > 0:
+                d["unrealized_pnl"] = round((market.mid_price - pos.avg_cost) * pos.size, 4)
+            d["end_date"] = market.end_date
+            if market.end_date:
+                try:
+                    end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    d["hours_to_resolution"] = round((end_dt - now).total_seconds() / 3600, 1)
+                except (ValueError, TypeError):
+                    d["hours_to_resolution"] = None
+            else:
+                d["hours_to_resolution"] = None
+        else:
+            d["end_date"] = None
+            d["hours_to_resolution"] = None
+
+        # Parse city from question
+        parsed = _parse_weather_from_question(d["market_question"])
+        d["city"] = parsed.get("station_id", "")
+        d["bucket"] = parsed.get("bucket_label", "")
+
+        # Estimate time open from market data if possible
+        # No opened_at on Position model, so use end_date - typical_duration as proxy
+        d["hours_open"] = None
+
+        positions.append(d)
+
+    # Sort by unrealized_pnl for winners/losers
+    by_pnl = sorted(positions, key=lambda p: p.get("unrealized_pnl", 0))
+    biggest_losers = by_pnl[:5]
+    biggest_winners = list(reversed(by_pnl[-5:]))
+
+    # Sort by hours_open desc for oldest
+    by_age = sorted(positions, key=lambda p: -(p.get("hours_open") or 0))
+    oldest = by_age[:5]
+
+    # Group by resolution date
+    by_resolution = {}
+    for p in positions:
+        end = p.get("end_date", "unknown")
+        if end:
+            date_str = end[:10] if len(end) >= 10 else end
+        else:
+            date_str = "unknown"
+        if date_str not in by_resolution:
+            by_resolution[date_str] = {"count": 0, "unrealized_pnl": 0.0, "capital": 0.0}
+        by_resolution[date_str]["count"] += 1
+        by_resolution[date_str]["unrealized_pnl"] += p.get("unrealized_pnl", 0)
+        by_resolution[date_str]["capital"] += round(p.get("avg_cost", 0) * p.get("size", 0), 2)
+    # Round
+    for v in by_resolution.values():
+        v["unrealized_pnl"] = round(v["unrealized_pnl"], 4)
+        v["capital"] = round(v["capital"], 2)
+
+    # Stale positions: those past resolution or very close
+    stale = [p for p in positions if p.get("hours_to_resolution") is not None and p["hours_to_resolution"] < 0]
+
+    return {
+        "total_open": len(positions),
+        "total_unrealized_pnl": round(sum(p.get("unrealized_pnl", 0) for p in positions), 4),
+        "by_resolution_date": dict(sorted(by_resolution.items())),
+        "biggest_winners": biggest_winners,
+        "biggest_losers": biggest_losers,
+        "oldest_open": oldest,
+        "stale_positions": len(stale),
+        "stale_list": stale[:10],
+    }
+
 
 
 @api_router.get("/orders")
