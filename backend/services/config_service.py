@@ -114,14 +114,19 @@ class ConfigService:
         risk_dict = config.get("risk")
         if risk_dict:
             try:
-                # Migrate old default: if DB has the old default of 10,
-                # upgrade to the new default (25) so multi-strategy trading works
-                if risk_dict.get("max_concurrent_positions") == 10:
-                    risk_dict["max_concurrent_positions"] = RiskConfig().max_concurrent_positions
+                # Migrate old defaults so multi-strategy trading works
+                if risk_dict.get("max_concurrent_positions", 0) <= 10:
+                    new_default = RiskConfig().max_concurrent_positions
+                    risk_dict["max_concurrent_positions"] = new_default
                     logger.info(
-                        f"[CONFIG] Migrated max_concurrent_positions: 10 → "
-                        f"{risk_dict['max_concurrent_positions']}"
+                        f"[CONFIG] Migrated max_concurrent_positions → {new_default}"
                     )
+                # Ensure new per-strategy fields exist
+                for field in ("max_weather_positions", "max_nonweather_positions",
+                              "min_market_freshness_seconds", "max_spread_bps",
+                              "max_size_to_liquidity_ratio"):
+                    if field not in risk_dict:
+                        risk_dict[field] = getattr(RiskConfig(), field)
                 state.risk_config = RiskConfig(**risk_dict)
             except Exception as e:
                 logger.warning(f"Failed to apply risk config: {e}")

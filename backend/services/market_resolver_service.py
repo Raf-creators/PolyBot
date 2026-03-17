@@ -23,11 +23,13 @@ GAMMA_API = "https://gamma-api.polymarket.com"
 
 
 class MarketResolverService:
-    def __init__(self):
+    def __init__(self, tracker=None, on_trade_closed=None):
         self._state = None
         self._bus = None
         self._running = False
         self._task = None
+        self._tracker = tracker
+        self._on_trade_closed = on_trade_closed  # async callback
         self._session = None
 
         # Stats
@@ -177,6 +179,11 @@ class MarketResolverService:
                 )
                 self._state.add_trade(trade)
 
+                # Track per-strategy close for the ORIGINAL strategy that opened this position
+                original_strategy = getattr(sib_pos, "strategy_id", "unknown") or "resolver"
+                if self._tracker:
+                    self._tracker.record_close(original_strategy, pnl)
+
                 self._state.positions.pop(tid, None)
                 resolved_count += 1
 
@@ -237,6 +244,13 @@ class MarketResolverService:
                         "pnl": total_pnl,
                     },
                 ))
+
+            # Immediate WS push so frontend sees the new close instantly
+            if resolved_count > 0 and self._on_trade_closed:
+                try:
+                    await self._on_trade_closed()
+                except Exception:
+                    pass
 
         return {
             "resolved": resolved_count,

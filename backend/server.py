@@ -79,6 +79,10 @@ market_resolver_service: Optional[MarketResolverService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
+# Strategy tracking
+from services.strategy_tracker import StrategyTracker
+strategy_tracker = StrategyTracker()
+
 # Build / environment diagnostics
 _server_start_time: Optional[str] = None
 _git_commit: Optional[str] = None
@@ -158,6 +162,28 @@ async def _ws_broadcast_loop():
             await asyncio.sleep(2)
 
 
+async def _notify_trade_closed():
+    """Push an immediate WS update when a trade is closed.
+
+    This supplements the 2-second broadcast loop so the frontend
+    sees the new data within milliseconds instead of waiting for
+    the next poll cycle.
+    """
+    if not state:
+        return
+    try:
+        snapshot = state.snapshot()
+        dead = set()
+        for ws in ws_clients.copy():
+            try:
+                await ws.send_json({**snapshot, "_event": "trade_closed"})
+            except Exception:
+                dead.add(ws)
+        ws_clients.difference_update(dead)
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, ws_broadcast_task
@@ -183,6 +209,11 @@ async def lifespan(app: FastAPI):
     await engine.persistence.load_state_from_db(state)
     _trades_loaded_from_db = len(state.trades)
 
+    # Populate strategy tracker from loaded trades (historical performance)
+    for t in state.trades:
+        if t.pnl and t.pnl != 0:
+            strategy_tracker.record_close(t.strategy_id or "unknown", t.pnl)
+
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)
@@ -191,6 +222,7 @@ async def lifespan(app: FastAPI):
 
     # Phase 5: register crypto sniper strategy (enabled by default)
     sniper = CryptoSniper()
+    sniper._tracker = strategy_tracker
     engine.register_strategy(sniper)
     state.strategies["crypto_sniper"].enabled = True
     crypto_sniper_ref = sniper
@@ -262,7 +294,10 @@ async def lifespan(app: FastAPI):
     await auto_resolver_service.start()
 
     # Global market resolver — resolves all positions when markets expire
-    market_resolver_service = MarketResolverService()
+    market_resolver_service = MarketResolverService(
+        tracker=strategy_tracker,
+        on_trade_closed=_notify_trade_closed,
+    )
     await market_resolver_service.start(state, bus)
 
     # Phase 7: Config persistence — load from MongoDB and apply
@@ -349,6 +384,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Polymarket Edge OS", version="0.1.0", lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
+# Prevent browser / CDN caching on ALL API responses — critical for Railway
+# where no upstream proxy adds these headers.
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response: StarletteResponse = await call_next(request)
+        if request.url.path.startswith("/api"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+app.add_middleware(NoCacheMiddleware)
+
 
 # ---- Health & Status ----
 
@@ -415,6 +466,39 @@ async def get_diagnostics():
         "has_persistence_reload": True,  # flag to confirm this code version has the fix
         "resolver": market_resolver_service._stats if market_resolver_service else {},
     }
+
+
+@api_router.get("/analytics/strategy-tracker")
+async def get_strategy_tracker():
+    """Per-strategy performance, signal diagnostics, and watchdog timestamps."""
+    data = strategy_tracker.snapshot()
+
+    # Add per-strategy position counts
+    weather_count = 0
+    nonweather_count = 0
+    by_strategy = {}
+    if state:
+        from engine.risk import _is_weather_position
+        for pos in state.positions.values():
+            sid = getattr(pos, "strategy_id", "unknown") or "unknown"
+            by_strategy[sid] = by_strategy.get(sid, 0) + 1
+            if _is_weather_position(pos):
+                weather_count += 1
+            else:
+                nonweather_count += 1
+
+    data["position_slots"] = {
+        "weather": weather_count,
+        "nonweather": nonweather_count,
+        "by_strategy": by_strategy,
+        "limits": {
+            "max_weather": state.risk_config.max_weather_positions if state else 0,
+            "max_nonweather": state.risk_config.max_nonweather_positions if state else 0,
+            "max_global": state.risk_config.max_concurrent_positions if state else 0,
+        },
+    }
+
+    return data
 
 
 @api_router.get("/status")

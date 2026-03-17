@@ -32,7 +32,19 @@ export default function Overview() {
       fetchTrades();
       fetchPnlHistory();
     }, 5000);
-    return () => clearInterval(interval);
+
+    // Instant re-fetch when WS signals a trade closed
+    const onTradeClose = () => {
+      fetchPnlHistory();
+      fetchStatus();
+      fetchTrades();
+    };
+    window.addEventListener("trade_closed", onTradeClose);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("trade_closed", onTradeClose);
+    };
   }, [fetchStatus, fetchPositions, fetchTrades, fetchPnlHistory]);
 
   const health = stats.health || {};

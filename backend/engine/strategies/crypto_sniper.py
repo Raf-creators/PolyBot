@@ -381,6 +381,7 @@ class CryptoSniper(BaseStrategy):
         self._risk_engine = None
         self._execution_engine = None
         self._scan_task: Optional[asyncio.Task] = None
+        self._tracker = None  # StrategyTracker (injected at start)
 
         # Classification cache (refreshed every classification_refresh_interval)
         self._classified_cache: Dict[str, CryptoMarketClassification] = {}
@@ -784,6 +785,8 @@ class CryptoSniper(BaseStrategy):
         self._m["signals_rejected"] += 1
         bucket = reason.split(" ")[0] if reason else "unknown"
         self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+        if self._tracker:
+            self._tracker.record_signal(self.strategy_id, False, bucket)
 
         return SniperSignal(
             condition_id=cm.condition_id,
@@ -826,9 +829,10 @@ class CryptoSniper(BaseStrategy):
             signal.is_tradable = False
             signal.rejection_reason = f"risk: {reason}"
             self._m["signals_rejected"] += 1
-            # Track specific risk sub-reason for diagnostics
             risk_bucket = f"risk:{reason.split('(')[0].strip()}"
             self._m["rejection_reasons"][risk_bucket] = self._m["rejection_reasons"].get(risk_bucket, 0) + 1
+            if self._tracker:
+                self._tracker.record_signal(self.strategy_id, False, risk_bucket)
             return
 
         execution = SniperExecution(
@@ -847,6 +851,10 @@ class CryptoSniper(BaseStrategy):
         self._cooldown[signal.condition_id] = time.time()
         self._m["signals_executed"] += 1
         self._m["active_executions"] = len(self._active_executions)
+
+        # Track in strategy tracker
+        if self._tracker:
+            self._tracker.record_signal(self.strategy_id, True)
 
         # Emit signal event for notification system (non-blocking)
         await self._bus.emit(Event(

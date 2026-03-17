@@ -1,8 +1,22 @@
 import logging
+from collections import defaultdict
 
 from models import Event, EventType, OrderRecord, OrderStatus
 
 logger = logging.getLogger(__name__)
+
+WEATHER_STRATEGIES = {"weather_trader"}
+
+WEATHER_KEYWORDS = {"temperature", "highest temp", "lowest temp", "weather", "°f", "fahrenheit"}
+
+
+def _is_weather_position(pos) -> bool:
+    """Classify a position as weather based on strategy_id or market question keywords."""
+    sid = getattr(pos, "strategy_id", "") or ""
+    if sid in WEATHER_STRATEGIES:
+        return True
+    q = (getattr(pos, "market_question", "") or "").lower()
+    return any(kw in q for kw in WEATHER_KEYWORDS)
 
 
 class RiskEngine:
@@ -26,6 +40,21 @@ class RiskEngine:
             self._bus.off(EventType.ORDER_REQUEST, self._on_order_request)
         logger.info("Risk engine stopped")
 
+    # ---- helpers ----
+
+    def _count_positions_by_bucket(self):
+        """Count open positions per strategy bucket."""
+        weather = 0
+        nonweather = 0
+        for pos in self._state.positions.values():
+            if _is_weather_position(pos):
+                weather += 1
+            else:
+                nonweather += 1
+        return weather, nonweather
+
+    # ---- main check ----
+
     def check_order(self, order: OrderRecord) -> tuple:
         """Returns (approved: bool, reason: str)."""
         if not self._state:
@@ -39,15 +68,31 @@ class RiskEngine:
         if order.size > cfg.max_order_size:
             return False, f"order size {order.size} > max {cfg.max_order_size}"
 
+        # Position size projection
         existing = self._state.get_position(order.token_id)
         projected = (existing.size if existing else 0) + order.size
         if projected > cfg.max_position_size:
             return False, f"projected position {projected} > max {cfg.max_position_size}"
 
-        if len(self._state.positions) >= cfg.max_concurrent_positions:
-            if order.token_id not in self._state.positions:
-                return False, f"max concurrent positions ({cfg.max_concurrent_positions}) reached"
+        # Per-strategy-bucket slot check (only for NEW positions)
+        if order.token_id not in self._state.positions:
+            weather_count, nonweather_count = self._count_positions_by_bucket()
+            strategy = getattr(order, "strategy_id", "") or ""
+            is_weather = strategy in WEATHER_STRATEGIES
 
+            if is_weather:
+                if weather_count >= cfg.max_weather_positions:
+                    return False, f"weather positions ({weather_count}) >= max {cfg.max_weather_positions}"
+            else:
+                if nonweather_count >= cfg.max_nonweather_positions:
+                    return False, f"nonweather positions ({nonweather_count}) >= max {cfg.max_nonweather_positions}"
+
+            # Global fallback
+            total = weather_count + nonweather_count
+            if total >= cfg.max_concurrent_positions:
+                return False, f"max concurrent positions ({total}) >= {cfg.max_concurrent_positions}"
+
+        # Daily loss limit
         if self._state.daily_pnl <= -cfg.max_daily_loss:
             return False, f"daily loss limit hit ({self._state.daily_pnl})"
 

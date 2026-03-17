@@ -27,6 +27,10 @@ export function useWebSocket() {
           try {
             const data = JSON.parse(e.data);
             setWsSnapshot(data);
+            // If a trade just closed, fire event so Overview re-fetches pnl-history immediately
+            if (data._event === "trade_closed") {
+              window.dispatchEvent(new CustomEvent("trade_closed"));
+            }
           } catch {}
         };
 
