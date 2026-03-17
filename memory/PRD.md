@@ -24,26 +24,20 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 
 ### Realized PnL Fix (March 17)
 - Paper adapter records PnL on sell trades, resolver uses original strategy_id
-- Migrated 220 historical trades
 
 ### Weather Asymmetric Mode (March 17)
-- Separate `weather_asymmetric` strategy: market_price <= 0.25, prob >= 0.40, edge >= 0.15
-- Hold to resolution, separate PnL tracking, dedicated UI tab
+- Separate `weather_asymmetric` strategy targeting low-price/high-upside markets, hold to resolution
 
 ### Controlled Calibration & Overconfidence Fix (March 17)
 - 1.25x global sigma widening, +/-25% calibration cap, 30-sample minimum
-- Brier score, calibration curves, sigma evolution, sigma trace in signals
+- Brier score, calibration curves, sigma evolution, sigma trace
 
 ### Auto-Tuning Framework (March 17)
 - Disabled by default, stepwise 0.05 adjustments, capped 1.0-1.5x
-- Manual/auto_pending/auto modes, recommendation endpoint + apply endpoint
-
-### Weather-by-Type Performance (March 17)
-- PnL breakdown by temp/precip/snow/wind, card-based UI
+- Manual/auto_pending/auto modes, recommendation + apply endpoints
 
 ### Resolution Time Visibility (March 17)
-- Each weather position includes: resolves_at, target_date, time_to_resolution, opened_at, resolution_category
-- Filter by resolution: All / <6h / 6-24h / >24h, Sort: Resolves soonest / Held longest / Best P&L
+- resolves_at, time_left, time_open data. Filter by resolution: All/<6h/6-24h/>24h. Sort by time/PnL
 
 ### Position Lifecycle Management (March 17)
 - **Lifecycle modes**: OFF, TAG_ONLY (default), SHADOW_EXIT, AUTO_EXIT
@@ -53,20 +47,27 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
   - Edge decay: >= 60% decay from entry edge
   - Time inefficiency: held >= 18h with < 300 bps edge
 - **Asymmetric positions NEVER evaluated for exit**
-- Backend: `_evaluate_position_lifecycle()` runs every scan
 - API: `/api/positions/weather/exit-candidates`, `/api/positions/weather/lifecycle`
 - Frontend: Lifecycle badge, Mult/Edge/Decay/Status columns, Exit filter, Best Multiple sort
 
 ### Lifecycle Dashboard Tab (March 17)
-- **Summary Cards**: Total candidates, avg profit multiple, avg current edge, avg edge decay
-- **Exit Reason Distribution**: Visual bars for all 5 exit reasons with counts and avg metrics
-- **Resolution Time Breakdown**: <6h / 6-24h / >24h / unknown with position counts, exit rates, avg multiples
-- **Price Multiple Distribution**: Histogram across 6 ranges (<0.5x to >2.0x)
-- **Shadow Exit Timeline**: Table for simulated exit records (active in SHADOW_EXIT mode)
-- **Would Have Sold vs Held**: Per-position comparison of simulated exit PnL vs held PnL with delta and verdict
-- **Aggregate by Exit Reason**: Per-reason Sim Exit / Held / Delta comparison cards
-- Backend: `/api/positions/weather/lifecycle/dashboard` endpoint with `get_lifecycle_dashboard()` method
-- First-flagged snapshot tracking (`_exit_candidate_snapshots`) for persistent comparison
+- Summary Cards (candidates, avg mult, avg edge, avg decay)
+- Exit Reason Distribution bars for all 5 reasons
+- Resolution Time Breakdown with exit rates
+- Shadow Exit Timeline (active in SHADOW_EXIT mode)
+- Would Have Sold vs Held comparison with per-position delta
+- Aggregate by Exit Reason cards
+
+### Threshold Simulator (March 17)
+- **Simulation-only** panel — NO live impact (verified by testing)
+- 5 slider controls: profit capture, negative edge, edge decay, time threshold, time min edge
+- 3 presets: Conservative (3.0x/-200bp/80%/24h/500bp), Balanced (2.0x default), Aggressive (1.5x/-50bp/40%/12h/200bp)
+- Reset to Live button when thresholds modified
+- Real-time recalculation via `POST /api/positions/weather/lifecycle/simulate`
+- Results: comparison cards (exit candidates delta, good/bad exits, portfolio PnL)
+- Per-reason performance breakdown (live vs sim counts, PnL, good/bad exits)
+- New/Removed exits detail with position-level data
+- Decision quality assessment (% improved outcome, % reduced profit, verdict text)
 
 ## Key Endpoints
 | Endpoint | Method | Description |
@@ -75,14 +76,15 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 | /api/positions/weather/exit-candidates | GET | Exit candidates + config |
 | /api/positions/weather/lifecycle | GET | Full lifecycle evaluations |
 | /api/positions/weather/lifecycle/dashboard | GET | Dashboard for threshold validation |
+| /api/positions/weather/lifecycle/simulate | POST | Simulate exit decisions with custom thresholds |
 | /api/strategies/weather/health | GET | Health + lifecycle status |
 | /api/strategies/weather/calibration/metrics | GET | Brier, coverage, curves |
 | /api/strategies/weather/calibration/auto-tune | GET | Auto-tune recommendation |
 | /api/analytics/weather-by-type | GET | PnL by market type |
 
 ## Prioritized Backlog
-### P0: Validate lifecycle decisions in paper mode (observe exit candidates, tune thresholds)
-### P1: Enable SHADOW_EXIT mode, then AUTO_EXIT after validation
+### P0: Validate lifecycle decisions in paper mode, then enable SHADOW_EXIT
+### P1: Enable AUTO_EXIT for standard weather after shadow validation
 ### P2: Copy Trading Skeleton
 ### P3: Manual Order Entry
 ### P4: UI toggle for auto-tune sigma multiplier
