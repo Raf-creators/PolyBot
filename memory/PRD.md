@@ -392,6 +392,13 @@ expired          → Expired on CLOB
 - **Result**: After fix + vol warmup (~4min), sniper generated 112 signals, opened 16 new crypto positions, resolver closed 4 expired positions in real-time. PnL curve updated with latest close at 23:50 UTC.
 - Testing: 14/14 backend + 5/5 frontend (100%) — `/app/test_reports/iteration_40.json`
 
+### P9I — P&L Chart Timestamp Fix (Complete, 2026-03-17)
+- **Root Cause**: `formatChartTime()` used `toLocaleTimeString()` which: (a) showed only HH:MM with no date — so data from March 16 looked "old" when viewed on March 17, (b) used browser local time instead of UTC — timestamps didn't match Telegram/server times.
+- **Fixes Applied**:
+  - `PnlChart.jsx`: Replaced `toLocaleTimeString` with explicit UTC formatting (`getUTCHours`/`getUTCMinutes`). Added `formatChartDate` (MM/DD HH:MM) and `buildTickFormatter` that auto-switches to date format when data spans >18h. Tooltip always shows full `MM/DD HH:MM UTC`. Chart header displays "last close MM/DD HH:MM UTC" staleness indicator.
+  - `dashboardStore.js`: Added `latest_close_at` and `server_time` to `pnlHistory` default.
+- Testing: 8/8 backend + 5/5 frontend (100%) — `/app/test_reports/iteration_41.json`
+
 ### P10 — Future
 - **Risk sub-reason tracking**: Rejection reasons now show specific causes (e.g., `risk:max concurrent positions`) instead of generic `risk` bucket
 - **PnL tracking**: `get_health()` now returns `pnl` object with realized, unrealized, total, positions, fills computed from filled executions + live market prices
