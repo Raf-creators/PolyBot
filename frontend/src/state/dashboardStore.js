@@ -58,6 +58,12 @@ export const useDashboardStore = create((set, get) => ({
   // Strategy tracker (fetched from /api/analytics/strategy-tracker)
   strategyTracker: {},
 
+  // Strategy attribution (fetched from /api/analytics/strategy-attribution)
+  strategyAttribution: {},
+
+  // Controls (fetched from /api/controls)
+  controls: {},
+
   // Connection state
   wsConnected: false,
   lastWsUpdate: null,
@@ -112,6 +118,8 @@ export const useDashboardStore = create((set, get) => ({
   setSignalQuality: (data) => set({ signalQuality: data }),
   setWatchdog: (data) => set({ watchdog: data }),
   setStrategyTracker: (data) => set({ strategyTracker: data }),
+  setStrategyAttribution: (data) => set({ strategyAttribution: data }),
+  setControls: (data) => set({ controls: data }),
 
   // Apply a full demo snapshot to all state slices
   applyDemoSnapshot: (demoStatus) => set({

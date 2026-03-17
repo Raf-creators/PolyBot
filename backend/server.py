@@ -529,6 +529,41 @@ async def get_arb_diagnostics():
     return arb_scanner_ref.get_diagnostics()
 
 
+@api_router.get("/analytics/strategy-attribution")
+async def get_strategy_attribution():
+    """Deep per-strategy analytics: realized/unrealized PnL, hold time,
+    capital allocation, PnL/hour, capital efficiency."""
+    return strategy_tracker.get_strategy_attribution()
+
+
+@api_router.get("/controls")
+async def get_controls():
+    """Live-readiness controls: kill switch, limits, mode."""
+    if not state:
+        raise HTTPException(500, "not initialized")
+    cfg = state.risk_config
+    return {
+        "mode": "paper",
+        "kill_switch_active": cfg.kill_switch_active,
+        "max_daily_loss": cfg.max_daily_loss,
+        "max_market_exposure": cfg.max_market_exposure,
+        "max_order_size": cfg.max_order_size,
+        "max_position_size": cfg.max_position_size,
+        "max_concurrent_positions": cfg.max_concurrent_positions,
+        "daily_pnl": round(state.daily_pnl, 2),
+        "total_exposure": round(sum(
+            p.size * p.current_price for p in state.positions.values()
+        ), 2),
+        "limits_status": {
+            "daily_loss_remaining": round(cfg.max_daily_loss + state.daily_pnl, 2),
+            "exposure_remaining": round(cfg.max_market_exposure - sum(
+                p.size * p.current_price for p in state.positions.values()
+            ), 2),
+        },
+    }
+
+
+
 
 @api_router.get("/status")
 async def get_status():

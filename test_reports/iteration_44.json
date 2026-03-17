@@ -1,0 +1,117 @@
+{
+  "summary": "Iteration 44: Comprehensive testing of Per-strategy Analytics (strategy-attribution), Live-readiness Controls, and Strategy Comparison UI. Backend: 14/14 tests passed. Frontend: All UI features verified working including Strategy Comparison default tab, 4 strategy cards with TOP badge on ARB, Controls tab with PAPER MODE, kill switch, limits, and Overview PAPER MODE badge.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/analytics/strategy-attribution returns 200 - PASS",
+      "strategy-attribution returns all 4 buckets (crypto, weather, arb, resolver) - PASS",
+      "Each bucket has all required fields (realized_pnl, unrealized_pnl, total_pnl, trade_count, wins, losses, win_rate, avg_pnl_per_trade, avg_hold_hours, pnl_per_hour, capital_allocated, open_positions, avg_trade_size, best_trade, worst_trade) - PASS",
+      "crypto.trade_count > 0 and crypto.realized_pnl > 0 - PASS",
+      "arb.win_rate > 0 (has winning trades) - PASS",
+      "arb is top PnL strategy ($80.90) - PASS",
+      "GET /api/controls returns 200 - PASS",
+      "controls.mode = 'paper' - PASS",
+      "controls.kill_switch_active = false - PASS",
+      "controls has max_daily_loss, max_market_exposure, max_order_size, max_position_size - PASS",
+      "controls has daily_pnl and total_exposure - PASS",
+      "limits_status has daily_loss_remaining and exposure_remaining as positive numbers - PASS",
+      "GET /api/status - all 3 strategies show status='active' (NOT 'stopped') - PASS",
+      "GET /api/analytics/strategy-tracker - position_slots has per-strategy headroom (weather, crypto, arb, global) - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Analytics page loads with 'Strategy Comparison' as default tab - PASS",
+      "Analytics > Strategy Comparison shows 4 strategy cards (CRYPTO, WEATHER, ARB, RESOLVER) - PASS",
+      "Strategy cards show PnL values: CRYPTO +$50.23, WEATHER $0.00, ARB +$80.90, RESOLVER +$11.58 - PASS",
+      "ARB card has 'TOP' badge (highest PnL strategy) - PASS",
+      "Each card shows Win Rate, Trades, W/L, PnL/Hour, Hold Time, Capital, Positions - PASS",
+      "'Detailed Comparison' table shows all metrics for all 4 strategies - PASS",
+      "Analytics > Controls tab shows PAPER MODE banner with amber dot - PASS",
+      "Analytics > Controls tab shows Kill Switch status (INACTIVE - Trading enabled) - PASS",
+      "Analytics > Controls tab shows Daily PnL with progress bar - PASS",
+      "Analytics > Controls tab shows Risk Limits grid (Max Exposure, Max Order Size, Max Position Size, Max Concurrent) - PASS",
+      "Analytics > Controls tab shows Exposure bar with current/remaining values - PASS",
+      "Overview page shows PAPER MODE badge at the top - PASS",
+      "Overview page shows all strategies as 'active' with green dots - PASS",
+      "P&L chart renders correctly on Overview page - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "GET /api/analytics/strategy-attribution returns deep per-strategy analytics": "PASS",
+    "Each bucket has: realized_pnl, unrealized_pnl, total_pnl, trade_count, wins, losses, win_rate, avg_pnl_per_trade, avg_hold_hours, pnl_per_hour, capital_allocated, open_positions, avg_trade_size, best_trade, worst_trade": "PASS",
+    "GET /api/controls returns mode='paper', kill_switch_active=false, limits, daily_pnl, total_exposure, limits_status": "PASS",
+    "GET /api/status - all 3 strategies show status='active'": "PASS",
+    "Analytics page default tab is 'Strategy Comparison'": "PASS",
+    "Strategy Comparison shows 4 colored cards (CRYPTO=sky, WEATHER=amber, ARB=violet, RESOLVER=zinc)": "PASS",
+    "ARB card has 'TOP' badge as highest PnL strategy ($80.90)": "PASS",
+    "Controls tab shows PAPER MODE, kill switch, daily PnL progress bar, risk limits grid, exposure bar": "PASS",
+    "Overview page shows PAPER MODE badge": "PASS",
+    "Overview page shows strategies as 'active' with green dots": "PASS"
+  },
+
+  "api_data_captured": {
+    "strategy_attribution": {
+      "crypto": {"total_pnl": 50.23, "trade_count": 1743, "win_rate": 56.0, "pnl_per_hour": 0.35},
+      "weather": {"total_pnl": 0.0, "trade_count": 773, "win_rate": 0.0, "pnl_per_hour": 0.0},
+      "arb": {"total_pnl": 80.90, "trade_count": 151, "win_rate": 66.3, "pnl_per_hour": 3.21},
+      "resolver": {"total_pnl": 11.58, "trade_count": 224, "win_rate": 47.5, "pnl_per_hour": 0.31}
+    },
+    "controls": {
+      "mode": "paper",
+      "kill_switch_active": false,
+      "max_daily_loss": 100.0,
+      "max_market_exposure": 150.0,
+      "max_order_size": 10.0,
+      "max_position_size": 25.0,
+      "daily_pnl": 34.12,
+      "total_exposure": 80.03,
+      "limits_status": {
+        "daily_loss_remaining": 134.12,
+        "exposure_remaining": 69.97
+      }
+    },
+    "strategy_status": {
+      "arb_scanner": {"enabled": true, "status": "active"},
+      "crypto_sniper": {"enabled": true, "status": "active"},
+      "weather_trader": {"enabled": true, "status": "active"}
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration44_features.py",
+    "/app/test_reports/pytest/pytest_results_iteration44.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration44_features.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (All UI features verified working)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None - tested with live MongoDB data",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "All iteration 44 features verified: (1) /api/analytics/strategy-attribution returns deep per-strategy analytics for crypto/weather/arb/resolver with all required metrics (realized/unrealized PnL, win rate, hold time, pnl/hour, capital allocated, etc.). (2) /api/controls returns paper mode, kill switch inactive, risk limits, daily PnL, exposure status. (3) Analytics page default tab is 'Strategy Comparison' showing 4 colored cards with ARB tagged as TOP. (4) Controls tab shows PAPER MODE banner, kill switch, daily PnL progress bar, risk limits grid, exposure bar. (5) Overview has PAPER MODE badge and all strategies show 'active' status."
+}

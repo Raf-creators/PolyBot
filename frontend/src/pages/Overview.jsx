@@ -82,6 +82,12 @@ export default function Overview() {
         </span>
       </div>
 
+      {/* Mode badge */}
+      <div data-testid="mode-badge" className="inline-flex items-center gap-2 bg-amber-950/30 border border-amber-800/30 rounded px-3 py-1">
+        <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+        <span className="text-xs text-amber-300 font-semibold">PAPER MODE</span>
+      </div>
+
       {/* Key Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
         <StatCard testId="stat-daily-pnl" label="Daily P&L" value={formatPnl(stats.daily_pnl)} format="pnl" />
