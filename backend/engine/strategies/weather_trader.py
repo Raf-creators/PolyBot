@@ -27,7 +27,7 @@ from engine.strategies.weather_models import (
     WeatherConfig, WeatherMarketClassification, WeatherSignal,
     WeatherExecution, WeatherSignalStatus, BucketProbability,
     SigmaCalibration, StationType, ForecastAccuracyRecord,
-    WeatherMarketType,
+    WeatherMarketType, PositionLifecycleEval, ExitReason,
     SHADOW_CONFIG_OVERRIDES,
 )
 from engine.strategies.weather_parser import (
@@ -93,6 +93,10 @@ class WeatherTrader(BaseStrategy):
         # Weather alert service (injected from server.py)
         self._alert_service = None
 
+        # Position lifecycle evaluations: token_id → PositionLifecycleEval
+        self._lifecycle_evals: Dict[str, PositionLifecycleEval] = {}
+        self._lifecycle_shadow_exits: List[dict] = []  # log of shadow exit decisions
+
         # Metrics
         self._m: Dict = {
             "total_scans": 0,
@@ -126,6 +130,15 @@ class WeatherTrader(BaseStrategy):
                 "signals_executed": 0,
                 "active_positions": 0,
                 "best_signal_this_scan": None,
+            },
+            # Position lifecycle metrics
+            "lifecycle": {
+                "mode": "tag_only",
+                "positions_evaluated": 0,
+                "exit_candidates": 0,
+                "shadow_exits": 0,
+                "auto_exits": 0,
+                "last_eval_time": None,
             },
         }
 
@@ -375,6 +388,9 @@ class WeatherTrader(BaseStrategy):
                         break
                     await self._execute_signal(sig)
                     open_asym += 1
+
+                # Stage 5.5: Position Lifecycle — evaluate open standard weather positions
+                await self._evaluate_position_lifecycle()
 
                 # Stage 6: Record forecast accuracy entries for new classifications
                 await self._record_forecast_accuracy(signals)
@@ -1220,6 +1236,302 @@ class WeatherTrader(BaseStrategy):
         self._m["active_executions"] = len(self._active_executions)
         self._m["completed_executions"] = len(self._completed_executions)
 
+    # ---- Position Lifecycle Management ----
+
+    async def _evaluate_position_lifecycle(self):
+        """Evaluate all open standard weather positions for exit candidacy.
+
+        Asymmetric positions are NEVER evaluated — they always hold to resolution.
+        Evaluates: profit multiple, current edge, edge decay, time inefficiency.
+        """
+        mode = self.config.lifecycle_mode
+        if mode == "off":
+            self._lifecycle_evals.clear()
+            return
+
+        self._m["lifecycle"]["mode"] = mode
+        now = datetime.now(timezone.utc)
+        new_evals: Dict[str, PositionLifecycleEval] = {}
+        candidates = 0
+        shadow_exits_this_scan = 0
+
+        # Build opened_at map from trades
+        opened_at_map: Dict[str, datetime] = {}
+        for t in self._state.trades:
+            if t.side.value == "buy" and t.token_id not in opened_at_map:
+                try:
+                    opened_at_map[t.token_id] = datetime.fromisoformat(
+                        t.timestamp.replace("Z", "+00:00")
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+        # Build entry-edge map from completed executions + active executions
+        entry_edge_map: Dict[str, float] = {}  # token_id → edge_bps at entry
+        for ex in list(self._completed_executions) + list(self._active_executions.values()):
+            for sig in self._signals:
+                if sig.id == ex.signal_id and sig.token_id:
+                    if sig.token_id not in entry_edge_map:
+                        entry_edge_map[sig.token_id] = ex.target_edge_bps
+                    break
+
+        for pos in self._state.positions.values():
+            strategy_id = getattr(pos, 'strategy_id', '') or ''
+
+            # NEVER evaluate asymmetric positions for exit
+            if strategy_id == 'weather_asymmetric':
+                continue
+
+            # Evaluate standard weather positions (explicit or legacy without strategy_id)
+            from engine.risk import classify_strategy
+            bucket = classify_strategy(pos)
+            if strategy_id and strategy_id != 'weather_trader':
+                continue
+            if not strategy_id and bucket != 'weather':
+                continue
+
+            token_id = pos.token_id
+            market = self._state.get_market(token_id)
+            current_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+            avg_cost = pos.avg_cost or 0
+
+            if avg_cost <= 0 or current_price <= 0:
+                continue
+
+            # ---- Compute metrics ----
+            profit_multiple = round(current_price / avg_cost, 4)
+
+            # Entry edge
+            edge_at_entry = entry_edge_map.get(token_id, 0.0)
+
+            # Current edge: reprice using current model if we have classification context
+            current_model_prob = 0.0
+            current_edge_bps = 0.0
+            weather_ctx = None
+            for ex in list(self._completed_executions[-50:]) + list(self._active_executions.values()):
+                for sig in self._signals:
+                    if sig.id == ex.signal_id and sig.token_id == token_id:
+                        weather_ctx = {
+                            'station_id': sig.station_id,
+                            'target_date': sig.target_date,
+                            'condition_id': sig.condition_id,
+                        }
+                        break
+                if weather_ctx:
+                    break
+
+            # Try to reprice from current classified market data
+            if weather_ctx:
+                cid = weather_ctx.get('condition_id', '')
+                cm = self._classified.get(cid)
+                if cm:
+                    forecast = self._feed.get_cached_forecast(cm.station_id, cm.target_date)
+                    if forecast:
+                        mu = forecast.forecast_high_f
+                        mtype = getattr(cm, 'market_type', WeatherMarketType.TEMPERATURE)
+                        mtype_str = mtype.value if hasattr(mtype, 'value') else str(mtype)
+                        if mtype == WeatherMarketType.PRECIPITATION and forecast.forecast_precip_in is not None:
+                            mu = forecast.forecast_precip_in
+                        elif mtype == WeatherMarketType.SNOWFALL and forecast.forecast_snow_in is not None:
+                            mu = forecast.forecast_snow_in
+                        elif mtype == WeatherMarketType.WIND and forecast.forecast_wind_mph is not None:
+                            mu = forecast.forecast_wind_mph
+
+                        # Compute sigma
+                        try:
+                            target = date_type.fromisoformat(cm.target_date)
+                            month = target.month
+                        except (ValueError, TypeError):
+                            month = now.month
+
+                        oc_mult = self.config.sigma_overconfidence_multiplier
+                        if mtype == WeatherMarketType.TEMPERATURE:
+                            station = STATION_REGISTRY.get(cm.station_id)
+                            station_type = station.station_type if station else StationType.INLAND
+                            calibration = self._calibrations.get(cm.station_id)
+                            sigma, _ = calibrate_sigma(
+                                forecast.lead_hours, month, station_type, calibration,
+                                overconfidence_multiplier=oc_mult,
+                            )
+                            probs = compute_all_bucket_probabilities(cm.buckets, mu, sigma)
+                        else:
+                            sigma, _ = get_amount_sigma(mtype_str, forecast.lead_hours, overconfidence_multiplier=oc_mult)
+                            probs = [
+                                compute_amount_bucket_probability(b, mu, sigma, mtype_str)
+                                for b in cm.buckets
+                            ]
+
+                        # Find the bucket matching this token
+                        for i, bucket in enumerate(cm.buckets):
+                            if bucket.token_id == token_id:
+                                current_model_prob = probs[i] if i < len(probs) else 0.0
+                                current_edge_bps = compute_edge_bps(current_model_prob, current_price)
+                                break
+
+            # Edge decay
+            edge_decay_pct = 0.0
+            if edge_at_entry > 0 and current_edge_bps < edge_at_entry:
+                edge_decay_pct = round((edge_at_entry - current_edge_bps) / edge_at_entry, 4)
+
+            # Time held
+            time_held_hours = 0.0
+            opened_dt = opened_at_map.get(token_id)
+            if opened_dt:
+                time_held_hours = round((now - opened_dt).total_seconds() / 3600, 2)
+
+            # Hours to resolution
+            hours_to_res = None
+            if market and market.end_date:
+                try:
+                    end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    ttr = (end_dt - now).total_seconds()
+                    hours_to_res = round(ttr / 3600, 1) if ttr > 0 else 0.0
+                except (ValueError, TypeError):
+                    pass
+
+            # ---- Apply exit rules ----
+            is_exit = False
+            exit_reason = None
+            exit_detail = ""
+
+            # Rule 1: Profit capture
+            if profit_multiple >= self.config.profit_capture_threshold:
+                is_exit = True
+                exit_reason = ExitReason.PROFIT_CAPTURE.value
+                exit_detail = f"Price multiple {profit_multiple:.2f}x >= {self.config.profit_capture_threshold:.1f}x threshold"
+
+            # Rule 2: Negative edge flip
+            elif current_edge_bps <= self.config.max_negative_edge_bps and current_model_prob > 0:
+                is_exit = True
+                exit_reason = ExitReason.NEGATIVE_EDGE.value
+                exit_detail = f"Current edge {current_edge_bps:.0f}bps <= {self.config.max_negative_edge_bps:.0f}bps floor"
+
+            # Rule 3: Edge decay
+            elif edge_at_entry > 0 and edge_decay_pct >= self.config.edge_decay_exit_pct:
+                is_exit = True
+                exit_reason = ExitReason.EDGE_DECAY.value
+                exit_detail = f"Edge decayed {edge_decay_pct:.0%} (entry={edge_at_entry:.0f}bps, now={current_edge_bps:.0f}bps)"
+
+            # Rule 4: Time inefficiency
+            elif (time_held_hours >= self.config.time_inefficiency_hours
+                  and current_edge_bps < self.config.time_inefficiency_min_edge_bps
+                  and current_model_prob > 0):
+                is_exit = True
+                exit_reason = ExitReason.TIME_INEFFICIENCY.value
+                exit_detail = (
+                    f"Held {time_held_hours:.1f}h with only {current_edge_bps:.0f}bps edge "
+                    f"(threshold: {self.config.time_inefficiency_hours:.0f}h / {self.config.time_inefficiency_min_edge_bps:.0f}bps)"
+                )
+
+            eval_result = PositionLifecycleEval(
+                token_id=token_id,
+                strategy_id=strategy_id,
+                is_exit_candidate=is_exit,
+                exit_reason=exit_reason,
+                exit_reason_detail=exit_detail,
+                profit_multiple=profit_multiple,
+                edge_at_entry=edge_at_entry,
+                current_edge_bps=round(current_edge_bps, 2),
+                edge_decay_pct=edge_decay_pct,
+                current_model_prob=round(current_model_prob, 6),
+                time_held_hours=time_held_hours,
+                hours_to_resolution=hours_to_res,
+                lifecycle_mode=mode,
+            )
+            new_evals[token_id] = eval_result
+
+            if is_exit:
+                candidates += 1
+                logger.info(
+                    f"[LIFECYCLE] Exit candidate: {token_id[:12]}.. "
+                    f"reason={exit_reason} profit={profit_multiple:.2f}x "
+                    f"edge={current_edge_bps:.0f}bps decay={edge_decay_pct:.0%} "
+                    f"held={time_held_hours:.1f}h mode={mode}"
+                )
+
+                # Shadow exit: log but don't sell
+                if mode == "shadow_exit":
+                    shadow_entry = {
+                        "token_id": token_id,
+                        "reason": exit_reason,
+                        "detail": exit_detail,
+                        "profit_multiple": profit_multiple,
+                        "current_edge_bps": round(current_edge_bps, 2),
+                        "time_held_hours": time_held_hours,
+                        "would_sell_at": current_price,
+                        "timestamp": utc_now(),
+                    }
+                    self._lifecycle_shadow_exits.append(shadow_entry)
+                    if len(self._lifecycle_shadow_exits) > 100:
+                        self._lifecycle_shadow_exits = self._lifecycle_shadow_exits[-100:]
+                    shadow_exits_this_scan += 1
+                    logger.info(f"[LIFECYCLE-SHADOW] Would exit: {token_id[:12]}.. at {current_price:.4f} — {exit_detail}")
+
+                # Auto exit: actually sell (standard weather only)
+                elif mode == "auto_exit":
+                    await self._auto_exit_position(pos, exit_reason, exit_detail)
+                    self._m["lifecycle"]["auto_exits"] += 1
+
+        self._lifecycle_evals = new_evals
+        self._m["lifecycle"]["positions_evaluated"] = len(new_evals)
+        self._m["lifecycle"]["exit_candidates"] = candidates
+        self._m["lifecycle"]["shadow_exits"] += shadow_exits_this_scan
+        self._m["lifecycle"]["last_eval_time"] = utc_now()
+
+    async def _auto_exit_position(self, pos, exit_reason: str, exit_detail: str):
+        """Execute a sell order to exit a standard weather position."""
+        if not self._risk_engine or not self._execution_engine:
+            logger.warning("[LIFECYCLE] No execution context; skipping auto-exit")
+            return
+
+        market = self._state.get_market(pos.token_id)
+        sell_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+        if sell_price <= 0:
+            return
+
+        order = OrderRecord(
+            token_id=pos.token_id,
+            side=OrderSide.SELL,
+            price=sell_price,
+            size=pos.size,
+            strategy_id="weather_trader",
+        )
+
+        ok, reason = self._risk_engine.check_order(order)
+        if not ok:
+            logger.warning(f"[LIFECYCLE] Auto-exit blocked by risk: {reason}")
+            return
+
+        logger.info(
+            f"[LIFECYCLE-AUTO] Selling {pos.token_id[:12]}.. "
+            f"size={pos.size} price={sell_price:.4f} reason={exit_reason}: {exit_detail}"
+        )
+
+        await self._bus.emit(Event(
+            type=EventType.SIGNAL,
+            source="weather_trader",
+            data={
+                "strategy": "WEATHER-LIFECYCLE",
+                "asset": pos.token_id[:12],
+                "side": "SELL",
+                "reason": exit_reason,
+                "detail": exit_detail,
+            },
+        ))
+
+        try:
+            await self._execution_engine.submit_order(order)
+        except Exception as e:
+            logger.error(f"[LIFECYCLE] Auto-exit execution error: {e}")
+
+    def get_lifecycle_evals(self) -> Dict[str, dict]:
+        """Return current lifecycle evaluations keyed by token_id."""
+        return {tid: ev.model_dump() for tid, ev in self._lifecycle_evals.items()}
+
+    def get_lifecycle_shadow_exits(self, limit: int = 50) -> List[dict]:
+        """Return recent shadow exit log entries."""
+        return self._lifecycle_shadow_exits[-limit:]
+
     # ---- Forecast Accuracy Recording ----
 
     async def _record_forecast_accuracy(self, signals: List[WeatherSignal]):
@@ -1355,6 +1667,21 @@ class WeatherTrader(BaseStrategy):
                     "buckets": len(cm.buckets),
                 }
                 for cid, cm in self._classified.items()
+            },
+            "lifecycle": {
+                "mode": self.config.lifecycle_mode,
+                "config": {
+                    "profit_capture_threshold": self.config.profit_capture_threshold,
+                    "max_negative_edge_bps": self.config.max_negative_edge_bps,
+                    "edge_decay_exit_pct": self.config.edge_decay_exit_pct,
+                    "time_inefficiency_hours": self.config.time_inefficiency_hours,
+                    "time_inefficiency_min_edge_bps": self.config.time_inefficiency_min_edge_bps,
+                },
+                "positions_evaluated": self._m["lifecycle"]["positions_evaluated"],
+                "exit_candidates": self._m["lifecycle"]["exit_candidates"],
+                "shadow_exits_total": self._m["lifecycle"]["shadow_exits"],
+                "auto_exits_total": self._m["lifecycle"]["auto_exits"],
+                "last_eval_time": self._m["lifecycle"]["last_eval_time"],
             },
         }
 

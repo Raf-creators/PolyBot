@@ -1,0 +1,168 @@
+{
+  "summary": "Iteration 52: Position Lifecycle Management for Weather Strategies fully verified. All 19 backend API tests pass (100%). Frontend UI verified: LIFECYCLE TAG ONLY badge visible, all lifecycle columns present (Mult, Edge Now, Decay, Status), Exit filter button shows count and filters correctly to 1 exit candidate (8.32x profit_capture), Best Multiple sort button works. The 54 weather positions are now evaluated with 1 exit candidate triggered at 8.32x (>2.0 threshold).",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/positions/weather/exit-candidates returns 200 - PASS",
+      "exit-candidates has required fields (mode, config, candidates, total_evaluated, shadow_exits) - PASS",
+      "lifecycle_mode is 'tag_only' (default) - PASS",
+      "Config has correct thresholds: profit_capture=2.0, max_neg_edge=-100, edge_decay=0.60, time_ineff=18h - PASS",
+      "candidates is a list (has 1 candidate) - PASS",
+      "shadow_exits is a list - PASS",
+      "GET /api/positions/weather/lifecycle returns 200 - PASS",
+      "lifecycle has required fields (mode, evaluations, metrics, config) - PASS",
+      "evaluations have correct structure (profit_multiple, edge_at_entry, current_edge_bps, edge_decay_pct, is_exit_candidate, exit_reason) - PASS",
+      "GET /api/positions/by-strategy returns 200 - PASS",
+      "Weather positions have lifecycle field - PASS",
+      "Lifecycle objects have correct structure with 9 fields - PASS",
+      "Non-weather positions (crypto, arb) have null lifecycle - PASS",
+      "Response includes lifecycle summary (mode='tag_only', exit_candidates=1) - PASS",
+      "Asymmetric positions have null lifecycle (never evaluated for exit) - PASS",
+      "Exit candidates count (1) matches actual is_exit_candidate=true positions - PASS",
+      "Profit capture at 2x: position with 8.32x has exit_reason='profit_capture' - PASS",
+      "Exit reason values are valid enum values - PASS",
+      "Lifecycle metrics structure correct - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Weather page loads with Open Positions tab showing 54 positions - PASS",
+      "LIFECYCLE TAG ONLY badge visible with '1 exit candidate' text - PASS",
+      "All lifecycle columns present: Mult, Edge Now, Decay, Status - PASS",
+      "Exit filter button shows 'Exit (1)' - PASS",
+      "Best Multiple sort button present and clickable - PASS",
+      "EXIT: Profit Capture badge shows with correct emerald styling - PASS",
+      "Exit filter correctly shows only 1 position (8.32x Chicago 18-19°F) - PASS",
+      "Footer shows: 15 near, 0 medium, 39 long, 1 exit candidate, lifecycle: tag_only - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "exit_candidates_api": {
+      "status": "PASS",
+      "details": [
+        "GET /api/positions/weather/exit-candidates returns mode='tag_only'",
+        "Config thresholds: profit_capture_threshold=2.0, max_negative_edge_bps=-100, edge_decay_exit_pct=0.60, time_inefficiency_hours=18",
+        "1 exit candidate returned (8.32x profit_capture)",
+        "total_evaluated=54 (all weather positions evaluated)",
+        "shadow_exits=[] (no shadow exits yet in tag_only mode)"
+      ]
+    },
+    "lifecycle_api": {
+      "status": "PASS",
+      "details": [
+        "GET /api/positions/weather/lifecycle returns 54 evaluations",
+        "Each evaluation has: token_id, strategy_id, is_exit_candidate, exit_reason, profit_multiple, edge_at_entry, current_edge_bps, edge_decay_pct, current_model_prob, time_held_hours, lifecycle_mode",
+        "metrics: positions_evaluated=54, exit_candidates=1, shadow_exits=0, auto_exits=0"
+      ]
+    },
+    "positions_by_strategy_lifecycle": {
+      "status": "PASS",
+      "details": [
+        "Weather positions include lifecycle object",
+        "Lifecycle has: is_exit_candidate, exit_reason, profit_multiple, edge_at_entry, current_edge_bps, edge_decay_pct, current_model_prob, time_held_hours, lifecycle_mode",
+        "Response includes lifecycle summary: mode='tag_only', exit_candidates=1",
+        "Non-weather positions have null lifecycle"
+      ]
+    },
+    "asymmetric_exclusion": {
+      "status": "PASS",
+      "details": [
+        "Asymmetric positions (weather_asymmetric) are NEVER evaluated for exit",
+        "They have lifecycle=null in the API response",
+        "This is by design - asymmetric positions hold to resolution"
+      ]
+    },
+    "profit_capture_trigger": {
+      "status": "PASS",
+      "details": [
+        "One position at 8.32x profit_multiple (entry 0.0601, current 0.5000)",
+        "Correctly tagged as is_exit_candidate=true with exit_reason='profit_capture'",
+        "Threshold of 2.0x is working correctly"
+      ]
+    },
+    "frontend_lifecycle_ui": {
+      "status": "PASS",
+      "details": [
+        "LIFECYCLE TAG ONLY badge visible with correct styling",
+        "Lifecycle columns (Mult, Edge Now, Decay, Status) in positions table",
+        "Exit (1) filter button filters to exit candidates only",
+        "Best Multiple sort option available",
+        "EXIT: Profit Capture badge with emerald color for 8.32x position",
+        "Footer summary shows exit candidate count and lifecycle mode"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "exit_candidates_response": {
+      "mode": "tag_only",
+      "total_evaluated": 54,
+      "candidates_count": 1,
+      "config": {
+        "profit_capture_threshold": 2.0,
+        "max_negative_edge_bps": -100.0,
+        "edge_decay_exit_pct": 0.6,
+        "time_inefficiency_hours": 18.0,
+        "time_inefficiency_min_edge_bps": 300.0
+      }
+    },
+    "exit_candidate": {
+      "token_id": "490606749275722249376838632545...",
+      "profit_multiple": 8.3195,
+      "exit_reason": "profit_capture",
+      "current_edge_bps": 0.0,
+      "market": "Chicago 18-19°F"
+    },
+    "lifecycle_metrics": {
+      "mode": "tag_only",
+      "positions_evaluated": 54,
+      "exit_candidates": 1,
+      "shadow_exits": 0,
+      "auto_exits": 0
+    },
+    "position_breakdown": {
+      "total_weather": 54,
+      "by_strategy_id": {
+        "weather_trader": 9,
+        "none_legacy": 45
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration52_position_lifecycle.py",
+    "/app/test_reports/pytest/pytest_results_iteration52.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration52_position_lifecycle.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (19/19 tests passed)",
+    "frontend": "100% (All 8 UI features verified)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 open weather positions)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 52 verified Position Lifecycle Management for weather strategies. Key findings: (1) Default lifecycle_mode is 'tag_only' (observe and tag, no auto-selling). (2) All 54 weather positions are evaluated, 1 exit candidate at 8.32x profit_capture. (3) Config thresholds: profit_capture=2.0x, max_negative_edge=-100bps, edge_decay=60%, time_inefficiency=18h. (4) Asymmetric positions (weather_asymmetric) are NEVER evaluated for exit - they have null lifecycle. (5) Frontend shows LIFECYCLE TAG ONLY badge, Mult/Edge Now/Decay/Status columns, Exit(1) filter, Best Multiple sort. (6) Exit candidate badge shows 'EXIT: Profit Capture' with emerald styling. (7) Available modes: off, tag_only, shadow_exit, auto_exit."
+}

@@ -1257,6 +1257,26 @@ async def get_positions_by_strategy():
                 d["time_to_resolution_seconds"] = d.get("time_to_expiry_seconds")
                 d["resolution_category"] = None
 
+            # --- Lifecycle enrichment ---
+            if weather_trader_ref:
+                lifecycle_evals = weather_trader_ref._lifecycle_evals
+                lc = lifecycle_evals.get(pos.token_id)
+                if lc:
+                    d["lifecycle"] = {
+                        "is_exit_candidate": lc.is_exit_candidate,
+                        "exit_reason": lc.exit_reason,
+                        "exit_reason_detail": lc.exit_reason_detail,
+                        "profit_multiple": lc.profit_multiple,
+                        "edge_at_entry": lc.edge_at_entry,
+                        "current_edge_bps": lc.current_edge_bps,
+                        "edge_decay_pct": lc.edge_decay_pct,
+                        "current_model_prob": lc.current_model_prob,
+                        "time_held_hours": lc.time_held_hours,
+                        "lifecycle_mode": lc.lifecycle_mode,
+                    }
+                else:
+                    d["lifecycle"] = None
+
         elif bucket == "crypto":
             if pos.token_id in sniper_exec_map:
                 d["sniper"] = sniper_exec_map[pos.token_id]
@@ -1293,8 +1313,63 @@ async def get_positions_by_strategy():
         "summaries": summaries,
         "total_unrealized_pnl": round(total_unrealized, 4),
         "total_open": sum(len(v) for v in by_strategy.values()),
+        "lifecycle": {
+            "mode": weather_trader_ref.config.lifecycle_mode if weather_trader_ref else "off",
+            "exit_candidates": sum(
+                1 for p in by_strategy.get("weather", [])
+                if p.get("lifecycle", {}) and p["lifecycle"].get("is_exit_candidate")
+            ),
+        },
     }
 
+
+
+@api_router.get("/positions/weather/exit-candidates")
+async def get_weather_exit_candidates():
+    """Return positions flagged as exit candidates by the lifecycle engine."""
+    if not weather_trader_ref:
+        return {"mode": "off", "candidates": [], "shadow_exits": []}
+
+    evals = weather_trader_ref.get_lifecycle_evals()
+    candidates = [ev for ev in evals.values() if ev.get("is_exit_candidate")]
+    shadow_exits = weather_trader_ref.get_lifecycle_shadow_exits(limit=30)
+
+    return {
+        "mode": weather_trader_ref.config.lifecycle_mode,
+        "config": {
+            "profit_capture_threshold": weather_trader_ref.config.profit_capture_threshold,
+            "max_negative_edge_bps": weather_trader_ref.config.max_negative_edge_bps,
+            "edge_decay_exit_pct": weather_trader_ref.config.edge_decay_exit_pct,
+            "time_inefficiency_hours": weather_trader_ref.config.time_inefficiency_hours,
+            "time_inefficiency_min_edge_bps": weather_trader_ref.config.time_inefficiency_min_edge_bps,
+        },
+        "candidates": candidates,
+        "total_evaluated": len(evals),
+        "shadow_exits": shadow_exits,
+    }
+
+
+@api_router.get("/positions/weather/lifecycle")
+async def get_weather_lifecycle_status():
+    """Full lifecycle status with all evaluated positions and their metrics."""
+    if not weather_trader_ref:
+        return {"mode": "off", "evaluations": {}, "metrics": {}}
+
+    evals = weather_trader_ref.get_lifecycle_evals()
+    lifecycle_metrics = weather_trader_ref._m.get("lifecycle", {})
+
+    return {
+        "mode": weather_trader_ref.config.lifecycle_mode,
+        "evaluations": evals,
+        "metrics": lifecycle_metrics,
+        "config": {
+            "profit_capture_threshold": weather_trader_ref.config.profit_capture_threshold,
+            "max_negative_edge_bps": weather_trader_ref.config.max_negative_edge_bps,
+            "edge_decay_exit_pct": weather_trader_ref.config.edge_decay_exit_pct,
+            "time_inefficiency_hours": weather_trader_ref.config.time_inefficiency_hours,
+            "time_inefficiency_min_edge_bps": weather_trader_ref.config.time_inefficiency_min_edge_bps,
+        },
+    }
 
 
 @api_router.get("/positions/weather/breakdown")

@@ -159,8 +159,26 @@ export default function Weather() {
   const resCatLabels = { near: '<6h', medium: '6-24h', long: '>24h' };
 
   // ---- Resolution filter ----
-  const [resFilter, setResFilter] = useState('all'); // all | near | medium | long
-  const [posSort, setPosSort] = useState('time_left_asc'); // time_left_asc | time_held_desc | pnl_desc
+  const [resFilter, setResFilter] = useState('all'); // all | near | medium | long | exit_candidates
+  const [posSort, setPosSort] = useState('time_left_asc'); // time_left_asc | time_held_desc | pnl_desc | profit_mult_desc
+
+  const EXIT_REASON_LABELS = {
+    profit_capture: 'Profit Capture',
+    negative_edge: 'Negative Edge',
+    edge_decay: 'Edge Decay',
+    time_inefficiency: 'Time Inefficient',
+    model_shift: 'Model Shift',
+  };
+  const EXIT_REASON_COLORS = {
+    profit_capture: 'border-emerald-500/40 bg-emerald-950/30 text-emerald-400',
+    negative_edge: 'border-red-500/40 bg-red-950/30 text-red-400',
+    edge_decay: 'border-amber-500/40 bg-amber-950/30 text-amber-400',
+    time_inefficiency: 'border-orange-500/40 bg-orange-950/30 text-orange-400',
+    model_shift: 'border-violet-500/40 bg-violet-950/30 text-violet-400',
+  };
+
+  const lifecycleMode = strategyPositions?.lifecycle?.mode || 'off';
+  const exitCandidateCount = strategyPositions?.lifecycle?.exit_candidates || 0;
 
   // ---- Open Positions Columns ----
   const positionColumns = [
@@ -179,6 +197,42 @@ export default function Weather() {
     { key: 'unrealized_pnl', label: 'P&L', align: 'right', sortable: true, render: (v) => (
       <span className={`font-mono font-medium ${v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-zinc-500'}`}>{formatPnl(v)}</span>
     )},
+    // Lifecycle columns
+    { key: 'lifecycle_profit_mult', label: 'Mult', align: 'right', render: (_, row) => {
+      const lc = row.lifecycle;
+      if (!lc) return <span className="text-zinc-700">—</span>;
+      const v = lc.profit_multiple;
+      const color = v >= 2.0 ? 'text-emerald-400' : v >= 1.2 ? 'text-emerald-500/70' : v >= 1.0 ? 'text-zinc-300' : v >= 0.7 ? 'text-amber-400' : 'text-red-400';
+      return <span className={`font-mono font-medium ${color}`} data-testid="lifecycle-profit-mult">{v.toFixed(2)}x</span>;
+    }},
+    { key: 'lifecycle_edge', label: 'Edge Now', align: 'right', render: (_, row) => {
+      const lc = row.lifecycle;
+      if (!lc || !lc.current_model_prob) return <span className="text-zinc-700">—</span>;
+      const v = lc.current_edge_bps;
+      const color = v > 200 ? 'text-emerald-400' : v > 0 ? 'text-zinc-300' : 'text-red-400';
+      return <span className={`font-mono ${color}`} data-testid="lifecycle-current-edge">{v > 0 ? '+' : ''}{v.toFixed(0)}bp</span>;
+    }},
+    { key: 'lifecycle_decay', label: 'Decay', align: 'right', render: (_, row) => {
+      const lc = row.lifecycle;
+      if (!lc || lc.edge_at_entry <= 0) return <span className="text-zinc-700">—</span>;
+      const pct = lc.edge_decay_pct * 100;
+      const color = pct >= 60 ? 'text-red-400' : pct >= 30 ? 'text-amber-400' : 'text-emerald-400';
+      return <span className={`font-mono ${color}`} data-testid="lifecycle-edge-decay">{pct.toFixed(0)}%</span>;
+    }},
+    // Exit candidate tag
+    { key: 'lifecycle_exit', label: 'Status', render: (_, row) => {
+      const lc = row.lifecycle;
+      if (!lc || !lc.is_exit_candidate) return null;
+      const reason = lc.exit_reason || 'unknown';
+      return (
+        <Badge data-testid="exit-candidate-badge"
+          variant="outline"
+          className={`text-[8px] font-mono ${EXIT_REASON_COLORS[reason] || 'border-zinc-600 text-zinc-400'}`}
+          title={lc.exit_reason_detail}>
+          EXIT: {EXIT_REASON_LABELS[reason] || reason}
+        </Badge>
+      );
+    }},
     { key: 'resolves_at', label: 'Resolves', align: 'right', render: (v) => (
       <span className="text-zinc-300 text-[10px] font-mono">{formatResolvesAt(v)}</span>
     )},
@@ -204,8 +258,10 @@ export default function Weather() {
   const filteredPositions = useMemo(() => {
     let positions = [...weatherPositions];
 
-    // Filter by resolution category
-    if (resFilter !== 'all') {
+    // Filter by resolution category or exit candidate
+    if (resFilter === 'exit_candidates') {
+      positions = positions.filter(p => p.lifecycle?.is_exit_candidate);
+    } else if (resFilter !== 'all') {
       positions = positions.filter(p => p.resolution_category === resFilter);
     }
 
@@ -223,6 +279,11 @@ export default function Weather() {
       }
       if (posSort === 'pnl_desc') {
         return (b.unrealized_pnl ?? 0) - (a.unrealized_pnl ?? 0);
+      }
+      if (posSort === 'profit_mult_desc') {
+        const aM = a.lifecycle?.profit_multiple ?? 0;
+        const bM = b.lifecycle?.profit_multiple ?? 0;
+        return bM - aM;
       }
       return 0;
     });
@@ -396,19 +457,35 @@ export default function Weather() {
         {/* Open Positions Tab (PRIMARY) */}
         <TabsContent value="positions" className="mt-4 space-y-5">
           <SectionCard title="Open Weather Positions" testId="section-weather-positions">
+            {/* Lifecycle Mode Badge */}
+            {lifecycleMode !== 'off' && (
+              <div data-testid="lifecycle-mode-banner" className="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg bg-zinc-900/60 border border-zinc-800/50">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Lifecycle</span>
+                <Badge variant="outline" className={`text-[9px] font-mono ${
+                  lifecycleMode === 'tag_only' ? 'border-blue-500/40 text-blue-400' :
+                  lifecycleMode === 'shadow_exit' ? 'border-amber-500/40 text-amber-400' :
+                  lifecycleMode === 'auto_exit' ? 'border-red-500/40 text-red-400' : 'border-zinc-700 text-zinc-500'
+                }`}>
+                  {lifecycleMode.toUpperCase().replace('_', ' ')}
+                </Badge>
+                {exitCandidateCount > 0 && (
+                  <span className="text-[10px] text-amber-400 font-mono">{exitCandidateCount} exit candidate{exitCandidateCount !== 1 ? 's' : ''}</span>
+                )}
+              </div>
+            )}
             {/* Filter & Sort Controls */}
             <div data-testid="position-controls" className="flex items-center gap-3 mb-3 flex-wrap">
               <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-zinc-500">Resolution:</span>
-                {['all', 'near', 'medium', 'long'].map(f => (
+                <span className="text-zinc-500">Filter:</span>
+                {['all', 'near', 'medium', 'long', 'exit_candidates'].map(f => (
                   <button key={f} data-testid={`filter-${f}`}
                     onClick={() => setResFilter(f)}
                     className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${
                       resFilter === f
-                        ? 'bg-zinc-700 text-zinc-100'
+                        ? f === 'exit_candidates' ? 'bg-amber-900/40 text-amber-300 ring-1 ring-amber-500/30' : 'bg-zinc-700 text-zinc-100'
                         : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
                     }`}>
-                    {f === 'all' ? 'All' : f === 'near' ? '<6h' : f === 'medium' ? '6–24h' : '>24h'}
+                    {f === 'all' ? 'All' : f === 'near' ? '<6h' : f === 'medium' ? '6–24h' : f === 'long' ? '>24h' : `Exit (${exitCandidateCount})`}
                   </button>
                 ))}
               </div>
@@ -418,6 +495,7 @@ export default function Weather() {
                   { key: 'time_left_asc', label: 'Resolves soonest' },
                   { key: 'time_held_desc', label: 'Held longest' },
                   { key: 'pnl_desc', label: 'Best P&L' },
+                  { key: 'profit_mult_desc', label: 'Best Multiple' },
                 ].map(s => (
                   <button key={s.key} data-testid={`sort-${s.key}`}
                     onClick={() => setPosSort(s.key)}
@@ -438,11 +516,17 @@ export default function Weather() {
               testId="weather-positions-table" />
             {/* Summary below table */}
             {weatherPositions.length > 0 && (
-              <div className="flex gap-4 text-[10px] text-zinc-600 mt-2 pt-2 border-t border-zinc-800/50">
+              <div className="flex gap-4 text-[10px] text-zinc-600 mt-2 pt-2 border-t border-zinc-800/50 flex-wrap">
                 <span>{weatherPositions.filter(p => p.resolution_category === 'near').length} near ({'<'}6h)</span>
                 <span>{weatherPositions.filter(p => p.resolution_category === 'medium').length} medium (6-24h)</span>
                 <span>{weatherPositions.filter(p => p.resolution_category === 'long').length} long ({'>'}24h)</span>
                 <span>{weatherPositions.filter(p => !p.resolution_category).length} unknown</span>
+                {exitCandidateCount > 0 && (
+                  <span className="text-amber-500">{exitCandidateCount} exit candidate{exitCandidateCount !== 1 ? 's' : ''}</span>
+                )}
+                {lifecycleMode !== 'off' && (
+                  <span className="text-zinc-700">lifecycle: {lifecycleMode}</span>
+                )}
               </div>
             )}
           </SectionCard>

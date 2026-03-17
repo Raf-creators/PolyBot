@@ -43,6 +43,21 @@ class WeatherMarketType(str, Enum):
     WIND = "wind"
 
 
+class LifecycleMode(str, Enum):
+    OFF = "off"                 # No lifecycle evaluation
+    TAG_ONLY = "tag_only"       # Compute metrics + tag exit candidates, no action
+    SHADOW_EXIT = "shadow_exit" # Log simulated exits (no actual sells)
+    AUTO_EXIT = "auto_exit"     # Actually sell exit candidates (standard weather only)
+
+
+class ExitReason(str, Enum):
+    PROFIT_CAPTURE = "profit_capture"           # Price multiple exceeded threshold
+    NEGATIVE_EDGE = "negative_edge"             # Current edge flipped negative
+    EDGE_DECAY = "edge_decay"                   # Edge decayed significantly from entry
+    TIME_INEFFICIENCY = "time_inefficiency"      # Long time held with low remaining edge
+    MODEL_SHIFT = "model_shift"                  # Model probability shifted against position
+
+
 # ---- Configuration ----
 
 class WeatherConfig(BaseModel):
@@ -116,6 +131,14 @@ class WeatherConfig(BaseModel):
     asymmetric_max_positions: int = 10                      # cap on concurrent asymmetric positions
     asymmetric_kelly_scale: float = 0.35                    # more aggressive than standard
     asymmetric_min_confidence: float = 0.45                 # lower confidence floor (asymmetric is high-edge)
+
+    # Position Lifecycle Management
+    lifecycle_mode: str = "tag_only"                          # off | tag_only | shadow_exit | auto_exit
+    profit_capture_threshold: float = 2.0                     # exit when price / avg_cost >= this multiple
+    max_negative_edge_bps: float = -100.0                     # exit when current edge drops below this (bps)
+    edge_decay_exit_pct: float = 0.60                         # exit when edge decayed by 60%+ from entry
+    time_inefficiency_hours: float = 18.0                     # flag positions held longer than this...
+    time_inefficiency_min_edge_bps: float = 300.0             # ...if remaining edge is below this
 
 
 # ---- Station Info ----
@@ -350,6 +373,26 @@ class WeatherAlert(BaseModel):
     price_move_bps: float = 0.0
     detail: str = ""
     timestamp: str = Field(default_factory=utc_now)
+
+
+# ---- Position Lifecycle Evaluation ----
+
+class PositionLifecycleEval(BaseModel):
+    """Result of evaluating a position for exit candidacy."""
+    token_id: str
+    strategy_id: str                               # weather_trader or weather_asymmetric
+    is_exit_candidate: bool = False
+    exit_reason: Optional[str] = None              # ExitReason value or None
+    exit_reason_detail: str = ""                   # human-readable detail
+    profit_multiple: float = 0.0                   # current_price / avg_cost
+    edge_at_entry: float = 0.0                     # edge bps when position was opened
+    current_edge_bps: float = 0.0                  # edge bps now (model_prob - current_price) * 10000
+    edge_decay_pct: float = 0.0                    # (entry_edge - current_edge) / entry_edge
+    current_model_prob: float = 0.0                # repriced model probability
+    time_held_hours: float = 0.0                   # hours since open
+    hours_to_resolution: Optional[float] = None    # hours until market resolves
+    lifecycle_mode: str = "tag_only"               # the mode that produced this eval
+    evaluated_at: str = Field(default_factory=utc_now)
 
 
 # ---- Shadow Mode Config Presets ----
