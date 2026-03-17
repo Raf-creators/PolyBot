@@ -9,7 +9,7 @@ function CustomTooltip({ active, payload }) {
   const d = payload[0].payload;
   return (
     <div className="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs shadow-xl">
-      <p className="text-zinc-500 mb-1">{formatChartTime(d.timestamp)}</p>
+      <p className="text-zinc-500 mb-1">{formatChartDate(d.timestamp)} UTC</p>
       <p className={d.cumulative_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
         P&L: {d.cumulative_pnl >= 0 ? '+' : ''}${d.cumulative_pnl.toFixed(2)}
       </p>
@@ -27,15 +27,40 @@ function formatChartTime(isoString) {
   if (!isoString) return '';
   const d = new Date(isoString);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  // Always show in UTC so it matches Telegram / server timestamps
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function formatChartDate(isoString) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return '';
+  const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${mon}/${day} ${hh}:${mm}`;
+}
+
+function buildTickFormatter(points) {
+  if (!points || points.length < 2) return formatChartTime;
+  const first = new Date(points[0].timestamp);
+  const last = new Date(points[points.length - 1].timestamp);
+  // If range spans more than 18 hours, show date + time
+  if (last - first > 18 * 3600_000) return formatChartDate;
+  return formatChartTime;
 }
 
 export function PnlChart({ data, testId }) {
-  const { points, current_pnl, peak_pnl, trough_pnl, max_drawdown, total_trades } = data;
+  const { points, current_pnl, peak_pnl, trough_pnl, max_drawdown, total_trades, latest_close_at, server_time } = data;
 
   const isPositive = current_pnl >= 0;
   const strokeColor = isPositive ? '#34d399' : '#f87171';
   const gradientId = 'pnl-gradient';
+
+  const tickFormatter = useMemo(() => buildTickFormatter(points), [points]);
 
   const yDomain = useMemo(() => {
     if (!points.length) return [-1, 1];
@@ -45,6 +70,11 @@ export function PnlChart({ data, testId }) {
     const pad = Math.max(Math.abs(max - min) * 0.15, 0.5);
     return [min - pad, max + pad];
   }, [points]);
+
+  const lastCloseLabel = useMemo(() => {
+    if (!latest_close_at) return null;
+    return formatChartDate(latest_close_at) + ' UTC';
+  }, [latest_close_at]);
 
   if (!points.length) {
     return (
@@ -62,7 +92,14 @@ export function PnlChart({ data, testId }) {
   return (
     <div data-testid={testId} className="bg-zinc-900/40 border border-zinc-800 rounded-lg">
       <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <h3 className="text-sm font-medium text-zinc-300">P&L Curve</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-medium text-zinc-300">P&L Curve</h3>
+          {lastCloseLabel && (
+            <span className="text-[10px] font-mono text-zinc-600">
+              last close {lastCloseLabel}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-4 text-xs font-mono">
           <span className="text-zinc-600">Peak <span className="text-emerald-400">{peak_pnl >= 0 ? '+' : ''}${peak_pnl.toFixed(2)}</span></span>
           <span className="text-zinc-600">Trough <span className="text-red-400">{trough_pnl >= 0 ? '+' : ''}${trough_pnl.toFixed(2)}</span></span>
@@ -84,7 +121,7 @@ export function PnlChart({ data, testId }) {
             <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
             <XAxis
               dataKey="timestamp"
-              tickFormatter={formatChartTime}
+              tickFormatter={tickFormatter}
               tick={{ fill: '#52525b', fontSize: 10 }}
               axisLine={{ stroke: '#27272a' }}
               tickLine={false}

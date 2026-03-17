@@ -1,0 +1,98 @@
+{
+  "summary": "Comprehensive testing of P&L Chart X-axis fix. Backend: 8/8 tests passed. Frontend: All 5 visual tests passed. All requested features verified working correctly - chart now shows MM/DD HH:MM format when data spans >18 hours, tooltip shows full UTC datetime, header shows 'last close' timestamp, and data is consistent across endpoints.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_pnl_history_tests": [
+      "GET /api/analytics/pnl-history returns 200 - PASS",
+      "Response contains 'latest_close_at' field (non-null ISO timestamp: 2026-03-17T00:19:50.548733+00:00) - PASS",
+      "Response contains 'server_time' field (current UTC: 2026-03-17T00:20:13.614361+00:00) - PASS",
+      "Each point has full ISO timestamp format (e.g., 2026-03-07T21:55:58.316833+00:00) - PASS",
+      "Response contains all expected fields (points, current_pnl, peak_pnl, trough_pnl, max_drawdown, total_trades, close_trades, latest_close_at, server_time) - PASS"
+    ],
+    "backend_data_consistency_tests": [
+      "/api/status close_count (396) matches /api/analytics/pnl-history close_trades (396) - PASS",
+      "Points count (396) matches close_trades (396) - PASS"
+    ],
+    "backend_timestamp_range_tests": [
+      "Data spans March 7-17 (>240 hours, well above 18-hour threshold for MM/DD HH:MM format) - PASS"
+    ],
+    "frontend_visual_tests": [
+      "P&L chart header shows 'last close 03/17 00:20 UTC' - PASS",
+      "X-axis shows MM/DD HH:MM format (03/07 21:59, 03/09 21:55, etc.) because data spans >18 hours - PASS",
+      "Tooltip shows '03/16 20:34 UTC' with full date+time+timezone - PASS",
+      "Stat cards show: Daily PnL +$45.39, Win Rate 54.4%, Closed Trades 397 - PASS",
+      "Diagnostics footer visible showing emergent_preview, test_database@localhost:27017, db-reload:on - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "Backend: GET /api/analytics/pnl-history returns latest_close_at": "PASS - Returns non-null ISO timestamp when close_trades > 0",
+    "Backend: GET /api/analytics/pnl-history returns server_time": "PASS - Returns current UTC time",
+    "Backend: PnL history points have timestamp with full ISO format": "PASS - All points have full ISO timestamps (YYYY-MM-DDTHH:MM:SS.microseconds+00:00)",
+    "Backend: Data consistency /api/status close_count matches /api/analytics/pnl-history close_trades": "PASS - Both show 396-397 (live trading)",
+    "Frontend: P&L chart header shows 'last close MM/DD HH:MM UTC'": "PASS - Shows 'last close 03/17 00:20 UTC'",
+    "Frontend: X-axis shows MM/DD HH:MM when data spans >18 hours": "PASS - Data spans March 7-17, X-axis shows 03/07 21:59, 03/09 21:55, etc.",
+    "Frontend: Tooltip shows full UTC datetime": "PASS - Shows '03/16 20:34 UTC P&L: +$127.99 Trade: $-7.58 resolver'",
+    "Frontend: Overview stat cards show non-zero values": "PASS - Daily PnL +$45.39, Win Rate 54.4%, Closed Trades 397",
+    "Frontend: Diagnostics footer visible": "PASS - Shows emergent_preview, test_database@localhost:27017, boot time, loaded trades, db-reload:on"
+  },
+
+  "code_verification": {
+    "PnlChart.jsx formatChartTime": "Uses UTC methods (getUTCHours, getUTCMinutes) - returns HH:MM",
+    "PnlChart.jsx formatChartDate": "Uses UTC methods (getUTCMonth, getUTCDate, getUTCHours, getUTCMinutes) - returns MM/DD HH:MM",
+    "PnlChart.jsx buildTickFormatter": "Auto-switches: if range > 18 hours uses formatChartDate, else formatChartTime",
+    "PnlChart.jsx lastCloseLabel": "Displays latest_close_at with ' UTC' suffix in chart header",
+    "PnlChart.jsx CustomTooltip": "Shows formatChartDate(timestamp) + ' UTC' for full datetime",
+    "dashboardStore.js pnlHistory default": "Includes latest_close_at: null and server_time: null fields",
+    "server.py /api/analytics/pnl-history": "Returns latest_close_at (last close trade timestamp) and server_time (current UTC)"
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_pnl_chart_fix.py",
+    "/app/test_reports/pytest/pytest_results_pnl_chart_fix.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_pnl_chart_fix.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (8/8 tests passed)",
+    "frontend": "100% (5/5 visual tests passed)"
+  },
+
+  "test_credentials": "None required - public APIs",
+
+  "seed_data_creation": "None - tested with live MongoDB data (2655 total trades, 396-397 closed trades spanning March 7-17)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "All P&L chart X-axis fix features verified: (1) Backend returns latest_close_at and server_time in /api/analytics/pnl-history. (2) All timestamps are full ISO format with date. (3) Frontend chart header shows 'last close MM/DD HH:MM UTC'. (4) X-axis shows MM/DD HH:MM format because data spans March 7-17 (>18 hours). (5) Tooltip shows full 'MM/DD HH:MM UTC' format. (6) Data consistency verified across endpoints. Trade counts may vary slightly as bot is live trading.",
+
+  "api_data_captured": {
+    "close_trades": 397,
+    "latest_close_at": "2026-03-17T00:19:50.548733+00:00",
+    "server_time": "2026-03-17T00:20:13.614361+00:00",
+    "total_trades": 2655,
+    "current_pnl": 143.59,
+    "peak_pnl": 199.07,
+    "data_time_range": "March 7-17, 2026 (~10 days, well above 18-hour threshold)",
+    "x_axis_format_used": "MM/DD HH:MM (formatChartDate)"
+  }
+}

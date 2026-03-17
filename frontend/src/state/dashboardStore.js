@@ -39,7 +39,7 @@ export const useDashboardStore = create((set, get) => ({
   weatherHealth: {},
   weatherForecasts: {},
   weatherAlerts: { alerts: [], stats: {} },
-  pnlHistory: { points: [], current_pnl: 0, peak_pnl: 0, trough_pnl: 0, max_drawdown: 0, total_trades: 0 },
+  pnlHistory: { points: [], current_pnl: 0, peak_pnl: 0, trough_pnl: 0, max_drawdown: 0, total_trades: 0, latest_close_at: null, server_time: null },
   tickerFeed: [],
   walletStatus: { mode: 'paper', authenticated: false, balance_usdc: null, live_ready: false, warnings: [] },
 
