@@ -177,6 +177,91 @@ def compute_bucket_probability(
     return max(prob, 0.0)
 
 
+# ---- Non-Temperature Probability Models ----
+
+# Precipitation uses a gamma distribution approximation.
+# Most daily precip is 0 or near 0, with a long right tail.
+# We model P(precip > threshold) using a simplified exceedance curve:
+#   P(X > t) ~ exp(-t / scale) for t > 0, scaled by P(rain).
+
+_PRECIP_SIGMA_TABLE = {
+    "24h": 0.3,     # inches uncertainty at 1 day lead
+    "48h": 0.5,
+    "72h": 0.7,
+    "120h": 1.0,
+    "168h": 1.5,
+}
+
+_SNOW_SIGMA_TABLE = {
+    "24h": 1.0,     # inches uncertainty at 1 day lead
+    "48h": 2.0,
+    "72h": 3.0,
+    "120h": 4.0,
+    "168h": 5.0,
+}
+
+_WIND_SIGMA_TABLE = {
+    "24h": 3.0,     # mph uncertainty at 1 day lead
+    "48h": 5.0,
+    "72h": 7.0,
+    "120h": 10.0,
+    "168h": 12.0,
+}
+
+
+def get_amount_sigma(market_type: str, lead_hours: float) -> float:
+    """Get forecast sigma for non-temperature market types."""
+    tables = {
+        "precipitation": _PRECIP_SIGMA_TABLE,
+        "snowfall": _SNOW_SIGMA_TABLE,
+        "wind": _WIND_SIGMA_TABLE,
+    }
+    table = tables.get(market_type, _PRECIP_SIGMA_TABLE)
+    bracket = _lead_hours_to_bracket(lead_hours)
+    return table.get(bracket, list(table.values())[-1])
+
+
+def compute_amount_bucket_probability(
+    bucket: "TempBucket",
+    forecast_amount: float,
+    sigma: float,
+    market_type: str = "precipitation",
+) -> float:
+    """Probability that the measured amount falls in this bucket.
+
+    Works for precipitation (inches), snowfall (inches), and wind (mph).
+    Uses normal CDF approximation around the forecast amount.
+
+    For precipitation: forecast_amount is forecast total precip in inches.
+    For snow: forecast total snowfall in inches.
+    For wind: forecast max wind speed in mph.
+    """
+    if sigma <= 0:
+        if bucket.lower_bound is None and bucket.upper_bound is not None:
+            return 1.0 if forecast_amount <= bucket.upper_bound else 0.0
+        if bucket.upper_bound is None and bucket.lower_bound is not None:
+            return 1.0 if forecast_amount >= bucket.lower_bound else 0.0
+        if bucket.lower_bound is not None and bucket.upper_bound is not None:
+            return 1.0 if bucket.lower_bound <= forecast_amount <= bucket.upper_bound else 0.0
+        return 1.0
+
+    # Use normal CDF for all types (simple and testable)
+    # No continuity correction for continuous measurements
+    if bucket.lower_bound is None:
+        z = (bucket.upper_bound - forecast_amount) / sigma
+        return normal_cdf(z)
+
+    if bucket.upper_bound is None:
+        z = (bucket.lower_bound - forecast_amount) / sigma
+        return 1.0 - normal_cdf(z)
+
+    z_lo = (bucket.lower_bound - forecast_amount) / sigma
+    z_hi = (bucket.upper_bound - forecast_amount) / sigma
+    return max(normal_cdf(z_hi) - normal_cdf(z_lo), 0.0)
+
+
+
+
 def compute_all_bucket_probabilities(
     buckets: List[TempBucket],
     mu: float,

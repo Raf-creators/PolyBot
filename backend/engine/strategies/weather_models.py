@@ -36,6 +36,13 @@ class Season(str, Enum):
     FALL = "fall"
 
 
+class WeatherMarketType(str, Enum):
+    TEMPERATURE = "temperature"
+    PRECIPITATION = "precipitation"
+    SNOWFALL = "snowfall"
+    WIND = "wind"
+
+
 # ---- Configuration ----
 
 class WeatherConfig(BaseModel):
@@ -139,7 +146,9 @@ class WeatherMarketClassification(BaseModel):
     station_id: str                # resolved ICAO code
     city: str
     target_date: str               # ISO date string, e.g. "2026-03-15"
-    resolution_type: str           # always "daily_high" for now
+    resolution_type: str           # "daily_high", "daily_precip", "daily_snow", "daily_wind"
+    market_type: WeatherMarketType = WeatherMarketType.TEMPERATURE
+    unit: str = "F"                # "F", "in", "cm", "mph"
     buckets: List[TempBucket]
     question: str
     classified_at: str = Field(default_factory=utc_now)
@@ -153,6 +162,9 @@ class ForecastSnapshot(BaseModel):
     target_date: str               # ISO date
     forecast_high_f: float         # predicted daily high in Fahrenheit
     forecast_low_f: Optional[float] = None
+    forecast_precip_in: Optional[float] = None    # daily precipitation in inches
+    forecast_snow_in: Optional[float] = None      # daily snowfall in inches
+    forecast_wind_mph: Optional[float] = None     # max wind speed in mph
     source: str = "open_meteo"     # "open_meteo", "nws", "blended"
     fetched_at: str = Field(default_factory=utc_now)
     lead_hours: float              # hours between fetch time and target date end
@@ -238,6 +250,7 @@ class WeatherSignal(BaseModel):
     rejection_reason: Optional[str] = None
     liquidity_score: float = 0.0
     quality_score: float = 0.0
+    market_type: str = "temperature"
     explanation: Dict[str, Any] = Field(default_factory=dict)
     detected_at: str = Field(default_factory=utc_now)
 

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from engine.strategies.weather_models import (
     StationInfo, StationType, TempBucket, WeatherMarketClassification,
+    WeatherMarketType,
 )
 
 logger = logging.getLogger(__name__)
@@ -567,24 +568,24 @@ def classify_weather_market(
 
 # Regex patterns for extracting bucket from full binary questions
 _BINARY_BUCKET_PATTERNS = [
-    # "be 43°F or below on" / "be 9°C or below on"
+    # "be 43°F or below on" / "be 9°C or below on" / "be -9°C or below on"
     re.compile(
-        r'be\s+(?P<val>\d+)\s*°?\s*[FfCc]?\s*or\s+(?:below|lower|less)\s+on\s+',
+        r'be\s+(?P<val>-?\d+)\s*°?\s*[FfCc]?\s*or\s+(?:below|lower|less)\s+on\s+',
         re.IGNORECASE,
     ),
     # "be 58°F or higher on" / "be 18°C or higher on"
     re.compile(
-        r'be\s+(?P<val>\d+)\s*°?\s*[FfCc]?\s*or\s+(?:above|higher|more|greater)\s+on\s+',
+        r'be\s+(?P<val>-?\d+)\s*°?\s*[FfCc]?\s*or\s+(?:above|higher|more|greater)\s+on\s+',
         re.IGNORECASE,
     ),
-    # "be between 44-45°F on" / "be between 10-11°C on"
+    # "be between 44-45°F on" / "be between -5--4°C on"
     re.compile(
-        r'be\s+between\s+(?P<lo>\d+)\s*°?\s*[FfCc]?\s*[\-–]\s*(?P<hi>\d+)\s*°?\s*[FfCc]?\s+on\s+',
+        r'be\s+between\s+(?P<lo>-?\d+)\s*°?\s*[FfCc]?\s*[\-–]\s*(?P<hi>-?\d+)\s*°?\s*[FfCc]?\s+on\s+',
         re.IGNORECASE,
     ),
-    # Exact value: "be 9°C on March 17?" (London format)
+    # Exact value: "be 9°C on March 17?" / "be -9°C on March 17?"
     re.compile(
-        r'be\s+(?P<val>\d+)\s*°\s*[CcFf]\s+on\s+',
+        r'be\s+(?P<val>-?\d+)\s*°\s*[CcFf]\s+on\s+',
         re.IGNORECASE,
     ),
 ]
@@ -653,10 +654,150 @@ def parse_bucket_from_question(
     return None
 
 
+# ---- Non-Temperature Market Classification ----
+
+_PRECIP_KEYWORDS = ["rain", "precipitation", "rainfall", "inches of rain", "inches of precipitation"]
+_SNOW_KEYWORDS = ["snow", "snowfall", "inches of snow"]
+_WIND_KEYWORDS = ["wind", "wind speed", "wind gust", "mph wind"]
+
+# Patterns for amount-based weather markets:
+#   "Will there be 0.5 inches or more of rain in NYC on March 18?"
+#   "Will NYC get 3 or more inches of snow on March 20?"
+#   "Will wind speeds exceed 40 mph in Chicago on March 19?"
+_AMOUNT_THRESHOLD_PATTERNS = [
+    # "X inches or more of rain/snow/precipitation"
+    re.compile(
+        r'(?P<val>[\d.]+)\s*(?:inches?|in\.?|")\s*(?:or\s+more|or\s+greater|\+)\s*(?:of\s+)?(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # "X or more inches of rain/snow"
+    re.compile(
+        r'(?P<val>[\d.]+)\s*or\s+more\s+inches?\s+of\s+(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # "more than X inches of rain/snow"
+    re.compile(
+        r'more\s+than\s+(?P<val>[\d.]+)\s*(?:inches?|in\.?|")\s*of\s+(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # "at least X inches of rain/snow"
+    re.compile(
+        r'at\s+least\s+(?P<val>[\d.]+)\s*(?:inches?|in\.?|")\s*of\s+(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # "between X-Y inches of rain/snow"
+    re.compile(
+        r'between\s+(?P<lo>[\d.]+)\s*(?:and|[-–])\s*(?P<hi>[\d.]+)\s*(?:inches?|in\.?|")\s*(?:of\s+)?(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # "less than X inches of rain/snow" / "under X inches"
+    re.compile(
+        r'(?:less\s+than|under|below)\s+(?P<val>[\d.]+)\s*(?:inches?|in\.?|")\s*(?:of\s+)?(?P<type>rain|precipitation|snow|snowfall)',
+        re.IGNORECASE,
+    ),
+    # Wind: "exceed X mph" / "X mph or more" / "above X mph"
+    re.compile(
+        r'(?:exceed|above|over)\s+(?P<val>[\d.]+)\s*(?:mph|miles?\s*per\s*hour)',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'(?P<val>[\d.]+)\s*(?:mph|miles?\s*per\s*hour)\s*or\s+(?:more|higher|greater)',
+        re.IGNORECASE,
+    ),
+]
+
+
+def _detect_market_type(question: str) -> Optional[WeatherMarketType]:
+    """Quick keyword check for non-temperature weather markets."""
+    q_lower = question.lower()
+    for kw in _SNOW_KEYWORDS:
+        if kw in q_lower:
+            return WeatherMarketType.SNOWFALL
+    for kw in _PRECIP_KEYWORDS:
+        if kw in q_lower:
+            return WeatherMarketType.PRECIPITATION
+    for kw in _WIND_KEYWORDS:
+        if kw in q_lower:
+            return WeatherMarketType.WIND
+    return None
+
+
+def parse_amount_bucket_from_question(
+    question: str,
+    yes_token_id: str,
+    market_type: WeatherMarketType,
+) -> Optional[TempBucket]:
+    """Parse a precipitation/snow/wind bucket from a Polymarket binary question.
+
+    Reuses TempBucket model with bounds representing the quantity (inches or mph).
+    """
+    q_lower = question.lower()
+
+    # Try amount threshold patterns
+    for pattern in _AMOUNT_THRESHOLD_PATTERNS:
+        m = pattern.search(question)
+        if not m:
+            continue
+        groups = m.groupdict()
+
+        if "lo" in groups and "hi" in groups:
+            lo, hi = float(groups["lo"]), float(groups["hi"])
+            unit = "in" if market_type != WeatherMarketType.WIND else "mph"
+            return TempBucket(
+                label=f"{lo}-{hi} {unit}",
+                token_id=yes_token_id,
+                lower_bound=lo,
+                upper_bound=hi,
+            )
+
+        val = float(groups.get("val", 0))
+        if val <= 0:
+            continue
+
+        # Detect direction: "or more"/"exceed" = lower bound, "less than" = upper bound
+        if any(kw in q_lower for kw in ["or more", "exceed", "above", "over", "at least", "greater", "higher"]):
+            unit = "in" if market_type != WeatherMarketType.WIND else "mph"
+            return TempBucket(
+                label=f"{val}+ {unit}",
+                token_id=yes_token_id,
+                lower_bound=val,
+                upper_bound=None,
+            )
+        elif any(kw in q_lower for kw in ["less than", "under", "below"]):
+            unit = "in" if market_type != WeatherMarketType.WIND else "mph"
+            return TempBucket(
+                label=f"<{val} {unit}",
+                token_id=yes_token_id,
+                lower_bound=None,
+                upper_bound=val,
+            )
+
+    return None
+
+
+def _extract_city_from_non_temp(question: str) -> Optional[str]:
+    """Extract city name from precipitation/snow/wind market questions."""
+    patterns = [
+        re.compile(r'(?:rain|snow|precipitation|snowfall|wind)\s+in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+on\s+', re.IGNORECASE),
+        re.compile(r'in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+(?:get|receive|see|experience)\s+', re.IGNORECASE),
+        re.compile(r'in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+on\s+', re.IGNORECASE),
+        re.compile(r'(?:Will|Does)\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+(?:get|receive|see|experience|have)\s+', re.IGNORECASE),
+    ]
+    for pat in patterns:
+        m = pat.search(question)
+        if m:
+            city = m.group("city").strip().rstrip("?.,!")
+            return city
+    return None
+
+
+
 def classify_binary_weather_markets(
     markets: List[Dict],
 ) -> Tuple[List[WeatherMarketClassification], List[str]]:
     """Classify a list of binary Polymarket weather markets into grouped events.
+
+    Handles temperature, precipitation, snowfall, and wind markets.
 
     Each market dict should have:
       - question: str
@@ -664,14 +805,14 @@ def classify_binary_weather_markets(
       - yes_token_id: str  (the YES token for the binary market)
       - mid_price: float  (YES price)
 
-    Groups markets by (station_id, target_date) to form events.
-    Each event becomes a WeatherMarketClassification with multiple buckets.
+    Groups markets by (station_id, target_date, market_type) to form events.
 
     Returns (classifications, errors).
     """
-    # Group by (station, date) → list of (bucket, condition_id, price)
+    # Group by (station, date, type) → list of (bucket, condition_id, price)
     events: Dict[str, List[Tuple[TempBucket, str, float]]] = {}
     questions_by_event: Dict[str, str] = {}
+    type_by_event: Dict[str, WeatherMarketType] = {}
     errors = []
 
     for mkt in markets:
@@ -679,39 +820,53 @@ def classify_binary_weather_markets(
         condition_id = mkt.get("condition_id", "")
         yes_token_id = mkt.get("yes_token_id", "")
         mid_price = mkt.get("mid_price", 0)
-
-        # Quick keyword filter
         q_lower = question.lower()
-        if "temperature" not in q_lower and "temp " not in q_lower:
+
+        # Detect market type
+        non_temp_type = _detect_market_type(question)
+        is_temp = "temperature" in q_lower or "temp " in q_lower
+        if not is_temp and not non_temp_type:
             continue
 
+        market_type = non_temp_type or WeatherMarketType.TEMPERATURE
+
         # Extract city
-        station_id = _extract_city(question)
-        if not station_id:
-            # Pattern for real Polymarket: "temperature in <city> be ..."
-            import re as _re
-            city_m = _re.search(
-                r'temp(?:erature)?\s+in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+be\s+',
-                question, _re.IGNORECASE,
-            )
-            if city_m:
-                city_text = city_m.group("city").strip()
-                # Try known aliases first
+        station_id = None
+        if is_temp:
+            station_id = _extract_city(question)
+            if not station_id:
+                city_m = re.search(
+                    r'temp(?:erature)?\s+in\s+(?P<city>[A-Za-z\s\'\.\-]+?)\s+be\s+',
+                    question, re.IGNORECASE,
+                )
+                if city_m:
+                    city_text = city_m.group("city").strip()
+                    station_id = _extract_city(city_text)
+                    if not station_id:
+                        station_obj = get_or_create_station(city_text)
+                        if station_obj:
+                            station_id = station_obj.station_id
+                if not station_id:
+                    for pattern in _WEATHER_PATTERNS:
+                        pm = pattern.search(question)
+                        if pm:
+                            city_text = pm.group("city").strip().rstrip("?.,!")
+                            station_obj = get_or_create_station(city_text)
+                            if station_obj:
+                                station_id = station_obj.station_id
+                            break
+        else:
+            # Non-temperature: use dedicated city extractor
+            city_text = _extract_city_from_non_temp(question)
+            if city_text:
                 station_id = _extract_city(city_text)
                 if not station_id:
                     station_obj = get_or_create_station(city_text)
                     if station_obj:
                         station_id = station_obj.station_id
-            # Fallback: try _WEATHER_PATTERNS
             if not station_id:
-                for pattern in _WEATHER_PATTERNS:
-                    pm = pattern.search(question)
-                    if pm:
-                        city_text = pm.group("city").strip().rstrip("?.,!")
-                        station_obj = get_or_create_station(city_text)
-                        if station_obj:
-                            station_id = station_obj.station_id
-                        break
+                station_id = _extract_city(question)
+
         if not station_id:
             errors.append(f"unknown_city: {question[:60]}")
             continue
@@ -724,50 +879,74 @@ def classify_binary_weather_markets(
 
         today = datetime.now(timezone.utc).date()
         if target_date < today:
-            continue  # silently skip past dates
-
-        # Extract bucket from question
-        bucket = parse_bucket_from_question(question, yes_token_id)
-        if not bucket:
-            errors.append(f"no_bucket: {question[:60]}")
             continue
 
-        event_key = f"{station_id}:{target_date.isoformat()}"
+        # Extract bucket
+        if market_type == WeatherMarketType.TEMPERATURE:
+            bucket = parse_bucket_from_question(question, yes_token_id)
+        else:
+            bucket = parse_amount_bucket_from_question(question, yes_token_id, market_type)
+
+        if not bucket:
+            errors.append(f"no_bucket_{market_type.value}: {question[:60]}")
+            continue
+
+        event_key = f"{station_id}:{target_date.isoformat()}:{market_type.value}"
         if event_key not in events:
             events[event_key] = []
             questions_by_event[event_key] = question
+            type_by_event[event_key] = market_type
         events[event_key].append((bucket, condition_id, mid_price))
 
     # Build classifications from grouped events
+    _RESOLUTION_TYPES = {
+        WeatherMarketType.TEMPERATURE: "daily_high",
+        WeatherMarketType.PRECIPITATION: "daily_precip",
+        WeatherMarketType.SNOWFALL: "daily_snow",
+        WeatherMarketType.WIND: "daily_wind",
+    }
+    _UNITS = {
+        WeatherMarketType.TEMPERATURE: "F",
+        WeatherMarketType.PRECIPITATION: "in",
+        WeatherMarketType.SNOWFALL: "in",
+        WeatherMarketType.WIND: "mph",
+    }
+
     classifications = []
     for event_key, bucket_list in events.items():
-        station_id, date_str = event_key.split(":", 1)
+        parts = event_key.split(":", 2)
+        station_id, date_str = parts[0], parts[1]
+        mtype = type_by_event.get(event_key, WeatherMarketType.TEMPERATURE)
         station = STATION_REGISTRY.get(station_id)
         if not station:
             continue
 
         buckets = [b for b, _, _ in bucket_list]
-
-        # Use a synthetic event-level condition_id
         event_condition_id = f"weather-event:{event_key}"
 
-        # Validate bucket set (skip contiguous check for now — real markets may have gaps)
-        if len(buckets) < 2:
-            errors.append(f"too_few_buckets: {event_key} ({len(buckets)})")
-            continue
-
-        has_lower = any(b.is_lower_open for b in buckets)
-        has_upper = any(b.is_upper_open for b in buckets)
-        if not has_lower or not has_upper:
-            errors.append(f"missing_boundary: {event_key}")
-            continue
+        # For non-temperature binary markets, a single bucket (threshold) is valid
+        if mtype != WeatherMarketType.TEMPERATURE:
+            if len(buckets) < 1:
+                errors.append(f"no_buckets: {event_key}")
+                continue
+        else:
+            if len(buckets) < 2:
+                errors.append(f"too_few_buckets: {event_key} ({len(buckets)})")
+                continue
+            has_lower = any(b.is_lower_open for b in buckets)
+            has_upper = any(b.is_upper_open for b in buckets)
+            if not has_lower or not has_upper:
+                errors.append(f"missing_boundary: {event_key}")
+                continue
 
         classifications.append(WeatherMarketClassification(
             condition_id=event_condition_id,
             station_id=station_id,
             city=station.city,
             target_date=date_str,
-            resolution_type="daily_high",
+            resolution_type=_RESOLUTION_TYPES.get(mtype, "daily_high"),
+            market_type=mtype,
+            unit=_UNITS.get(mtype, "F"),
             buckets=buckets,
             question=questions_by_event.get(event_key, ""),
         ))

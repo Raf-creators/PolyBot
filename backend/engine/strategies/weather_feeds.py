@@ -252,24 +252,29 @@ class WeatherFeedManager:
 
         # ---- Strategy 2: Broad keyword search via Gamma search ----
         search_terms = ["highest temperature", "high temperature", "weather temperature"]
-        for term in search_terms:
+        search_tags = ["temperature", "weather", "rain", "snow", "precipitation", "wind"]
+        for tag in search_tags:
             try:
                 async with self._session.get(
                     GAMMA_API_EVENTS,
-                    params={"tag": "temperature", "closed": "false", "limit": 100},
+                    params={"tag": tag, "closed": "false", "limit": 100},
                 ) as resp:
                     if resp.status == 200:
                         events = await resp.json()
                         for event in (events if isinstance(events, list) else []):
                             for m in event.get("markets", []):
                                 q = (m.get("question", "") or "").lower()
-                                if "temperature" in q or "temp" in q:
+                                weather_kw = any(k in q for k in [
+                                    "temperature", "temp", "rain", "precipitation",
+                                    "snow", "snowfall", "wind", "mph",
+                                ])
+                                if weather_kw:
                                     market = self._parse_gamma_market(m)
                                     if market and market["condition_id"] not in seen_conditions:
                                         seen_conditions.add(market["condition_id"])
                                         all_markets.append(market)
             except Exception as e:
-                logger.debug(f"Broad weather search error for '{term}': {e}")
+                logger.debug(f"Broad weather search error for tag='{tag}': {e}")
             await asyncio.sleep(0.2)
 
         self._health["weather_events_discovered"] = len(all_markets)
@@ -380,8 +385,10 @@ class WeatherFeedManager:
         params = {
             "latitude": station.latitude,
             "longitude": station.longitude,
-            "hourly": "temperature_2m",
+            "hourly": "temperature_2m,precipitation,snowfall,wind_speed_10m",
             "temperature_unit": "fahrenheit",
+            "precipitation_unit": "inch",
+            "wind_speed_unit": "mph",
             "timezone": station.timezone,
             "forecast_days": forecast_days,
         }
@@ -412,21 +419,34 @@ class WeatherFeedManager:
         station: StationInfo,
         target_date: str,
     ) -> Optional[ForecastSnapshot]:
-        """Extract daily high from Open-Meteo hourly response."""
+        """Extract daily high, precipitation, snow, and wind from Open-Meteo hourly response."""
         hourly = data.get("hourly", {})
         times = hourly.get("time", [])
         temps = hourly.get("temperature_2m", [])
+        precips = hourly.get("precipitation", [])
+        snows = hourly.get("snowfall", [])
+        winds = hourly.get("wind_speed_10m", [])
 
         if not times or not temps or len(times) != len(temps):
             self._health["open_meteo_last_error"] = "empty or mismatched response arrays"
             return None
 
-        # Filter to target date hours and find max
+        # Filter to target date hours
         target_prefix = target_date  # "2026-03-15"
         target_temps = []
-        for t, temp in zip(times, temps):
-            if t.startswith(target_prefix) and temp is not None:
-                target_temps.append(temp)
+        target_precips = []
+        target_snows = []
+        target_winds = []
+        for i, t in enumerate(times):
+            if t.startswith(target_prefix):
+                if i < len(temps) and temps[i] is not None:
+                    target_temps.append(temps[i])
+                if i < len(precips) and precips[i] is not None:
+                    target_precips.append(precips[i])
+                if i < len(snows) and snows[i] is not None:
+                    target_snows.append(snows[i])
+                if i < len(winds) and winds[i] is not None:
+                    target_winds.append(winds[i])
 
         if not target_temps:
             logger.debug(f"No hourly data for {station.station_id} on {target_date}")
@@ -434,11 +454,15 @@ class WeatherFeedManager:
 
         forecast_high = max(target_temps)
 
+        # Daily totals for precip/snow, max for wind
+        forecast_precip = round(sum(target_precips), 2) if target_precips else None
+        forecast_snow = round(sum(target_snows), 2) if target_snows else None
+        forecast_wind = round(max(target_winds), 1) if target_winds else None
+
         # Lead hours: hours from now until end of target date (11:59 PM local)
         now = datetime.now(timezone.utc)
         try:
             target_dt = datetime.fromisoformat(target_date + "T23:59:00")
-            # Approximate: assume station timezone offset (not critical precision)
             lead_hours = max((target_dt - now.replace(tzinfo=None)).total_seconds() / 3600.0, 0)
         except (ValueError, TypeError):
             lead_hours = 0
@@ -449,6 +473,9 @@ class WeatherFeedManager:
             station_id=station.station_id,
             target_date=target_date,
             forecast_high_f=round(forecast_high, 1),
+            forecast_precip_in=forecast_precip,
+            forecast_snow_in=forecast_snow,
+            forecast_wind_mph=forecast_wind,
             source="open_meteo",
             lead_hours=round(lead_hours, 1),
             raw_hourly=target_temps,

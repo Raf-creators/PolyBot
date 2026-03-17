@@ -27,6 +27,7 @@ from engine.strategies.weather_models import (
     WeatherConfig, WeatherMarketClassification, WeatherSignal,
     WeatherExecution, WeatherSignalStatus, BucketProbability,
     SigmaCalibration, StationType, ForecastAccuracyRecord,
+    WeatherMarketType,
     SHADOW_CONFIG_OVERRIDES,
 )
 from engine.strategies.weather_parser import (
@@ -36,6 +37,7 @@ from engine.strategies.weather_pricing import (
     calibrate_sigma, compute_all_bucket_probabilities,
     compute_edge_bps, compute_weather_confidence,
     kelly_size, get_season,
+    compute_amount_bucket_probability, get_amount_sigma,
 )
 from engine.strategies.weather_feeds import WeatherFeedManager
 
@@ -111,6 +113,13 @@ class WeatherTrader(BaseStrategy):
             "active_executions": 0,
             "completed_executions": 0,
             "last_execution_time": None,
+            # Per-market-type breakdown
+            "by_market_type": {
+                "temperature": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
+                "precipitation": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
+                "snowfall": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
+                "wind": {"classified": 0, "signals": 0, "executed": 0, "rejected": 0},
+            },
         }
 
     # ---- Lifecycle ----
@@ -295,6 +304,7 @@ class WeatherTrader(BaseStrategy):
                         "station": best.station_id,
                         "date": best.target_date,
                         "bucket": best.bucket_label,
+                        "market_type": best.market_type,
                         "edge_bps": round(best.edge_bps, 0),
                         "confidence": round(best.confidence, 3),
                         "quality_score": best.quality_score,
@@ -349,6 +359,15 @@ class WeatherTrader(BaseStrategy):
         self._classified = await self._classify_markets()
         self._last_classification_time = now
         self._m["markets_classified"] = len(self._classified)
+        # Count by market type
+        type_counts = {"temperature": 0, "precipitation": 0, "snowfall": 0, "wind": 0}
+        for cm in self._classified.values():
+            mtype = getattr(cm, 'market_type', WeatherMarketType.TEMPERATURE)
+            type_counts[mtype.value if hasattr(mtype, 'value') else str(mtype)] = \
+                type_counts.get(mtype.value if hasattr(mtype, 'value') else str(mtype), 0) + 1
+        for mtype_key, count in type_counts.items():
+            if mtype_key in self._m["by_market_type"]:
+                self._m["by_market_type"][mtype_key]["classified"] = count
 
     async def _classify_markets(self) -> Dict[str, WeatherMarketClassification]:
         """Discover and classify weather temperature markets.
@@ -512,6 +531,27 @@ class WeatherTrader(BaseStrategy):
         mu = forecast.forecast_high_f
         lead_hours = forecast.lead_hours
 
+        # --- For non-temperature markets, extract the relevant forecast value ---
+        mtype = getattr(cm, 'market_type', WeatherMarketType.TEMPERATURE)
+        if mtype == WeatherMarketType.PRECIPITATION:
+            forecast_val = forecast.forecast_precip_in
+            if forecast_val is None:
+                return [self._reject_signal(cm, forecast, 0, 0, lead_hours, 0, 0,
+                                            "no_precip_forecast", bucket_label="(all)")]
+            mu = forecast_val  # override mu with precip amount
+        elif mtype == WeatherMarketType.SNOWFALL:
+            forecast_val = forecast.forecast_snow_in
+            if forecast_val is None:
+                return [self._reject_signal(cm, forecast, 0, 0, lead_hours, 0, 0,
+                                            "no_snow_forecast", bucket_label="(all)")]
+            mu = forecast_val
+        elif mtype == WeatherMarketType.WIND:
+            forecast_val = forecast.forecast_wind_mph
+            if forecast_val is None:
+                return [self._reject_signal(cm, forecast, 0, 0, lead_hours, 0, 0,
+                                            "no_wind_forecast", bucket_label="(all)")]
+            mu = forecast_val
+
         # --- Lead time bounds ---
         if lead_hours < self.config.min_hours_to_resolution:
             return [self._reject_signal(cm, forecast, mu, 0, lead_hours, 0, 0,
@@ -529,10 +569,14 @@ class WeatherTrader(BaseStrategy):
         except (ValueError, TypeError):
             month = datetime.now(timezone.utc).month
 
-        station = STATION_REGISTRY.get(cm.station_id)
-        station_type = station.station_type if station else StationType.INLAND
-        calibration = self._calibrations.get(cm.station_id)
-        sigma = calibrate_sigma(lead_hours, month, station_type, calibration)
+        mtype_str = mtype.value if hasattr(mtype, 'value') else str(mtype)
+        if mtype == WeatherMarketType.TEMPERATURE:
+            station = STATION_REGISTRY.get(cm.station_id)
+            station_type = station.station_type if station else StationType.INLAND
+            calibration = self._calibrations.get(cm.station_id)
+            sigma = calibrate_sigma(lead_hours, month, station_type, calibration)
+        else:
+            sigma = get_amount_sigma(mtype_str, lead_hours)
 
         if sigma > self.config.max_sigma:
             return [self._reject_signal(cm, forecast, mu, sigma, lead_hours, 0, 0,
@@ -540,7 +584,14 @@ class WeatherTrader(BaseStrategy):
                                         bucket_label="(all)")]
 
         # --- Compute bucket probabilities ---
-        probs = compute_all_bucket_probabilities(cm.buckets, mu, sigma)
+        if mtype == WeatherMarketType.TEMPERATURE:
+            probs = compute_all_bucket_probabilities(cm.buckets, mu, sigma)
+        else:
+            # Non-temperature: compute each bucket individually
+            probs = [
+                compute_amount_bucket_probability(b, mu, sigma, mtype_str)
+                for b in cm.buckets
+            ]
 
         # --- Spread-sum validation: check if market prices are coherent ---
         market_prices_sum = 0
@@ -707,12 +758,24 @@ class WeatherTrader(BaseStrategy):
 
             # Explanation: structured reasoning for debugging and UI
             city_name = self._get_city(cm.station_id)
+            _TYPE_LABELS = {
+                "temperature": ("temperature_bucket", "F"),
+                "precipitation": ("precipitation_threshold", "in"),
+                "snowfall": ("snowfall_threshold", "in"),
+                "wind": ("wind_threshold", "mph"),
+            }
+            ctype, unit = _TYPE_LABELS.get(mtype_str, ("weather_bucket", ""))
+            if mtype == WeatherMarketType.TEMPERATURE:
+                fcst_summary = f"Forecast high {mu:.1f}F (sigma {sigma:.1f}F, lead {lead_hours:.0f}h)"
+            else:
+                fcst_summary = f"Forecast {mtype_str} {mu:.2f}{unit} (sigma {sigma:.2f}{unit}, lead {lead_hours:.0f}h)"
             explanation = {
                 "market": cm.question[:120],
                 "location": city_name or cm.station_id,
-                "contract_type": "temperature_bucket",
+                "contract_type": ctype,
+                "market_type": mtype_str,
                 "bucket": bucket.label,
-                "forecast_summary": f"Forecast high {mu:.1f}F (sigma {sigma:.1f}F, lead {lead_hours:.0f}h)",
+                "forecast_summary": fcst_summary,
                 "model_probability": round(prob, 4),
                 "market_price": round(market_price, 4),
                 "edge": round(edge_bps, 0),
@@ -739,11 +802,14 @@ class WeatherTrader(BaseStrategy):
                 is_tradable=True,
                 liquidity_score=round(liq_score, 1),
                 quality_score=quality_score,
+                market_type=mtype_str,
                 explanation=explanation,
             )
             signals.append(signal)
             buckets_traded += 1
             self._m["signals_generated"] += 1
+            if mtype_str in self._m["by_market_type"]:
+                self._m["by_market_type"][mtype_str]["signals"] += 1
 
             logger.info(
                 f"[WEATHER] Signal: {cm.station_id} {cm.target_date} "
@@ -765,6 +831,13 @@ class WeatherTrader(BaseStrategy):
         self._m["opportunities_rejected"] += 1
         bucket = reason.split(" ")[0] if reason else "unknown"
         self._m["rejection_reasons"][bucket] = self._m["rejection_reasons"].get(bucket, 0) + 1
+
+        # Track by market type
+        mtype_str = getattr(cm, 'market_type', WeatherMarketType.TEMPERATURE)
+        if hasattr(mtype_str, 'value'):
+            mtype_str = mtype_str.value
+        if mtype_str in self._m["by_market_type"]:
+            self._m["by_market_type"][mtype_str]["rejected"] += 1
 
         city_name = self._get_city(cm.station_id) if cm else ""
         explanation = {

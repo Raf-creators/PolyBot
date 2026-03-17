@@ -145,9 +145,13 @@ export default function Weather() {
   ];
 
   // ---- Signal Columns ----
+  const TYPE_BADGE_COLORS = { temperature: 'text-amber-400', precipitation: 'text-blue-400', snowfall: 'text-cyan-300', wind: 'text-teal-400' };
   const signalColumns = [
     { key: 'station_id', label: 'Station', render: (v) => <span className="text-cyan-400 font-medium font-mono">{v}</span> },
     { key: 'target_date', label: 'Date', render: (v) => <span className="text-zinc-300">{v}</span> },
+    { key: 'market_type', label: 'Type', render: (v) => (
+      <span className={`text-[10px] font-mono uppercase ${TYPE_BADGE_COLORS[v] || 'text-zinc-500'}`}>{v?.slice(0, 5) || 'temp'}</span>
+    )},
     { key: 'bucket_label', label: 'Bucket', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
     { key: 'forecast_high_f', label: 'Fcst', align: 'right', render: (v) => <span className="font-mono">{v ? `${v}F` : '—'}</span> },
     { key: 'model_prob', label: 'Model', align: 'right', sortable: true, render: (v) => <span className="font-mono">{v > 0 ? formatPrice(v) : '—'}</span> },
@@ -315,6 +319,9 @@ export default function Weather() {
                 <span className="text-emerald-400 font-semibold">BEST SIGNAL</span>
                 <span className="text-cyan-400 font-mono">{health.best_signal_this_scan.station}</span>
                 <span className="text-zinc-400">{health.best_signal_this_scan.date}</span>
+                {health.best_signal_this_scan.market_type && health.best_signal_this_scan.market_type !== 'temperature' && (
+                  <span className="text-blue-400 uppercase text-[10px] font-mono">{health.best_signal_this_scan.market_type}</span>
+                )}
                 <span className="text-zinc-200 font-medium">{health.best_signal_this_scan.bucket}</span>
                 <span className="text-emerald-400 font-mono">{health.best_signal_this_scan.edge_bps}bps</span>
                 <span className="text-amber-400 font-mono">Q:{health.best_signal_this_scan.quality_score?.toFixed(3)}</span>
@@ -400,6 +407,21 @@ export default function Weather() {
         <TabsContent value="health" className="mt-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             <CalibrationStatusCard calStatus={health.calibration_status || {}} />
+            <SectionCard title="By Market Type" testId="section-market-type-breakdown">
+              <div className="space-y-3 text-xs">
+                {Object.entries(health.by_market_type || {}).map(([type, stats]) => {
+                  const colors = { temperature: 'text-amber-400', precipitation: 'text-blue-400', snowfall: 'text-cyan-300', wind: 'text-teal-400' };
+                  return (
+                    <div key={type} className="space-y-1">
+                      <div className={`font-mono font-medium uppercase ${colors[type] || 'text-zinc-400'}`}>{type}</div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Classified</span><span className="text-zinc-300 font-mono">{stats?.classified || 0}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Signals</span><span className="text-zinc-300 font-mono">{stats?.signals || 0}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Rejected</span><span className="text-zinc-300 font-mono">{stats?.rejected || 0}</span></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
             <SectionCard title="Scanner Metrics" testId="section-weather-metrics">
               <div className="space-y-2 text-xs">
                 {[
