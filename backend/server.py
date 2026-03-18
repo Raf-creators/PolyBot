@@ -1452,6 +1452,51 @@ async def set_lifecycle_mode(request: Request):
     }
 
 
+@api_router.get("/strategies/weather/entry-quality")
+async def get_weather_entry_quality():
+    """Entry quality metrics for standard weather: rejection counts, avg quality of passed signals, config."""
+    if not weather_trader_ref:
+        return {"config": {}, "rejections": {}, "passed": {}, "open_positions": {}}
+
+    health = weather_trader_ref.get_health()
+    eq = health.get("entry_quality", {})
+
+    # Compute avg quality of currently open standard weather positions
+    from engine.risk import classify_strategy
+    open_quals = []
+    open_edges = []
+    open_lead_hours = []
+    for pos in state.positions.values():
+        sid = getattr(pos, 'strategy_id', '') or ''
+        if sid == 'weather_asymmetric':
+            continue
+        bucket = classify_strategy(pos)
+        if bucket != 'weather':
+            continue
+        # Get lifecycle eval for enrichment
+        lc = weather_trader_ref._lifecycle_evals.get(pos.token_id)
+        if lc:
+            if lc.profit_multiple > 0:
+                open_quals.append(lc.profit_multiple)  # proxy for quality
+            if lc.edge_at_entry > 0:
+                open_edges.append(lc.edge_at_entry)
+            if lc.hours_to_resolution is not None:
+                open_lead_hours.append(lc.hours_to_resolution)
+
+    total_open = len(open_quals)
+    return {
+        "config": eq.get("config", {}),
+        "rejections": eq.get("rejections", {}),
+        "passed_signals": eq.get("passed_signals", {}),
+        "open_positions": {
+            "count": total_open,
+            "avg_profit_multiple": round(sum(open_quals) / total_open, 4) if open_quals else 0,
+            "avg_edge_at_entry_bps": round(sum(open_edges) / len(open_edges), 1) if open_edges else 0,
+            "avg_hours_to_resolution": round(sum(open_lead_hours) / len(open_lead_hours), 1) if open_lead_hours else 0,
+        },
+    }
+
+
 @api_router.get("/positions/weather/breakdown")
 async def get_weather_position_breakdown():
     """Age/resolution breakdown for open weather positions."""

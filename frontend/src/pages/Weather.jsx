@@ -50,13 +50,14 @@ export default function Weather() {
   const [weatherByType, setWeatherByType] = useState(null);
   const [autoTune, setAutoTune] = useState(null);
   const [lifecycleDash, setLifecycleDash] = useState(null);
+  const [entryQuality, setEntryQuality] = useState(null);
 
   const prefix = demoMode ? '/demo' : '';
 
   const fetchCalibration = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt, at, lcd] = await Promise.all([
+      const [ss, ah, cal, sigCal, rolCal, bk, asym, cm, wbt, at, lcd, eq] = await Promise.all([
         axios.get(`${API_BASE}/strategies/weather/shadow-summary`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/history?limit=50`),
         axios.get(`${API_BASE}/strategies/weather/accuracy/calibration`),
@@ -68,6 +69,7 @@ export default function Weather() {
         axios.get(`${API_BASE}/analytics/weather-by-type`),
         axios.get(`${API_BASE}/strategies/weather/calibration/auto-tune`),
         axios.get(`${API_BASE}/positions/weather/lifecycle/dashboard`),
+        axios.get(`${API_BASE}/strategies/weather/entry-quality`),
       ]);
       setShadowSummary(ss.data);
       setAccuracyHistory(ah.data);
@@ -81,6 +83,7 @@ export default function Weather() {
       setWeatherByType(wbt.data);
       setAutoTune(at.data);
       setLifecycleDash(lcd.data);
+      setEntryQuality(eq.data);
     } catch {}
   }, [demoMode]);
 
@@ -652,7 +655,7 @@ export default function Weather() {
 
         {/* Lifecycle Dashboard Tab */}
         <TabsContent value="lifecycle" className="mt-4 space-y-5">
-          <LifecycleDashboard data={lifecycleDash} formatPnl={formatPnl} onModeChange={async (newMode) => {
+          <LifecycleDashboard data={lifecycleDash} formatPnl={formatPnl} entryQuality={entryQuality} onModeChange={async (newMode) => {
             try {
               const res = await axios.post(`${API_BASE}/strategies/weather/lifecycle/mode`, { mode: newMode });
               if (res.data.status === 'updated') {
@@ -1582,7 +1585,7 @@ function WeatherByTypeSection({ data }) {
 }
 
 
-function LifecycleDashboard({ data, formatPnl, onModeChange }) {
+function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
   if (!data) return <div className="text-zinc-600 text-xs text-center py-8">Loading lifecycle data...</div>;
 
   const { summary, reason_distribution, time_buckets, shadow_exits, sold_vs_held, sold_vs_held_by_reason, profit_distribution, config } = data;
@@ -1642,6 +1645,9 @@ function LifecycleDashboard({ data, formatPnl, onModeChange }) {
           <div className="text-[10px] text-zinc-600 mt-0.5">avg decay from entry edge</div>
         </div>
       </div>
+
+      {/* Entry Quality Summary */}
+      {entryQuality && <EntryQualitySummary data={entryQuality} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Section 2: Exit Reason Distribution */}
@@ -2334,5 +2340,77 @@ function LifecycleModeControl({ currentMode, config, onModeChange }) {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+
+function EntryQualitySummary({ data }) {
+  if (!data) return null;
+  const { config, rejections, passed_signals, open_positions } = data;
+  const totalRejections = (rejections?.low_quality || 0) + (rejections?.low_edge_long || 0) + (rejections?.long_hold_penalty || 0);
+
+  return (
+    <div data-testid="entry-quality-summary" className="rounded-lg border border-cyan-500/15 bg-zinc-950 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-medium text-zinc-300">Standard Weather Entry Quality</div>
+        <Badge variant="outline" className="text-[9px] font-mono border-cyan-500/30 text-cyan-400">SELECTIVITY</Badge>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        {/* Passed signals */}
+        <div className="rounded-lg bg-zinc-900/50 border border-zinc-800/50 p-3">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Signals Passed</div>
+          <div data-testid="eq-passed-total" className="text-xl font-mono font-bold text-emerald-400">{passed_signals?.total || 0}</div>
+          <div className="text-[9px] text-zinc-600 mt-0.5">quality: <span className="text-zinc-400 font-mono">{(passed_signals?.avg_quality || 0).toFixed(2)}</span> avg</div>
+        </div>
+        {/* Rejected signals */}
+        <div className="rounded-lg bg-zinc-900/50 border border-zinc-800/50 p-3">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Rejected</div>
+          <div data-testid="eq-rejected-total" className={`text-xl font-mono font-bold ${totalRejections > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>{totalRejections}</div>
+          <div className="text-[9px] text-zinc-600 mt-0.5">
+            {totalRejections > 0 && passed_signals?.total > 0
+              ? `${Math.round(totalRejections / (totalRejections + passed_signals.total) * 100)}% filter rate`
+              : 'no rejections yet'}
+          </div>
+        </div>
+        {/* Avg edge of passed */}
+        <div className="rounded-lg bg-zinc-900/50 border border-zinc-800/50 p-3">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Avg Edge (Passed)</div>
+          <div data-testid="eq-avg-edge" className="text-xl font-mono font-bold text-zinc-200">{(passed_signals?.avg_edge_bps || 0).toFixed(0)}<span className="text-xs text-zinc-500">bp</span></div>
+          <div className="text-[9px] text-zinc-600 mt-0.5">of qualifying signals</div>
+        </div>
+        {/* Avg lead hours */}
+        <div className="rounded-lg bg-zinc-900/50 border border-zinc-800/50 p-3">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Avg Lead (Passed)</div>
+          <div data-testid="eq-avg-lead" className="text-xl font-mono font-bold text-zinc-200">{(passed_signals?.avg_lead_hours || 0).toFixed(0)}<span className="text-xs text-zinc-500">h</span></div>
+          <div className="text-[9px] text-zinc-600 mt-0.5">time to resolution</div>
+        </div>
+      </div>
+
+      {/* Rejection breakdown */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+        <div className="flex items-center justify-between rounded bg-zinc-900/60 px-3 py-1.5 border border-zinc-800/30">
+          <span className="text-[10px] text-zinc-500">Low Quality</span>
+          <span data-testid="eq-rej-quality" className={`text-xs font-mono font-bold ${(rejections?.low_quality || 0) > 0 ? 'text-red-400' : 'text-zinc-700'}`}>{rejections?.low_quality || 0}</span>
+        </div>
+        <div className="flex items-center justify-between rounded bg-zinc-900/60 px-3 py-1.5 border border-zinc-800/30">
+          <span className="text-[10px] text-zinc-500">Low Edge (Long)</span>
+          <span data-testid="eq-rej-edge-long" className={`text-xs font-mono font-bold ${(rejections?.low_edge_long || 0) > 0 ? 'text-amber-400' : 'text-zinc-700'}`}>{rejections?.low_edge_long || 0}</span>
+        </div>
+        <div className="flex items-center justify-between rounded bg-zinc-900/60 px-3 py-1.5 border border-zinc-800/30">
+          <span className="text-[10px] text-zinc-500">Long Hold Penalty</span>
+          <span data-testid="eq-rej-long-hold" className={`text-xs font-mono font-bold ${(rejections?.long_hold_penalty || 0) > 0 ? 'text-orange-400' : 'text-zinc-700'}`}>{rejections?.long_hold_penalty || 0}</span>
+        </div>
+      </div>
+
+      {/* Entry quality config */}
+      <div className="flex items-center gap-3 flex-wrap text-[10px] text-zinc-600 pt-2 border-t border-zinc-800/30">
+        <span>Min quality: <span className="text-zinc-400 font-mono">{config?.min_quality_score}</span></span>
+        <span>Long edge: <span className="text-zinc-400 font-mono">{config?.min_edge_bps_long}bp</span></span>
+        <span>Long cutoff: <span className="text-zinc-400 font-mono">{config?.long_resolution_hours}h</span></span>
+        <span>Time weight: <span className="text-zinc-400 font-mono">{config?.time_preference_weight}</span></span>
+        <span>Hold penalty: <span className="text-zinc-400 font-mono">{config?.long_hold_penalty}</span></span>
+      </div>
+    </div>
   );
 }

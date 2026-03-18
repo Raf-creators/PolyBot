@@ -121,6 +121,15 @@ class WeatherConfig(BaseModel):
     # Liquidity score filter
     min_liquidity_score: float = 35.0                       # 0-100, skip buckets scoring below this
 
+    # Standard weather entry quality (tighter selectivity)
+    min_quality_score: float = 0.35                          # minimum composite quality (edge/conf/liq) for standard
+    min_edge_bps_long: float = 700.0                         # higher edge required for >24h markets
+    long_resolution_hours: float = 24.0                      # defines "long-dated" market threshold
+    time_preference_weight: float = 0.15                     # weight for time-to-resolution in signal ranking
+    long_hold_penalty: float = 0.20                          # penalty applied to rank score for long+moderate signals
+    long_hold_moderate_quality: float = 0.50                 # quality below this is "moderate" for penalty purposes
+    long_hold_moderate_edge_bps: float = 800.0               # edge below this is "moderate" for penalty purposes
+
     # Asymmetric mode settings
     asymmetric_enabled: bool = True
     asymmetric_max_market_price: float = 0.25               # only trade contracts priced ≤ 25¢

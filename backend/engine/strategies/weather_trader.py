@@ -143,6 +143,16 @@ class WeatherTrader(BaseStrategy):
                 "auto_exits": 0,
                 "last_eval_time": None,
             },
+            # Entry quality metrics (standard weather only)
+            "entry_quality": {
+                "rejected_low_quality": 0,
+                "rejected_low_edge_long": 0,
+                "rejected_long_hold_penalty": 0,
+                "total_standard_passed": 0,
+                "avg_quality_passed": 0.0,
+                "avg_edge_passed": 0.0,
+                "avg_lead_hours_passed": 0.0,
+            },
         }
 
     # ---- Lifecycle ----
@@ -313,13 +323,31 @@ class WeatherTrader(BaseStrategy):
                 # Stage 3+4: Evaluate all classified markets
                 signals = await self._evaluate_all()
 
-                # Stage 5: Execute eligible signals — sorted by edge (highest first)
+                # Stage 5: Execute eligible signals — ranked by composite score
                 # Separate standard and asymmetric signals
-                standard_eligible = sorted(
-                    [s for s in signals if s.is_tradable and not s.is_asymmetric],
-                    key=lambda s: s.quality_score,
-                    reverse=True,
-                )
+                standard_eligible = [s for s in signals if s.is_tradable and not s.is_asymmetric]
+
+                # Composite ranking for standard signals:
+                # quality_score + time_preference (nearer resolves score higher)
+                # - long_hold_penalty for moderate quality/edge on long-dated
+                def rank_standard_signal(sig):
+                    base = sig.quality_score
+
+                    # Time preference: shorter lead_hours → higher score
+                    max_lead = self.config.max_hours_to_resolution or 168
+                    time_bonus = max(0, 1.0 - (sig.lead_hours / max_lead)) * self.config.time_preference_weight
+
+                    # Long-hold penalty: mediocre + long-dated → reduce rank
+                    penalty = 0.0
+                    if (sig.lead_hours >= self.config.long_resolution_hours
+                            and sig.quality_score < self.config.long_hold_moderate_quality
+                            and sig.edge_bps < self.config.long_hold_moderate_edge_bps):
+                        penalty = self.config.long_hold_penalty
+
+                    return base + time_bonus - penalty
+
+                standard_eligible = sorted(standard_eligible, key=rank_standard_signal, reverse=True)
+
                 asymmetric_eligible = sorted(
                     [s for s in signals if s.is_tradable and s.is_asymmetric],
                     key=lambda s: s.edge_bps,
@@ -916,6 +944,18 @@ class WeatherTrader(BaseStrategy):
                     model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
                 continue
 
+            # --- Time-aware edge filter (standard only) ---
+            # Long-dated markets need stronger edge to justify the slot
+            if (lead_hours >= self.config.long_resolution_hours
+                    and edge_bps < self.config.min_edge_bps_long):
+                self._m["entry_quality"]["rejected_low_edge_long"] += 1
+                signals.append(self._reject_signal(
+                    cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
+                    f"low_edge_long_market (edge={edge_bps:.0f}bps < {self.config.min_edge_bps_long:.0f}bps, lead={lead_hours:.0f}h)",
+                    bucket_label=bucket.label,
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
+                continue
+
             # --- Cooldown ---
             if cooldown_key in self._cooldown:
                 continue
@@ -960,6 +1000,36 @@ class WeatherTrader(BaseStrategy):
             q_conf = confidence                        # already 0-1
             q_liq = min(liq_score / 100.0, 1.0)       # 100 = perfect
             quality_score = round(q_edge * 0.5 + q_conf * 0.3 + q_liq * 0.2, 4)
+
+            # --- Quality score filter (standard weather only) ---
+            if quality_score < self.config.min_quality_score:
+                self._m["entry_quality"]["rejected_low_quality"] += 1
+                signals.append(self._reject_signal(
+                    cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
+                    f"low_quality ({quality_score:.3f} < {self.config.min_quality_score:.3f})",
+                    bucket_label=bucket.label,
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
+                continue
+
+            # --- Long-hold penalty pre-screen (avoid mediocre long-dated) ---
+            if (lead_hours >= self.config.long_resolution_hours
+                    and quality_score < self.config.long_hold_moderate_quality
+                    and edge_bps < self.config.long_hold_moderate_edge_bps):
+                self._m["entry_quality"]["rejected_long_hold_penalty"] += 1
+                signals.append(self._reject_signal(
+                    cm, forecast, mu, sigma, lead_hours, forecast_age_min or 0, data_age,
+                    f"long_hold_mediocre (quality={quality_score:.3f} edge={edge_bps:.0f}bps lead={lead_hours:.0f}h)",
+                    bucket_label=bucket.label,
+                    model_prob=prob, market_price=market_price, sigma_trace=sigma_trace))
+                continue
+
+            # Track entry quality metrics for passed signals
+            eq = self._m["entry_quality"]
+            n = eq["total_standard_passed"]
+            eq["avg_quality_passed"] = round((eq["avg_quality_passed"] * n + quality_score) / (n + 1), 4)
+            eq["avg_edge_passed"] = round((eq["avg_edge_passed"] * n + edge_bps) / (n + 1), 1)
+            eq["avg_lead_hours_passed"] = round((eq["avg_lead_hours_passed"] * n + lead_hours) / (n + 1), 1)
+            eq["total_standard_passed"] = n + 1
 
             # Explanation: structured reasoning for debugging and UI
             city_name = self._get_city(cm.station_id)
@@ -2075,6 +2145,28 @@ class WeatherTrader(BaseStrategy):
                 "shadow_exits_total": self._m["lifecycle"]["shadow_exits"],
                 "auto_exits_total": self._m["lifecycle"]["auto_exits"],
                 "last_eval_time": self._m["lifecycle"]["last_eval_time"],
+            },
+            "entry_quality": {
+                "config": {
+                    "min_quality_score": self.config.min_quality_score,
+                    "min_edge_bps_long": self.config.min_edge_bps_long,
+                    "long_resolution_hours": self.config.long_resolution_hours,
+                    "time_preference_weight": self.config.time_preference_weight,
+                    "long_hold_penalty": self.config.long_hold_penalty,
+                    "long_hold_moderate_quality": self.config.long_hold_moderate_quality,
+                    "long_hold_moderate_edge_bps": self.config.long_hold_moderate_edge_bps,
+                },
+                "rejections": {
+                    "low_quality": self._m["entry_quality"]["rejected_low_quality"],
+                    "low_edge_long": self._m["entry_quality"]["rejected_low_edge_long"],
+                    "long_hold_penalty": self._m["entry_quality"]["rejected_long_hold_penalty"],
+                },
+                "passed_signals": {
+                    "total": self._m["entry_quality"]["total_standard_passed"],
+                    "avg_quality": self._m["entry_quality"]["avg_quality_passed"],
+                    "avg_edge_bps": self._m["entry_quality"]["avg_edge_passed"],
+                    "avg_lead_hours": self._m["entry_quality"]["avg_lead_hours_passed"],
+                },
             },
         }
 
