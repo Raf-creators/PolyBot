@@ -42,6 +42,12 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 - **Simulator**: Includes slot rotation in per-reason simulation
 - **Asymmetric**: NEVER ranked or flagged for slot rotation
 
+### UI Snapshot Export (March 18)
+- **Export Snapshot button** in Lifecycle Dashboard header — downloads full system state as `snapshot-YYYY-MM-DD-HHMM.json`
+- **Copy to Clipboard button** — copies snapshot JSON for quick sharing
+- **Internal endpoint** `/api/debug/ui-snapshot` — no key required (UI-facing, read-only)
+- **Keyed endpoint** `/api/debug/state-snapshot` preserved for external/curl access
+
 ## Key Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
@@ -52,12 +58,15 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 | /api/positions/weather/lifecycle/simulate | POST | Simulate thresholds + slot rotation |
 | /api/strategies/weather/lifecycle/mode | POST | Switch lifecycle mode |
 | /api/strategies/weather/entry-quality | GET | Entry quality + rejection metrics |
+| /api/debug/ui-snapshot | GET | UI-facing state snapshot (no key) |
+| /api/debug/state-snapshot | GET | Keyed state snapshot (X-Debug-Snapshot-Key) |
 
 ## Prioritized Backlog
-### P0: Observe TAG_ONLY + entry quality + slot rotation flags
+### P0: Observe TAG_ONLY + entry quality + slot rotation flags (VALIDATION PHASE)
 ### P1: Enable SHADOW_EXIT, evaluate all exit paths
-### P2: Copy Trading Skeleton
-### P3: Manual Order Entry
-### P4: UI toggle for auto-tune sigma multiplier
-### P5: Resolution Timeline visualization
-### P6: Live Trading Mode Integration
+### P2: Resolution Timeline visualization (useful for validation)
+### P3: Copy Trading Skeleton
+### P4: Manual Order Entry
+### P5: UI toggle for auto-tune sigma multiplier
+### P6: Resolution Timeline visualization
+### P7: Live Trading Mode Integration
