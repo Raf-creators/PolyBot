@@ -2639,24 +2639,8 @@ async def get_pnl_history():
 
 SNAPSHOT_VERSION = "1.0"
 
-@api_router.get("/debug/state-snapshot")
-async def get_debug_state_snapshot(request: Request):
-    """Read-only state snapshot for offline analysis. Header-authenticated.
-
-    Auth: X-Debug-Snapshot-Key header (or ?key= query param fallback).
-    Set DEBUG_SNAPSHOT_KEY env var to enable.
-    Returns: Full system state — positions, lifecycle, entry quality, PnL, config.
-    Excludes: API keys, wallet credentials, DB connection strings, full token IDs.
-    """
-    expected_key = os.environ.get("DEBUG_SNAPSHOT_KEY", "")
-    if not expected_key:
-        raise HTTPException(403, "Snapshot disabled — set DEBUG_SNAPSHOT_KEY env var")
-
-    # Header-based auth (preferred), query param fallback
-    provided = request.headers.get("X-Debug-Snapshot-Key", "") or request.query_params.get("key", "")
-    if provided != expected_key:
-        raise HTTPException(403, "Invalid snapshot key")
-
+def _build_state_snapshot():
+    """Build the full state snapshot dict. Shared by keyed and UI endpoints."""
     if not state or not engine:
         raise HTTPException(503, "Engine not initialized")
 
@@ -2664,7 +2648,6 @@ async def get_debug_state_snapshot(request: Request):
     from engine.risk import classify_strategy
     from services.analytics_service import compute_portfolio_summary, compute_strategy_metrics
 
-    # ---- Freshness metadata ----
     weather_m = weather_trader_ref._m if weather_trader_ref else {}
     engine_snapshot = state.snapshot()
 
@@ -2682,7 +2665,6 @@ async def get_debug_state_snapshot(request: Request):
         "git_commit": _git_commit,
     }
 
-    # ---- Positions (grouped by strategy, truncated token IDs) ----
     positions_by_strategy = {}
     for pos in state.positions.values():
         sid = getattr(pos, 'strategy_id', '') or ''
@@ -2705,7 +2687,6 @@ async def get_debug_state_snapshot(request: Request):
             "unrealized_pnl": unrealized,
         }
 
-        # Lifecycle enrichment
         if weather_trader_ref:
             lc = weather_trader_ref._lifecycle_evals.get(pos.token_id)
             if lc:
@@ -2727,7 +2708,6 @@ async def get_debug_state_snapshot(request: Request):
 
         positions_by_strategy.setdefault(bucket, []).append(pos_data)
 
-    # ---- Lifecycle summary ----
     lifecycle_data = {}
     if weather_trader_ref:
         lc_m = weather_trader_ref._m.get("lifecycle", {})
@@ -2767,7 +2747,6 @@ async def get_debug_state_snapshot(request: Request):
             "shadow_exits_recent": weather_trader_ref.get_lifecycle_shadow_exits(limit=20),
         }
 
-    # ---- Entry quality ----
     entry_quality = {}
     if weather_trader_ref:
         eq_m = weather_trader_ref._m.get("entry_quality", {})
@@ -2794,10 +2773,9 @@ async def get_debug_state_snapshot(request: Request):
             },
         }
 
-    # ---- PnL summary ----
     pnl_summary = {}
     try:
-        portfolio = compute_portfolio_summary(state.trades, state.positions)  # noqa: F841
+        compute_portfolio_summary(state.trades, state.positions)
         strategy_metrics = compute_strategy_metrics(state.trades, state.positions)
         total_unrealized = sum(
             ((state.get_market(p.token_id).mid_price if state.get_market(p.token_id) and state.get_market(p.token_id).mid_price else p.current_price) or 0) * p.size - (p.avg_cost or 0) * p.size
@@ -2823,7 +2801,6 @@ async def get_debug_state_snapshot(request: Request):
     except Exception:
         pnl_summary = {"error": "Failed to compute PnL summary"}
 
-    # ---- Strategy health ----
     strategy_health = {}
     if weather_trader_ref:
         wh = weather_trader_ref.get_health()
@@ -2865,7 +2842,6 @@ async def get_debug_state_snapshot(request: Request):
         except Exception:
             strategy_health["arb_scanner"] = {"error": "unavailable"}
 
-    # ---- Weather config (full, excluding secrets) ----
     weather_config = {}
     if weather_trader_ref:
         weather_config = weather_trader_ref.config.model_dump()
@@ -2880,6 +2856,31 @@ async def get_debug_state_snapshot(request: Request):
         "strategy_health": strategy_health,
         "weather_config": weather_config,
     }
+
+
+@api_router.get("/debug/state-snapshot")
+async def get_debug_state_snapshot(request: Request):
+    """Read-only state snapshot for offline analysis. Header-authenticated.
+
+    Auth: X-Debug-Snapshot-Key header (or ?key= query param fallback).
+    Set DEBUG_SNAPSHOT_KEY env var to enable.
+    """
+    expected_key = os.environ.get("DEBUG_SNAPSHOT_KEY", "")
+    if not expected_key:
+        raise HTTPException(403, "Snapshot disabled — set DEBUG_SNAPSHOT_KEY env var")
+
+    provided = request.headers.get("X-Debug-Snapshot-Key", "") or request.query_params.get("key", "")
+    if provided != expected_key:
+        raise HTTPException(403, "Invalid snapshot key")
+
+    return _build_state_snapshot()
+
+
+@api_router.get("/debug/ui-snapshot")
+async def get_ui_snapshot():
+    """UI-facing snapshot endpoint — no key required (internal use only).
+    Read-only, triggers no trading logic."""
+    return _build_state_snapshot()
 
 
 # ---- Test endpoint (paper order through full pipeline) ----

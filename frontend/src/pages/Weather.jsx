@@ -16,6 +16,7 @@ import { formatBps, formatPrice, formatPnl, formatNumber, formatTimestamp, forma
 import axios from 'axios';
 import { toast } from 'sonner';
 import { API_BASE } from '../utils/constants';
+import { Download, Copy, Check, Loader2 } from 'lucide-react';
 
 const STATUS_COLORS = {
   generated: 'text-blue-400',
@@ -1594,6 +1595,83 @@ function WeatherByTypeSection({ data }) {
 }
 
 
+function SnapshotExport() {
+  const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const fetchSnapshot = async () => {
+    const res = await axios.get(`${API_BASE}/debug/ui-snapshot`);
+    return res.data;
+  };
+
+  const handleDownload = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchSnapshot();
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const filename = `snapshot-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success(`Downloaded ${filename}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to generate snapshot');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = async () => {
+    setLoading(true);
+    try {
+      const data = await fetchSnapshot();
+      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      setCopied(true);
+      toast.success('Snapshot copied to clipboard');
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to copy snapshot');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div data-testid="snapshot-export" className="flex items-center gap-1.5 shrink-0">
+      <Button
+        data-testid="snapshot-download-btn"
+        variant="outline"
+        size="sm"
+        onClick={handleDownload}
+        disabled={loading}
+        className="h-8 px-3 text-xs border-zinc-700/60 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-300"
+      >
+        {loading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Download className="h-3.5 w-3.5 mr-1.5" />}
+        Export Snapshot
+      </Button>
+      <Button
+        data-testid="snapshot-copy-btn"
+        variant="ghost"
+        size="sm"
+        onClick={handleCopy}
+        disabled={loading}
+        className="h-8 w-8 p-0 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+        title="Copy snapshot to clipboard"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
+
 function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
   if (!data) return <div className="text-zinc-600 text-xs text-center py-8">Loading lifecycle data...</div>;
 
@@ -1613,7 +1691,12 @@ function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
   return (
     <div data-testid="lifecycle-dashboard" className="space-y-5">
       {/* Mode Control + Config Banner */}
-      <LifecycleModeControl currentMode={config?.lifecycle_mode || 'off'} config={config} onModeChange={onModeChange} />
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <LifecycleModeControl currentMode={config?.lifecycle_mode || 'off'} config={config} onModeChange={onModeChange} />
+        </div>
+        <SnapshotExport />
+      </div>
 
       {/* Section 1: Summary Cards */}
       <div data-testid="lifecycle-summary-cards" className="grid grid-cols-2 md:grid-cols-5 gap-3">
