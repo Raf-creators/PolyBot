@@ -1,0 +1,158 @@
+{
+  "summary": "Iteration 61: Global System Snapshot v2 structure VERIFIED. Major refactor from weather-biased v1 to balanced v2 structure. All 21 backend tests passed. UI Export Snapshot button working correctly.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/debug/ui-snapshot returns 200 - PASS",
+      "Snapshot has top-level keys: freshness, portfolio, strategies - PASS",
+      "Old v1 keys removed (positions, position_counts, lifecycle, etc.) - PASS",
+      "freshness has all required fields (snapshot_at, version=2.0, etc.) - PASS",
+      "portfolio.capital_allocation has strategy bucket data - PASS",
+      "portfolio.pnl_by_strategy has PnL data per strategy - PASS",
+      "portfolio.concentration_risk has HHI, top_3_pct, largest_position - PASS",
+      "strategies has all 4 sections: weather, weather_asymmetric, crypto, arb - PASS",
+      "strategies.weather has: positions, scan_health, lifecycle, entry_quality, config - PASS",
+      "strategies.weather_asymmetric has: positions, scan_health, config - PASS",
+      "strategies.crypto has: positions, scan_health, execution_stats, volatility, config - PASS",
+      "strategies.arb has: positions, scan_health, execution_stats, diagnostics, config - PASS",
+      "All positions have: invested, current_value, profit_multiple, unrealized_pnl - PASS",
+      "Crypto positions have strategy_meta (asset, time_window) - PASS",
+      "Arb positions have strategy_meta (market_type) - PASS",
+      "Weather positions have lifecycle enrichment when evaluated - PASS",
+      "GET /api/debug/state-snapshot returns 403 without key - PASS",
+      "GET /api/debug/state-snapshot returns 200 with X-Debug-Snapshot-Key header - PASS",
+      "GET /api/debug/state-snapshot returns 200 with ?key= query param - PASS",
+      "Position counts match between portfolio and strategy sections - PASS",
+      "Snapshot balanced across all strategies (not weather-biased) - PASS"
+    ],
+    "frontend_ui_tests": [
+      "App loads successfully with 86 open positions - PASS",
+      "Weather page displays 54 weather positions - PASS",
+      "Lifecycle (26) tab visible and navigable - PASS",
+      "EXIT CANDIDATES shows 26 - PASS",
+      "AVG CURRENT EDGE shows +85bp - PASS",
+      "Exit Reason Distribution shows: Time Inefficient(22), Profit Capture(2), Negative Edge(2) - PASS",
+      "Resolution Time Breakdown populated - PASS",
+      "Export Snapshot button visible and clickable - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "snapshot_v2_structure": {
+      "status": "PASS",
+      "description": "New v2 structure with freshness, portfolio, strategies top-level keys",
+      "evidence": "snapshot_version=2.0, old v1 keys removed"
+    },
+    "portfolio_capital_allocation": {
+      "status": "PASS", 
+      "description": "Each strategy bucket has capital_deployed, pct_of_total, position_count, unrealized_pnl",
+      "evidence": "weather=13.9%, crypto=83.9%, arb=2.2%"
+    },
+    "portfolio_pnl_by_strategy": {
+      "status": "PASS",
+      "description": "Each strategy has realized_pnl, trade_count, win_rate, profit_factor",
+      "evidence": "All strategy buckets have pnl_by_strategy entries"
+    },
+    "portfolio_concentration_risk": {
+      "status": "PASS",
+      "description": "HHI, top_3_pct, largest_position computed",
+      "evidence": "HHI=866.2, top_3_pct=36.4%"
+    },
+    "strategy_sections_balanced": {
+      "status": "PASS",
+      "description": "All 4 strategies have similar depth (positions, scan_health, config + strategy-specific)",
+      "evidence": "weather=5keys, crypto=5keys, arb=5keys, weather_asymmetric=3keys"
+    },
+    "position_required_fields": {
+      "status": "PASS",
+      "description": "All positions have invested, current_value, profit_multiple, unrealized_pnl",
+      "evidence": "86 positions verified"
+    },
+    "crypto_strategy_meta": {
+      "status": "PASS",
+      "description": "Crypto positions have strategy_meta with asset and time_window",
+      "evidence": "Sample: ETH, 6:00PM-6:15PM ET"
+    },
+    "arb_strategy_meta": {
+      "status": "PASS",
+      "description": "Arb positions have strategy_meta with market_type",
+      "evidence": "Sample: multi_outcome"
+    },
+    "weather_lifecycle_enrichment": {
+      "status": "PASS",
+      "description": "Weather positions have lifecycle data when evaluated",
+      "evidence": "26 exit candidates with exit_reason, profit_multiple, book_rank"
+    },
+    "state_snapshot_auth": {
+      "status": "PASS",
+      "description": "state-snapshot requires X-Debug-Snapshot-Key header",
+      "evidence": "403 without key, 200 with key"
+    },
+    "export_snapshot_ui": {
+      "status": "PASS",
+      "description": "Export Snapshot button works on Lifecycle tab",
+      "evidence": "Button found and clicked successfully"
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration61_global_snapshot.py",
+    "/app/test_reports/pytest/pytest_results_iteration61.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "v2 structure correctly removes weather bias - all strategies now have equal depth",
+    "_build_state_snapshot() properly partitions positions by strategy bucket",
+    "portfolio.capital_allocation correctly calculates pct_of_total",
+    "concentration_risk HHI calculation is accurate",
+    "strategy_meta added for crypto (asset, time_window) and arb (market_type)",
+    "Auth correctly enforced on state-snapshot endpoint"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration61_global_snapshot.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (21/21 passed)",
+    "frontend": "100% (8/8 UI verifications)"
+  },
+
+  "test_credentials": "Debug snapshot key: test-snapshot-key-preview (header: X-Debug-Snapshot-Key)",
+
+  "seed_data_creation": "None - tested with live MongoDB data (86 total positions: 54 weather, 11 crypto, 21 arb)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 61 verified the Global System Snapshot v2 refactor. Key changes from v1: (1) Top-level keys changed from flat structure (positions, position_counts, lifecycle, entry_quality, pnl_summary, strategy_health, weather_config) to hierarchical (freshness, portfolio, strategies). (2) portfolio section has capital_allocation (per-strategy), pnl_by_strategy, concentration_risk. (3) Each strategy (weather, weather_asymmetric, crypto, arb) now has its own section with positions, scan_health, and strategy-specific data (lifecycle/entry_quality for weather, execution_stats/volatility for crypto, execution_stats/diagnostics for arb). (4) All positions now include: invested, current_value, profit_multiple, unrealized_pnl. (5) Crypto positions have strategy_meta {asset, time_window}. (6) Arb positions have strategy_meta {market_type}. Current position counts: 54 weather, 11 crypto, 21 arb = 86 total.",
+
+  "snapshot_v2_structure": {
+    "freshness": ["snapshot_at", "snapshot_version", "server_start_time", "uptime_seconds", "engine_status", "trading_mode", "markets_tracked", "git_commit"],
+    "portfolio": {
+      "top_level": ["total_capital_deployed", "total_unrealized_pnl", "total_realized_pnl", "total_pnl", "total_trades", "open_positions"],
+      "capital_allocation": "{strategy → {capital_deployed, pct_of_total, unrealized_pnl, position_count}}",
+      "pnl_by_strategy": "{strategy → {realized_pnl, trade_count, win_rate, profit_factor, avg_edge_bps, sharpe_ratio}}",
+      "concentration_risk": ["largest_position", "top_3_pct", "hhi"]
+    },
+    "strategies": {
+      "weather": ["positions", "scan_health", "lifecycle", "entry_quality", "config"],
+      "weather_asymmetric": ["positions", "scan_health", "config"],
+      "crypto": ["positions", "scan_health", "execution_stats", "volatility", "config"],
+      "arb": ["positions", "scan_health", "execution_stats", "diagnostics", "config"]
+    }
+  }
+}
