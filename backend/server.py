@@ -3624,7 +3624,7 @@ async def upgrade_validation_summary():
     if weather_trader_ref:
         lm = weather_trader_ref._m.get("lifecycle", {})
         lifecycle_data = {
-            "mode": lm.get("mode", "unknown"),
+            "mode": weather_trader_ref.config.lifecycle_mode,
             "positions_evaluated": lm.get("positions_evaluated", 0),
             "exit_candidates": lm.get("exit_candidates", 0),
             "shadow_exits_total": lm.get("shadow_exits", 0),

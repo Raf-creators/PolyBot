@@ -1,83 +1,74 @@
-# Polymarket Edge OS — Product Requirements
+# Polymarket Edge OS — PRD
 
-## Problem Statement
-A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes paper trades across crypto, weather, and arbitrage strategies with real-time dashboards.
+## Original Problem Statement
+Build an autonomous trading engine that identifies and exploits pricing inefficiencies on Polymarket across weather, crypto, and arbitrage markets. The system operates in paper-trading mode with real market data.
 
-## Architecture
-- **Backend**: FastAPI (port 8001), Motor/MongoDB
-- **Frontend**: React (port 3000), Shadcn UI
-- **DB**: MongoDB (`test_database`)
-- **Strategies**: `crypto_sniper`, `weather_trader`, `weather_asymmetric`, `arb_scanner`
-- **3rd Party**: Polymarket Gamma/CLOB APIs, Open-Meteo, Telegram
+## Core Architecture
+- **Backend**: FastAPI + MongoDB + Motor (async)
+- **Frontend**: React + Shadcn/UI
+- **Strategies**: `weather_trader`, `weather_asymmetric`, `crypto_sniper`, `arb_scanner`
+- **Services**: market_resolver, auto_resolver, persistence, analytics, telegram_notifier
 
-## Completed Work
+## Key Config Model
+- `RiskConfig`: Global + per-strategy exposure caps, arb reserved capital
+- `WeatherTradingConfig`: Lifecycle management, exit rules, model parameters
+- `ArbScannerConfig`: Staleness, spread, edge thresholds
+- `SniperConfig`: Signal classification, execution parameters
 
-### Core Infrastructure
-- Engine with paper trading adapter, market discovery, price feeds, risk management, Telegram alerts
+## What's Been Implemented
 
-### Weather V2 + Asymmetric + Calibration
-- Overtrading filter, quality score, multi-market types, asymmetric hold-to-resolution
-- Sigma widening, Brier score, auto-tune framework (disabled by default)
+### Phase 1-4: Critical System Upgrade (March 2026)
+1. **Global Capital Configuration**: max_total_exposure=360, per-strategy caps=120 each
+2. **Reserved Capital for Arbitrage**: arb_reserved_capital=120, exclusive pool
+3. **Per-Strategy Risk Checks**: Refactored risk.py with hierarchical capital management
+4. **Crypto Opposite-Side Prevention**: Blocks opening both YES+NO on same market
+5. **Force Zombie Resolution**: Auto-resolves positions past end_date + 6h grace
+6. **Arb Pipeline Unblocked**: max_stale_age_seconds=300 (was 180)
+7. **Weather Asymmetric Fix**: min_model_prob=0.20 (was 0.40)
+8. **Market Collapse Exit Rule**: Triggers when position_value/entry_value < 0.05
+9. **Shadow Exit Mode**: Lifecycle in shadow_exit, tracking exit candidates
+10. **PnL Attribution Fix**: All trades attributed to originating strategy
+11. **Validation Endpoint**: /api/admin/upgrade-validation for system health
 
-### Position Lifecycle Management
-- **Modes**: OFF, TAG_ONLY (default), SHADOW_EXIT, AUTO_EXIT
-- **Exit rules**: Profit capture, Negative edge, Edge decay, Time inefficiency, Slot rotation
-- **Lifecycle Dashboard**: Summary cards, reason distribution, shadow timeline, sold-vs-held comparison
-- **Threshold Simulator**: 5 sliders, 3 presets, decision quality metrics
-- **Mode Control**: Segmented UI with confirmation modals
-
-### Entry Quality Tightening
-- Min quality score (0.35), time-aware edge filter, long-hold penalty, signal ranking, observability
-
-### Slot Rotation / Inventory Cleanup
-- Book-level ranking, SLOT_ROTATION exit reason, configurable thresholds
-
-### UI Snapshot Export
-- Export Snapshot + Copy to Clipboard buttons in Lifecycle Dashboard
-- Internal endpoint `/api/debug/ui-snapshot` (no key)
-- Keyed endpoint `/api/debug/state-snapshot` (X-Debug-Snapshot-Key)
-
-### Edge & Resolution Data Pipeline Fix (March 18)
-- Persistent `_position_meta` dict for entry edge/weather context
-- `endDateIso` from Gamma API → MarketSnapshot.end_date
-- Bootstrap mechanism from classified markets for legacy positions
-- target_date fallback for hours_to_resolution
-
-### Global System Snapshot v2.0 (March 18)
-- Restructured from weather-biased flat layout to balanced hierarchy:
-  ```
-  { freshness, portfolio, strategies: { weather, weather_asymmetric, crypto, arb } }
-  ```
-- **Portfolio section**: total_capital_deployed, capital_allocation (per-strategy % + counts), pnl_by_strategy (realized, win_rate, sharpe, profit_factor), concentration_risk (HHI, top_3_pct, largest_position)
-- **Equal-depth strategy sections**: Each strategy has positions, scan_health, config + strategy-specific data (lifecycle/entry_quality for weather, execution_stats/volatility for crypto, diagnostics for arb)
-- **Enriched positions**: All positions now include invested, current_value, profit_multiple. Crypto positions have strategy_meta (asset, time_window). Arb positions have strategy_meta (market_type)
-
-## Key Endpoints
-| Endpoint | Method | Description |
-|---|---|---|
-| /api/positions/by-strategy | GET | Positions with lifecycle + book rank |
-| /api/positions/weather/exit-candidates | GET | Exit candidates + config |
-| /api/positions/weather/lifecycle | GET | Full lifecycle evals |
-| /api/positions/weather/lifecycle/dashboard | GET | Dashboard data |
-| /api/positions/weather/lifecycle/simulate | POST | Simulate thresholds |
-| /api/strategies/weather/lifecycle/mode | POST | Switch lifecycle mode |
-| /api/strategies/weather/entry-quality | GET | Entry quality metrics |
-| /api/debug/ui-snapshot | GET | Global system snapshot v2 (no key) |
-| /api/debug/state-snapshot | GET | Global system snapshot v2 (keyed) |
+### Earlier Work
+- Position Lifecycle Management system (shadow_exit, tag_only, auto_exit modes)
+- UI Dashboard with Weather.jsx
+- Lifecycle simulator
+- Debug snapshot v2.0 (balanced, all-strategy)
+- Edge & Resolution data pipeline fix
+- Snapshot export (Export/Copy buttons)
 
 ## Prioritized Backlog
-### P0: VALIDATION PHASE — observe TAG_ONLY with working edge/resolution data
-### P1: Enable SHADOW_EXIT, evaluate all exit paths with real data
-### P2: Resolution Timeline visualization
-### P3: Copy Trading Skeleton
-### P4: Manual Order Entry
-### P5: UI toggle for auto-tune sigma multiplier
-### P6: Live Trading Mode Integration
 
-## Audit Findings (from live snapshot March 18)
-- 4/5 lifecycle exit rules now active (edge_decay inert for legacy positions)
-- 10 exit candidates correctly identified across 3 rules
-- March 17 zombie positions (6 weather + 6 arb) not resolving — blocks capital recycling
-- Quality floor (0.35) too lenient — 0 rejections
-- Consider adding "market_collapse" exit rule for positions at <5% entry value
-- Singapore profit_capture may be premature when remaining edge is high
+### P0 — None (all P0 items resolved)
+
+### P1 — Next Up
+- **Enable AUTO_EXIT**: After validating shadow exit results with live data, switch weather lifecycle to auto_exit for profit_capture, negative_edge, time_inefficiency
+- **"Apply These Thresholds" Workflow**: Push validated simulator thresholds to live config
+
+### P2
+- Resolution Timeline visualization
+- UI toggle for auto-tune sigma multiplier
+
+### P3
+- Copy Trading Skeleton
+- Manual Order Entry
+
+## Key API Endpoints
+- `GET /api/admin/upgrade-validation` — System upgrade validation summary
+- `GET /api/controls` — Risk controls with exposure data
+- `GET /api/positions/weather/lifecycle` — Lifecycle status & config
+- `GET /api/positions/weather/exit-candidates` — Exit candidate analysis
+- `GET /api/debug/ui-snapshot` — Full system snapshot
+- `PATCH /api/config` — Update configuration
+
+## 3rd Party Integrations
+- Polymarket Gamma API
+- Polymarket CLOB WebSocket
+- Open-Meteo API
+- Telegram notifications
+
+## Test Reports
+- iteration_62.json: Critical System Upgrade — 28/28 passed (100%)
+- iteration_61.json: Snapshot v2.0 — all passed
+- iteration_60.json: Data Pipeline Fix — all passed
