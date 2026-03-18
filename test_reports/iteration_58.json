@@ -1,0 +1,195 @@
+{
+  "summary": "Iteration 58: Debug State Snapshot endpoint (/api/debug/state-snapshot) tests completed. All 25 backend tests pass. The endpoint provides read-only state export for offline analysis with proper header-based authentication (X-Debug-Snapshot-Key or ?key= fallback). Verified: 403 on missing/wrong keys, freshness metadata (snapshot_at, version 1.0, server_start_time, uptime_seconds, git_commit), positions grouped by strategy (54 weather, 11 crypto, 21 arb), token IDs truncated to 12 chars for security, lifecycle config with slot rotation, entry quality stats, PnL summary, strategy health, weather config (66 fields), and no secrets exposed.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/debug/state-snapshot returns 403 when no key provided - PASS",
+      "GET /api/debug/state-snapshot returns 403 when wrong key provided - PASS",
+      "GET /api/debug/state-snapshot works with X-Debug-Snapshot-Key header - PASS",
+      "GET /api/debug/state-snapshot works with ?key= query param fallback - PASS",
+      "Freshness contains snapshot_at ISO timestamp - PASS",
+      "Freshness contains snapshot_version = 1.0 - PASS",
+      "Freshness contains server_start_time - PASS",
+      "Freshness contains uptime_seconds - PASS",
+      "Freshness contains last_weather_scan_time - PASS",
+      "Freshness contains weather_total_scans - PASS",
+      "Freshness contains git_commit - PASS",
+      "Positions grouped by strategy (weather/crypto/arb) - PASS",
+      "All position token_ids truncated to max 12 chars - PASS",
+      "Weather positions have lifecycle data - PASS",
+      "Lifecycle contains mode and config with slot rotation - PASS",
+      "Lifecycle contains exit_candidates_detail array - PASS",
+      "Entry quality contains rejections and passed_signals stats - PASS",
+      "PnL summary contains total_realized, total_unrealized, total, open_positions - PASS",
+      "Strategy health contains weather, crypto_sniper, arb_scanner entries - PASS",
+      "Weather config contains full WeatherConfig fields (66 fields) - PASS",
+      "Snapshot does NOT contain API keys, wallet addresses, or DB strings - PASS",
+      "Previous feature: /api/positions/weather/lifecycle - PASS",
+      "Previous feature: /api/positions/weather/lifecycle/simulate - PASS",
+      "Previous feature: /api/strategies/weather/entry-quality - PASS",
+      "Previous feature: /api/positions/by-strategy - PASS"
+    ],
+    "frontend_ui_tests": []
+  },
+
+  "features_verified": {
+    "authentication": {
+      "status": "PASS",
+      "details": [
+        "Returns 403 when no key provided",
+        "Returns 403 when wrong key provided",
+        "Works with X-Debug-Snapshot-Key header (preferred)",
+        "Works with ?key= query param fallback",
+        "DEBUG_SNAPSHOT_KEY=test-snapshot-key-preview in env"
+      ]
+    },
+    "freshness_metadata": {
+      "status": "PASS",
+      "details": [
+        "snapshot_at: ISO timestamp",
+        "snapshot_version: 1.0",
+        "server_start_time: ISO timestamp",
+        "uptime_seconds: 13.1 (at test time)",
+        "last_weather_scan_time: present (null on fresh restart)",
+        "weather_total_scans: 0 (fresh restart)",
+        "git_commit: 2ca5ce4c0982"
+      ]
+    },
+    "positions_by_strategy": {
+      "status": "PASS",
+      "details": [
+        "weather: 54 positions",
+        "crypto: 11 positions",
+        "arb: 21 positions",
+        "Total: 86 open positions"
+      ]
+    },
+    "token_id_truncation": {
+      "status": "PASS",
+      "details": [
+        "All position token_ids <= 12 characters",
+        "Example: 240218609349 (12 chars from longer original)",
+        "Security: prevents exposure of full token identifiers"
+      ]
+    },
+    "lifecycle_data": {
+      "status": "PASS",
+      "details": [
+        "mode: tag_only",
+        "config includes slot rotation settings",
+        "exit_candidates_detail: array present",
+        "positions have lifecycle enrichment"
+      ]
+    },
+    "entry_quality": {
+      "status": "PASS",
+      "details": [
+        "rejections: low_quality, low_edge_long, long_hold_penalty",
+        "passed_signals: total, avg_quality, avg_edge_bps, avg_lead_hours"
+      ]
+    },
+    "pnl_summary": {
+      "status": "PASS",
+      "details": [
+        "total_realized: 142.70",
+        "total_unrealized: -17.97",
+        "total: 124.74",
+        "open_positions: 86",
+        "total_trades: 2902"
+      ]
+    },
+    "strategy_health": {
+      "status": "PASS",
+      "details": [
+        "weather: total_scans, signals_generated, etc.",
+        "weather_asymmetric: present",
+        "crypto_sniper: total_scans, signals_generated",
+        "arb_scanner: total_scans, signals_generated"
+      ]
+    },
+    "weather_config": {
+      "status": "PASS",
+      "details": [
+        "66 config fields returned",
+        "Includes: min_edge_bps, min_confidence, lifecycle_mode, slot_rotation_enabled, etc."
+      ]
+    },
+    "security": {
+      "status": "PASS",
+      "details": [
+        "No API keys in response",
+        "No wallet addresses (0x...) in response",
+        "No MongoDB connection strings in response",
+        "No TELEGRAM_BOT_TOKEN in response"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "snapshot_response": {
+      "freshness": {
+        "snapshot_version": "1.0",
+        "uptime_seconds": 13.1,
+        "git_commit": "2ca5ce4c0982",
+        "markets_tracked": 1123
+      },
+      "position_counts": {
+        "weather": 54,
+        "crypto": 11,
+        "arb": 21
+      },
+      "sample_position": {
+        "token_id": "240218609349",
+        "market_question": "Will the highest temperature in New York City be 50°F or higher on March 17?",
+        "avg_cost": 0.6613,
+        "current_price": 0.685,
+        "size": 12.95,
+        "unrealized_pnl": 0.3069
+      },
+      "pnl_summary": {
+        "total_realized": 142.7047,
+        "total_unrealized": -17.965,
+        "total": 124.7397,
+        "open_positions": 86
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration58_state_snapshot.py",
+    "/app/test_reports/pytest/pytest_results_iteration58.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration58_state_snapshot.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (25/25 passed)",
+    "frontend": "N/A (backend-only testing requested)"
+  },
+
+  "test_credentials": "DEBUG_SNAPSHOT_KEY=test-snapshot-key-preview",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 weather + 11 crypto + 21 arb positions)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 58 verified Debug State Snapshot endpoint (/api/debug/state-snapshot). Key findings: (1) Auth works via X-Debug-Snapshot-Key header (preferred) or ?key= query param (fallback). Returns 403 without valid key. (2) Freshness metadata includes snapshot_at, snapshot_version (1.0), server_start_time, uptime_seconds, git_commit, last_weather_scan_time, weather_total_scans. (3) Positions grouped by strategy: weather (54), crypto (11), arb (21). (4) All token_ids truncated to max 12 chars for security. (5) Lifecycle includes mode, config with slot rotation, exit_candidates_detail array. (6) Entry quality has rejections/passed_signals. (7) PnL summary has total_realized/unrealized/total/open_positions. (8) Strategy health has weather, crypto_sniper, arb_scanner entries. (9) Weather config returns all 66 fields. (10) Security verified: no API keys, wallet addresses, or DB strings in response. (11) Previous features (lifecycle, simulator, entry quality, positions) still work."
+}

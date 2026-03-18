@@ -2635,6 +2635,253 @@ async def get_pnl_history():
     }
 
 
+# ---- Debug State Snapshot ----
+
+SNAPSHOT_VERSION = "1.0"
+
+@api_router.get("/debug/state-snapshot")
+async def get_debug_state_snapshot(request: Request):
+    """Read-only state snapshot for offline analysis. Header-authenticated.
+
+    Auth: X-Debug-Snapshot-Key header (or ?key= query param fallback).
+    Set DEBUG_SNAPSHOT_KEY env var to enable.
+    Returns: Full system state — positions, lifecycle, entry quality, PnL, config.
+    Excludes: API keys, wallet credentials, DB connection strings, full token IDs.
+    """
+    expected_key = os.environ.get("DEBUG_SNAPSHOT_KEY", "")
+    if not expected_key:
+        raise HTTPException(403, "Snapshot disabled — set DEBUG_SNAPSHOT_KEY env var")
+
+    # Header-based auth (preferred), query param fallback
+    provided = request.headers.get("X-Debug-Snapshot-Key", "") or request.query_params.get("key", "")
+    if provided != expected_key:
+        raise HTTPException(403, "Invalid snapshot key")
+
+    if not state or not engine:
+        raise HTTPException(503, "Engine not initialized")
+
+    now = datetime.now(timezone.utc)
+    from engine.risk import classify_strategy
+    from services.analytics_service import compute_portfolio_summary, compute_strategy_metrics
+
+    # ---- Freshness metadata ----
+    weather_m = weather_trader_ref._m if weather_trader_ref else {}
+    engine_snapshot = state.snapshot()
+
+    freshness = {
+        "snapshot_at": now.isoformat(),
+        "snapshot_version": SNAPSHOT_VERSION,
+        "server_start_time": _server_start_time,
+        "uptime_seconds": round(engine_snapshot.get("uptime_seconds", 0), 1),
+        "engine_status": engine_snapshot.get("status", "unknown"),
+        "trading_mode": engine_snapshot.get("mode", "unknown"),
+        "last_weather_scan_time": weather_m.get("last_scan_time"),
+        "last_weather_scan_duration_ms": weather_m.get("last_scan_duration_ms", 0),
+        "weather_total_scans": weather_m.get("total_scans", 0),
+        "markets_tracked": engine_snapshot.get("stats", {}).get("markets_tracked", 0),
+        "git_commit": _git_commit,
+    }
+
+    # ---- Positions (grouped by strategy, truncated token IDs) ----
+    positions_by_strategy = {}
+    for pos in state.positions.values():
+        sid = getattr(pos, 'strategy_id', '') or ''
+        bucket = classify_strategy(pos)
+        if sid == 'weather_asymmetric':
+            bucket = 'weather_asymmetric'
+
+        market = state.get_market(pos.token_id)
+        current_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+        avg_cost = pos.avg_cost or 0
+        unrealized = round((current_price - avg_cost) * pos.size, 4) if avg_cost > 0 else 0
+
+        pos_data = {
+            "token_id": pos.token_id[:12],
+            "market_question": (getattr(pos, 'market_question', '') or '')[:80],
+            "strategy_id": sid,
+            "avg_cost": round(avg_cost, 4),
+            "current_price": round(current_price, 4),
+            "size": pos.size,
+            "unrealized_pnl": unrealized,
+        }
+
+        # Lifecycle enrichment
+        if weather_trader_ref:
+            lc = weather_trader_ref._lifecycle_evals.get(pos.token_id)
+            if lc:
+                pos_data["lifecycle"] = {
+                    "is_exit_candidate": lc.is_exit_candidate,
+                    "exit_reason": lc.exit_reason,
+                    "exit_reason_detail": lc.exit_reason_detail,
+                    "profit_multiple": lc.profit_multiple,
+                    "edge_at_entry": lc.edge_at_entry,
+                    "current_edge_bps": lc.current_edge_bps,
+                    "edge_decay_pct": lc.edge_decay_pct,
+                    "current_model_prob": lc.current_model_prob,
+                    "time_held_hours": lc.time_held_hours,
+                    "hours_to_resolution": lc.hours_to_resolution,
+                    "book_rank": lc.book_rank,
+                    "book_score": lc.book_score,
+                    "book_total": lc.book_total,
+                }
+
+        positions_by_strategy.setdefault(bucket, []).append(pos_data)
+
+    # ---- Lifecycle summary ----
+    lifecycle_data = {}
+    if weather_trader_ref:
+        lc_m = weather_trader_ref._m.get("lifecycle", {})
+        lifecycle_data = {
+            "mode": weather_trader_ref.config.lifecycle_mode,
+            "config": {
+                "profit_capture_threshold": weather_trader_ref.config.profit_capture_threshold,
+                "max_negative_edge_bps": weather_trader_ref.config.max_negative_edge_bps,
+                "edge_decay_exit_pct": weather_trader_ref.config.edge_decay_exit_pct,
+                "time_inefficiency_hours": weather_trader_ref.config.time_inefficiency_hours,
+                "time_inefficiency_min_edge_bps": weather_trader_ref.config.time_inefficiency_min_edge_bps,
+                "slot_rotation_enabled": weather_trader_ref.config.slot_rotation_enabled,
+                "slot_rotation_bottom_pct": weather_trader_ref.config.slot_rotation_bottom_pct,
+                "slot_rotation_min_hours_to_res": weather_trader_ref.config.slot_rotation_min_hours_to_res,
+                "slot_rotation_max_edge_bps": weather_trader_ref.config.slot_rotation_max_edge_bps,
+                "slot_rotation_max_profit_mult": weather_trader_ref.config.slot_rotation_max_profit_mult,
+            },
+            "positions_evaluated": lc_m.get("positions_evaluated", 0),
+            "exit_candidates": lc_m.get("exit_candidates", 0),
+            "slot_rotations": lc_m.get("slot_rotations", 0),
+            "shadow_exits_total": lc_m.get("shadow_exits", 0),
+            "auto_exits_total": lc_m.get("auto_exits", 0),
+            "last_eval_time": lc_m.get("last_eval_time"),
+            "exit_candidates_detail": [
+                {
+                    "token_id": ev.token_id[:12],
+                    "exit_reason": ev.exit_reason,
+                    "exit_reason_detail": ev.exit_reason_detail,
+                    "profit_multiple": ev.profit_multiple,
+                    "current_edge_bps": ev.current_edge_bps,
+                    "book_rank": ev.book_rank,
+                    "book_total": ev.book_total,
+                }
+                for ev in weather_trader_ref._lifecycle_evals.values()
+                if ev.is_exit_candidate
+            ],
+            "shadow_exits_recent": weather_trader_ref.get_lifecycle_shadow_exits(limit=20),
+        }
+
+    # ---- Entry quality ----
+    entry_quality = {}
+    if weather_trader_ref:
+        eq_m = weather_trader_ref._m.get("entry_quality", {})
+        entry_quality = {
+            "config": {
+                "min_quality_score": weather_trader_ref.config.min_quality_score,
+                "min_edge_bps": weather_trader_ref.config.min_edge_bps,
+                "min_edge_bps_long": weather_trader_ref.config.min_edge_bps_long,
+                "min_confidence": weather_trader_ref.config.min_confidence,
+                "long_resolution_hours": weather_trader_ref.config.long_resolution_hours,
+                "time_preference_weight": weather_trader_ref.config.time_preference_weight,
+                "long_hold_penalty": weather_trader_ref.config.long_hold_penalty,
+            },
+            "rejections": {
+                "low_quality": eq_m.get("rejected_low_quality", 0),
+                "low_edge_long": eq_m.get("rejected_low_edge_long", 0),
+                "long_hold_penalty": eq_m.get("rejected_long_hold_penalty", 0),
+            },
+            "passed_signals": {
+                "total": eq_m.get("total_standard_passed", 0),
+                "avg_quality": eq_m.get("avg_quality_passed", 0),
+                "avg_edge_bps": eq_m.get("avg_edge_passed", 0),
+                "avg_lead_hours": eq_m.get("avg_lead_hours_passed", 0),
+            },
+        }
+
+    # ---- PnL summary ----
+    pnl_summary = {}
+    try:
+        portfolio = compute_portfolio_summary(state.trades, state.positions)  # noqa: F841
+        strategy_metrics = compute_strategy_metrics(state.trades, state.positions)
+        total_unrealized = sum(
+            ((state.get_market(p.token_id).mid_price if state.get_market(p.token_id) and state.get_market(p.token_id).mid_price else p.current_price) or 0) * p.size - (p.avg_cost or 0) * p.size
+            for p in state.positions.values()
+            if (p.avg_cost or 0) > 0
+        )
+        total_realized = sum(t.pnl for t in state.trades if t.pnl)
+        pnl_summary = {
+            "total_realized": round(total_realized, 4),
+            "total_unrealized": round(total_unrealized, 4),
+            "total": round(total_realized + total_unrealized, 4),
+            "total_trades": len(state.trades),
+            "open_positions": len(state.positions),
+            "by_strategy": {
+                k: {
+                    "realized_pnl": round(v.get("realized_pnl", 0), 4),
+                    "trade_count": v.get("total_trades", 0),
+                    "win_rate": v.get("win_rate_pct", 0),
+                }
+                for k, v in strategy_metrics.get("strategies", {}).items()
+            },
+        }
+    except Exception:
+        pnl_summary = {"error": "Failed to compute PnL summary"}
+
+    # ---- Strategy health ----
+    strategy_health = {}
+    if weather_trader_ref:
+        wh = weather_trader_ref.get_health()
+        strategy_health["weather"] = {
+            "total_scans": wh.get("total_scans", 0),
+            "signals_generated": wh.get("signals_generated", 0),
+            "signals_executed": wh.get("signals_executed", 0),
+            "signals_rejected_total": wh.get("signals_rejected_total", 0),
+            "markets_classified": wh.get("markets_classified", 0),
+            "last_scan_time": wh.get("last_scan_time"),
+            "last_scan_duration_ms": wh.get("last_scan_duration_ms", 0),
+            "max_positions": wh.get("max_positions"),
+            "scan_interval_seconds": wh.get("scan_interval_seconds"),
+            "data_freshness": {
+                "last_scan": wh.get("last_scan_time"),
+                "scan_duration_ms": wh.get("last_scan_duration_ms", 0),
+                "lifecycle_last_eval": weather_trader_ref._m.get("lifecycle", {}).get("last_eval_time"),
+            },
+        }
+        strategy_health["weather_asymmetric"] = wh.get("asymmetric", {})
+    if crypto_sniper_ref:
+        try:
+            ch = crypto_sniper_ref.get_health()
+            strategy_health["crypto_sniper"] = {
+                "total_scans": ch.get("total_scans", 0),
+                "signals_generated": ch.get("signals_generated", 0),
+                "last_scan_time": ch.get("last_scan_time"),
+            }
+        except Exception:
+            strategy_health["crypto_sniper"] = {"error": "unavailable"}
+    if arb_scanner_ref:
+        try:
+            ah = arb_scanner_ref.get_health()
+            strategy_health["arb_scanner"] = {
+                "total_scans": ah.get("total_scans", 0),
+                "signals_generated": ah.get("signals_generated", 0),
+                "last_scan_time": ah.get("last_scan_time"),
+            }
+        except Exception:
+            strategy_health["arb_scanner"] = {"error": "unavailable"}
+
+    # ---- Weather config (full, excluding secrets) ----
+    weather_config = {}
+    if weather_trader_ref:
+        weather_config = weather_trader_ref.config.model_dump()
+
+    return {
+        "freshness": freshness,
+        "positions": positions_by_strategy,
+        "position_counts": {k: len(v) for k, v in positions_by_strategy.items()},
+        "lifecycle": lifecycle_data,
+        "entry_quality": entry_quality,
+        "pnl_summary": pnl_summary,
+        "strategy_health": strategy_health,
+        "weather_config": weather_config,
+    }
+
+
 # ---- Test endpoint (paper order through full pipeline) ----
 
 @api_router.post("/test/paper-order")
