@@ -1,0 +1,155 @@
+{
+  "summary": "Iteration 55: Lifecycle Mode Control UI tests completed. All 14 backend API tests pass (100%). Frontend UI verified: 4 mode buttons (OFF, TAG ONLY, SHADOW, AUTO EXIT) with correct data-testids, segmented control with descriptions, confirmation modals for SHADOW_EXIT and AUTO_EXIT (with red title and warning), Cancel closes modal without changing mode, OFF/TAG ONLY direct switch without modal, toast notification on mode change, Lifecycle tab badge shows exit candidate count, current mode badge visible with ring highlight.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "POST /api/strategies/weather/lifecycle/mode accepts valid modes (off, tag_only, shadow_exit, auto_exit) - PASS",
+      "POST /api/strategies/weather/lifecycle/mode returns status, previous_mode, current_mode - PASS",
+      "POST /api/strategies/weather/lifecycle/mode rejects invalid mode values with 400 error - PASS",
+      "POST /api/strategies/weather/lifecycle/mode returns unchanged when setting same mode - PASS",
+      "POST /api/strategies/weather/lifecycle/mode persists to lifecycle endpoint - PASS",
+      "Mode change tag_only → shadow_exit works correctly - PASS",
+      "Mode change shadow_exit → tag_only works correctly - PASS",
+      "Mode change to auto_exit and back works correctly - PASS",
+      "Response includes 'persisted' field on update - PASS",
+      "Response includes 'timestamp' field on update - PASS",
+      "positions/by-strategy reflects lifecycle mode - PASS",
+      "Lifecycle dashboard shows correct mode in config - PASS",
+      "Exit candidates endpoint works after mode changes - PASS",
+      "Mode restored to tag_only after testing - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Lifecycle mode control component exists (data-testid='lifecycle-mode-control') - PASS",
+      "Mode button OFF exists (data-testid='mode-btn-off') with correct label - PASS",
+      "Mode button TAG ONLY exists (data-testid='mode-btn-tag_only') with correct label - PASS",
+      "Mode button SHADOW exists (data-testid='mode-btn-shadow_exit') with correct label - PASS",
+      "Mode button AUTO EXIT exists (data-testid='mode-btn-auto_exit') with correct label - PASS",
+      "Current active mode (TAG ONLY) has visual ring highlight - PASS",
+      "OFF button does NOT show confirmation modal (direct switch) - PASS",
+      "TAG ONLY button does NOT show confirmation modal (direct switch) - PASS",
+      "SHADOW button opens confirmation modal with 'Enable SHADOW EXIT?' title - PASS",
+      "AUTO EXIT button opens confirmation modal with red 'Enable AUTO EXIT?' title - PASS",
+      "AUTO EXIT modal contains warning about real sell orders - PASS",
+      "Cancel button (data-testid='mode-confirm-cancel') exists and closes modal - PASS",
+      "Accept button (data-testid='mode-confirm-accept') exists and switches mode - PASS",
+      "Toast notification appears on successful mode change - PASS",
+      "Lifecycle tab badge shows exit candidate count: 'Lifecycle (3)' - PASS",
+      "Previous lifecycle features (dashboard, simulator, exit candidates) still functional - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "lifecycle_mode_control_ui": {
+      "status": "PASS",
+      "details": [
+        "4 segmented mode buttons: OFF, TAG ONLY, SHADOW, AUTO EXIT",
+        "Each button shows description: 'No evaluation', 'Tagging only', 'Simulated exits', 'Real exits'",
+        "Current mode (TAG ONLY) highlighted with ring",
+        "Config values displayed: Profit 2x, Edge -100bp, Decay 60%, Time 18h"
+      ]
+    },
+    "confirmation_modals": {
+      "status": "PASS",
+      "details": [
+        "SHADOW EXIT modal: amber title 'Enable SHADOW EXIT?', explains simulation behavior",
+        "AUTO EXIT modal: red title 'Enable AUTO EXIT?', warning about real sell orders",
+        "Both have Cancel and Accept buttons with correct data-testids",
+        "OFF and TAG ONLY skip confirmation modal (direct switch)"
+      ]
+    },
+    "mode_persistence": {
+      "status": "PASS",
+      "details": [
+        "Mode changes persisted to MongoDB config",
+        "Mode reflected in GET /api/positions/weather/lifecycle",
+        "Mode reflected in GET /api/positions/by-strategy lifecycle field",
+        "Mode restored to tag_only after testing as requested"
+      ]
+    },
+    "toast_notifications": {
+      "status": "PASS",
+      "details": [
+        "Toast shows: 'Lifecycle mode: tag_only → shadow_exit'",
+        "Toast shows: 'Lifecycle mode: shadow_exit → tag_only'",
+        "Uses sonner toast library"
+      ]
+    },
+    "lifecycle_tab_badge": {
+      "status": "PASS",
+      "details": [
+        "Tab shows 'Lifecycle (3)' with exit candidate count",
+        "Exit candidates summary shows 3 candidates with 4.31x avg profit multiple"
+      ]
+    },
+    "previous_features_regression": {
+      "status": "PASS",
+      "details": [
+        "Dashboard endpoint returns all expected fields",
+        "Lifecycle status shows 54 evaluations with config",
+        "Exit candidates shows 3 candidates",
+        "Simulator endpoint works with custom thresholds"
+      ]
+    }
+  },
+
+  "api_data_captured": {
+    "mode_change_response": {
+      "status": "updated",
+      "previous_mode": "tag_only",
+      "current_mode": "shadow_exit",
+      "persisted": true,
+      "timestamp": "ISO format timestamp"
+    },
+    "same_mode_response": {
+      "status": "unchanged",
+      "mode": "tag_only"
+    },
+    "invalid_mode_response": {
+      "status_code": 400,
+      "detail": "Invalid mode 'invalid'. Must be one of: auto_exit, off, shadow_exit, tag_only"
+    },
+    "current_state": {
+      "mode": "tag_only",
+      "exit_candidates": 3,
+      "total_evaluated": 54
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration55_lifecycle_mode_control.py",
+    "/app/test_reports/pytest/pytest_results_iteration55.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration55_lifecycle_mode_control.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (All 16 UI features verified)"
+  },
+
+  "test_credentials": "None required - paper mode, no auth",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 open weather positions, 3 exit candidates with 4.31x avg profit multiple)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 55 verified Lifecycle Mode Control UI. Key findings: (1) POST /api/strategies/weather/lifecycle/mode endpoint accepts 4 modes (off, tag_only, shadow_exit, auto_exit) and persists to MongoDB. (2) Frontend shows 4 segmented buttons with data-testid 'mode-btn-{mode}'. Current mode has ring highlight. (3) SHADOW_EXIT and AUTO_EXIT require confirmation modal; OFF and TAG_ONLY switch directly. (4) AUTO_EXIT modal has red title and warning about 'real sell orders'. (5) Toast notification shows 'Lifecycle mode: {old} → {new}' on successful change. (6) Lifecycle tab badge shows exit candidate count. (7) Mode is currently TAG_ONLY with 54 positions evaluated and 3 exit candidates. (8) All previous lifecycle features (dashboard, simulator, exit-candidates) still functional."
+}

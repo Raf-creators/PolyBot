@@ -1404,6 +1404,54 @@ async def simulate_lifecycle_thresholds(request: Request):
     return weather_trader_ref.simulate_thresholds(body)
 
 
+VALID_LIFECYCLE_MODES = {"off", "tag_only", "shadow_exit", "auto_exit"}
+
+@api_router.post("/strategies/weather/lifecycle/mode")
+async def set_lifecycle_mode(request: Request):
+    """Switch the lifecycle mode. Persists to MongoDB config.
+
+    Body: { "mode": "tag_only" | "shadow_exit" | "auto_exit" | "off" }
+    """
+    if not weather_trader_ref:
+        raise HTTPException(503, "Weather trader not initialized")
+
+    body = await request.json()
+    new_mode = body.get("mode", "").lower().strip()
+    if new_mode not in VALID_LIFECYCLE_MODES:
+        raise HTTPException(400, f"Invalid mode '{new_mode}'. Must be one of: {', '.join(sorted(VALID_LIFECYCLE_MODES))}")
+
+    old_mode = weather_trader_ref.config.lifecycle_mode
+    if new_mode == old_mode:
+        return {"status": "unchanged", "mode": old_mode}
+
+    # Apply in-memory
+    weather_trader_ref.config.lifecycle_mode = new_mode
+
+    # Persist to MongoDB
+    db_ref = engine.persistence._db if engine and engine.persistence else None
+    if db_ref is not None:
+        await db_ref.configs.update_one(
+            {"_id": "engine_config"},
+            {"$set": {"strategies.weather_trader.lifecycle_mode": new_mode}},
+        )
+
+    # Log the change
+    import logging
+    lc_logger = logging.getLogger("lifecycle.mode")
+    lc_logger.info(
+        f"[LIFECYCLE-MODE] Changed: {old_mode} → {new_mode} "
+        f"at {datetime.now(timezone.utc).isoformat()}"
+    )
+
+    return {
+        "status": "updated",
+        "previous_mode": old_mode,
+        "current_mode": new_mode,
+        "persisted": db_ref is not None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @api_router.get("/positions/weather/breakdown")
 async def get_weather_position_breakdown():
     """Age/resolution breakdown for open weather positions."""

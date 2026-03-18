@@ -7,9 +7,14 @@ import { DataTable } from '../components/DataTable';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Slider } from '../components/ui/slider';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatBps, formatPrice, formatPnl, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { API_BASE } from '../utils/constants';
 
 const STATUS_COLORS = {
@@ -647,7 +652,17 @@ export default function Weather() {
 
         {/* Lifecycle Dashboard Tab */}
         <TabsContent value="lifecycle" className="mt-4 space-y-5">
-          <LifecycleDashboard data={lifecycleDash} formatPnl={formatPnl} />
+          <LifecycleDashboard data={lifecycleDash} formatPnl={formatPnl} onModeChange={async (newMode) => {
+            try {
+              const res = await axios.post(`${API_BASE}/strategies/weather/lifecycle/mode`, { mode: newMode });
+              if (res.data.status === 'updated') {
+                toast.success(`Lifecycle mode: ${res.data.previous_mode} → ${res.data.current_mode}`);
+                fetchCalibration();
+              }
+            } catch (e) {
+              toast.error(e?.response?.data?.detail || 'Failed to change lifecycle mode');
+            }
+          }} />
         </TabsContent>
 
         {/* Health Tab */}
@@ -1567,7 +1582,7 @@ function WeatherByTypeSection({ data }) {
 }
 
 
-function LifecycleDashboard({ data, formatPnl }) {
+function LifecycleDashboard({ data, formatPnl, onModeChange }) {
   if (!data) return <div className="text-zinc-600 text-xs text-center py-8">Loading lifecycle data...</div>;
 
   const { summary, reason_distribution, time_buckets, shadow_exits, sold_vs_held, sold_vs_held_by_reason, profit_distribution, config } = data;
@@ -1585,22 +1600,8 @@ function LifecycleDashboard({ data, formatPnl }) {
 
   return (
     <div data-testid="lifecycle-dashboard" className="space-y-5">
-      {/* Mode + Config Banner */}
-      <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-zinc-900/80 border border-zinc-800/50">
-        <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Mode</span>
-        <Badge data-testid="lifecycle-dash-mode" variant="outline" className={`text-[9px] font-mono ${
-          config?.lifecycle_mode === 'tag_only' ? 'border-blue-500/40 text-blue-400' :
-          config?.lifecycle_mode === 'shadow_exit' ? 'border-amber-500/40 text-amber-400' :
-          config?.lifecycle_mode === 'auto_exit' ? 'border-red-500/40 text-red-400' : 'border-zinc-700 text-zinc-500'
-        }`}>
-          {(config?.lifecycle_mode || 'off').toUpperCase().replace('_', ' ')}
-        </Badge>
-        <span className="text-zinc-800">|</span>
-        <span className="text-[10px] text-zinc-600">Profit: <span className="text-zinc-400 font-mono">{config?.profit_capture_threshold}x</span></span>
-        <span className="text-[10px] text-zinc-600">Neg Edge: <span className="text-zinc-400 font-mono">{config?.max_negative_edge_bps}bp</span></span>
-        <span className="text-[10px] text-zinc-600">Decay: <span className="text-zinc-400 font-mono">{(config?.edge_decay_exit_pct * 100)}%</span></span>
-        <span className="text-[10px] text-zinc-600">Time: <span className="text-zinc-400 font-mono">{config?.time_inefficiency_hours}h/{config?.time_inefficiency_min_edge_bps}bp</span></span>
-      </div>
+      {/* Mode Control + Config Banner */}
+      <LifecycleModeControl currentMode={config?.lifecycle_mode || 'off'} config={config} onModeChange={onModeChange} />
 
       {/* Section 1: Summary Cards */}
       <div data-testid="lifecycle-summary-cards" className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -2220,5 +2221,118 @@ function ComparisonCard({ label, live, sim, delta, sub, good, bad }) {
       )}
       {sub && <div className="text-[9px] text-zinc-600 mt-0.5">{sub}</div>}
     </div>
+  );
+}
+
+
+const LIFECYCLE_MODES = [
+  { key: 'off', label: 'OFF', desc: 'No evaluation', color: 'text-zinc-500 border-zinc-700 bg-zinc-900', activeColor: 'text-zinc-300 border-zinc-500 bg-zinc-800', needsConfirm: false },
+  { key: 'tag_only', label: 'TAG ONLY', desc: 'Tagging only', color: 'text-blue-500/60 border-blue-500/20 bg-zinc-900', activeColor: 'text-blue-300 border-blue-500/50 bg-blue-950/40', needsConfirm: false },
+  { key: 'shadow_exit', label: 'SHADOW', desc: 'Simulated exits', color: 'text-amber-500/60 border-amber-500/20 bg-zinc-900', activeColor: 'text-amber-300 border-amber-500/50 bg-amber-950/40', needsConfirm: true },
+  { key: 'auto_exit', label: 'AUTO EXIT', desc: 'Real exits', color: 'text-red-500/60 border-red-500/20 bg-zinc-900', activeColor: 'text-red-300 border-red-500/50 bg-red-950/40', needsConfirm: true },
+];
+
+function LifecycleModeControl({ currentMode, config, onModeChange }) {
+  const [pendingMode, setPendingMode] = useState(null);
+  const [switching, setSwitching] = useState(false);
+
+  const handleModeClick = (mode) => {
+    if (mode.key === currentMode) return;
+    if (mode.needsConfirm) {
+      setPendingMode(mode);
+    } else {
+      doSwitch(mode.key);
+    }
+  };
+
+  const doSwitch = async (modeKey) => {
+    setSwitching(true);
+    try {
+      await onModeChange(modeKey);
+    } finally {
+      setSwitching(false);
+      setPendingMode(null);
+    }
+  };
+
+  const isAutoExit = pendingMode?.key === 'auto_exit';
+
+  return (
+    <>
+      <div data-testid="lifecycle-mode-control" className="rounded-lg border border-zinc-800/50 bg-zinc-900/80 px-4 py-3">
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Lifecycle Mode</span>
+            {switching && <span className="text-[9px] text-cyan-400 font-mono animate-pulse">switching...</span>}
+          </div>
+          <div className="flex items-center gap-3 text-[10px] text-zinc-600">
+            <span>Profit: <span className="text-zinc-400 font-mono">{config?.profit_capture_threshold}x</span></span>
+            <span>Edge: <span className="text-zinc-400 font-mono">{config?.max_negative_edge_bps}bp</span></span>
+            <span>Decay: <span className="text-zinc-400 font-mono">{(config?.edge_decay_exit_pct * 100)}%</span></span>
+            <span>Time: <span className="text-zinc-400 font-mono">{config?.time_inefficiency_hours}h</span></span>
+          </div>
+        </div>
+        <div className="flex items-stretch gap-1.5">
+          {LIFECYCLE_MODES.map((mode) => {
+            const isActive = currentMode === mode.key;
+            return (
+              <button key={mode.key}
+                data-testid={`mode-btn-${mode.key}`}
+                onClick={() => handleModeClick(mode)}
+                disabled={switching || isActive}
+                className={`flex-1 rounded-md border px-3 py-2 transition-all text-center ${
+                  isActive ? mode.activeColor : `${mode.color} hover:brightness-125 cursor-pointer`
+                } ${isActive ? 'ring-1 ring-offset-1 ring-offset-zinc-950' : ''} ${
+                  isActive ? (mode.key === 'auto_exit' ? 'ring-red-500/40' : mode.key === 'shadow_exit' ? 'ring-amber-500/40' : mode.key === 'tag_only' ? 'ring-blue-500/40' : 'ring-zinc-500/40') : ''
+                }`}>
+                <div className={`text-xs font-mono font-bold ${isActive ? '' : 'opacity-70'}`}>{mode.label}</div>
+                <div className={`text-[9px] mt-0.5 ${isActive ? 'opacity-80' : 'opacity-50'}`}>{mode.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Confirmation modal */}
+      <AlertDialog open={!!pendingMode} onOpenChange={(open) => { if (!open) setPendingMode(null); }}>
+        <AlertDialogContent className="bg-zinc-950 border-zinc-800 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className={`font-mono ${isAutoExit ? 'text-red-400' : 'text-amber-400'}`}>
+              {isAutoExit ? 'Enable AUTO EXIT?' : 'Enable SHADOW EXIT?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400 text-sm space-y-2">
+              {isAutoExit ? (
+                <>
+                  <p className="text-red-400/80 font-medium">
+                    AUTO EXIT will execute real sell orders for standard weather positions that meet exit criteria.
+                  </p>
+                  <p>Asymmetric positions will never be affected. Only standard weather positions matching exit thresholds will be sold automatically.</p>
+                  <p className="text-zinc-500 text-xs">Recommended: Run in SHADOW_EXIT mode first to validate exit decisions.</p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    SHADOW EXIT will log simulated exit decisions without executing any trades.
+                    Use the Shadow Exit Timeline to evaluate decision quality.
+                  </p>
+                  <p className="text-zinc-500 text-xs">No positions will be bought or sold. This is safe for observation.</p>
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800" data-testid="mode-confirm-cancel">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="mode-confirm-accept"
+              onClick={() => doSwitch(pendingMode?.key)}
+              className={`font-mono ${isAutoExit ? 'bg-red-600 hover:bg-red-500 text-white' : 'bg-amber-600 hover:bg-amber-500 text-white'}`}>
+              {isAutoExit ? 'Enable AUTO EXIT' : 'Enable SHADOW EXIT'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
