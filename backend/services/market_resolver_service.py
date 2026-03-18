@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import aiohttp
 
@@ -31,6 +31,8 @@ class MarketResolverService:
         self._tracker = tracker
         self._on_trade_closed = on_trade_closed  # async callback
         self._session = None
+        # Grace period before force-resolving zombie positions (hours past end_date)
+        self._zombie_grace_hours = 6.0
 
         # Stats
         self._stats = {
@@ -40,6 +42,7 @@ class MarketResolverService:
             "positions_checked": 0,
             "markets_queried": 0,
             "positions_resolved": 0,
+            "zombies_force_resolved": 0,
             "total_realized_pnl": 0.0,
             "wins": 0,
             "losses": 0,
@@ -214,6 +217,95 @@ class MarketResolverService:
             # Small delay between API calls
             await asyncio.sleep(0.1)
 
+        # ---- Second pass: Force-resolve zombie positions ----
+        # Positions that are past end_date + grace period and were NOT resolved by Gamma API
+        zombie_count = 0
+        zombie_pnl = 0.0
+        remaining_positions = list(self._state.positions.items())
+        grace_td = timedelta(hours=self._zombie_grace_hours)
+
+        for token_id, pos in remaining_positions:
+            if not self._running:
+                break
+
+            market = self._state.get_market(token_id)
+            if not market or not market.end_date:
+                continue
+
+            try:
+                end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                if end_dt.tzinfo is None:
+                    end_dt = end_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            # Only force-resolve if past end_date + grace period
+            if now < end_dt + grace_td:
+                continue
+
+            # This position is a zombie — force-resolve at current market price
+            current_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+            pnl = round((current_price - pos.avg_cost) * pos.size, 4)
+            zombie_pnl += pnl
+            total_pnl += pnl
+
+            original_strategy = getattr(pos, "strategy_id", "") or "unknown"
+            outcome = (market.outcome or "").strip()
+
+            trade = TradeRecord(
+                id=new_id(),
+                order_id="zombie_force_resolve",
+                token_id=token_id,
+                market_question=pos.market_question,
+                outcome=outcome,
+                side=OrderSide.SELL,
+                price=current_price,
+                size=pos.size,
+                fees=0.0,
+                pnl=pnl,
+                strategy_id=original_strategy,
+                signal_reason=f"zombie_force_resolve:expired_{self._zombie_grace_hours:.0f}h",
+            )
+            self._state.add_trade(trade)
+            if self._tracker:
+                self._tracker.record_close(original_strategy, pnl)
+
+            self._state.positions.pop(token_id, None)
+            zombie_count += 1
+
+            if pnl >= 0:
+                self._stats["wins"] += 1
+            else:
+                self._stats["losses"] += 1
+
+            logger.warning(
+                f"[RESOLVER] Zombie force-resolved: {pos.market_question[:40]}... "
+                f"outcome={outcome} pnl=${pnl:+.4f} "
+                f"(expired {(now - end_dt).total_seconds()/3600:.1f}h ago, strategy={original_strategy})"
+            )
+
+            self._stats["recent_resolutions"].append({
+                "token_id": token_id[:16] + "...",
+                "question": pos.market_question[:60],
+                "outcome": outcome,
+                "won": pnl >= 0,
+                "pnl": pnl,
+                "size": pos.size,
+                "avg_cost": pos.avg_cost,
+                "resolved_at": utc_now(),
+                "type": "zombie_force_resolve",
+            })
+            if len(self._stats["recent_resolutions"]) > 50:
+                self._stats["recent_resolutions"] = self._stats["recent_resolutions"][-50:]
+
+        resolved_count += zombie_count
+        self._stats["zombies_force_resolved"] += zombie_count
+        if zombie_count > 0:
+            logger.info(
+                f"[RESOLVER] Force-resolved {zombie_count} zombie positions, "
+                f"zombie_pnl=${zombie_pnl:+.4f}"
+            )
+
         elapsed_ms = (time.monotonic() - t0) * 1000
         self._stats["total_runs"] += 1
         self._stats["last_run"] = utc_now()
@@ -254,6 +346,7 @@ class MarketResolverService:
 
         return {
             "resolved": resolved_count,
+            "zombies_force_resolved": zombie_count,
             "pnl": round(total_pnl, 4),
             "queried": queried,
             "checked": len(positions),

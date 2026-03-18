@@ -57,6 +57,7 @@ class ExitReason(str, Enum):
     TIME_INEFFICIENCY = "time_inefficiency"      # Long time held with low remaining edge
     MODEL_SHIFT = "model_shift"                  # Model probability shifted against position
     SLOT_ROTATION = "slot_rotation"              # Weak long-dated position blocking better signals
+    MARKET_COLLAPSE = "market_collapse"          # Position value collapsed to <5% of entry value
 
 
 # ---- Configuration ----
@@ -141,7 +142,7 @@ class WeatherConfig(BaseModel):
     # Asymmetric mode settings
     asymmetric_enabled: bool = True
     asymmetric_max_market_price: float = 0.25               # only trade contracts priced ≤ 25¢
-    asymmetric_min_model_prob: float = 0.40                 # model must assign ≥ 40% probability
+    asymmetric_min_model_prob: float = 0.20                 # model must assign ≥ 20% probability
     asymmetric_min_edge: float = 0.15                       # edge = model_prob - market_price ≥ 0.15
     asymmetric_default_size: float = 5.0                    # slightly larger allocation
     asymmetric_max_size: float = 12.0
@@ -150,12 +151,13 @@ class WeatherConfig(BaseModel):
     asymmetric_min_confidence: float = 0.45                 # lower confidence floor (asymmetric is high-edge)
 
     # Position Lifecycle Management
-    lifecycle_mode: str = "tag_only"                          # off | tag_only | shadow_exit | auto_exit
+    lifecycle_mode: str = "shadow_exit"                       # off | tag_only | shadow_exit | auto_exit
     profit_capture_threshold: float = 2.0                     # exit when price / avg_cost >= this multiple
     max_negative_edge_bps: float = -100.0                     # exit when current edge drops below this (bps)
     edge_decay_exit_pct: float = 0.60                         # exit when edge decayed by 60%+ from entry
     time_inefficiency_hours: float = 18.0                     # flag positions held longer than this...
     time_inefficiency_min_edge_bps: float = 300.0             # ...if remaining edge is below this
+    market_collapse_threshold: float = 0.05                   # exit when current_price / avg_cost < this (5%)
 
 
 # ---- Station Info ----

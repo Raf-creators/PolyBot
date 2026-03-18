@@ -86,11 +86,21 @@ class RiskEngine:
 
         return counts, dict(by_strategy_id)
 
+    def _compute_exposure_by_strategy(self):
+        """Compute capital exposure per strategy bucket."""
+        exposure = {"weather": 0.0, "crypto": 0.0, "arb": 0.0, "unknown": 0.0}
+        for pos in self._state.positions.values():
+            bucket = classify_strategy(pos)
+            exposure[bucket] += pos.size * (pos.current_price or pos.avg_cost or 0)
+        return exposure
+
     def get_slot_diagnostics(self) -> dict:
         """Detailed per-strategy slot diagnostics."""
         counts, by_strategy_id = self._count_positions()
+        exposure = self._compute_exposure_by_strategy()
         cfg = self._state.risk_config if self._state else None
         total = sum(counts.values())
+        total_exposure = sum(exposure.values())
 
         return {
             "weather_count": counts["weather"],
@@ -99,6 +109,19 @@ class RiskEngine:
             "unknown_count": counts.get("unknown", 0),
             "total": total,
             "by_strategy": by_strategy_id,
+            "exposure": {
+                "weather": round(exposure["weather"], 2),
+                "crypto": round(exposure["crypto"], 2),
+                "arb": round(exposure["arb"], 2),
+                "total": round(total_exposure, 2),
+            },
+            "exposure_caps": {
+                "weather": cfg.weather_max_exposure if cfg else 0,
+                "crypto": cfg.crypto_max_exposure if cfg else 0,
+                "arb": cfg.arb_max_exposure if cfg else 0,
+                "total": cfg.max_market_exposure if cfg else 0,
+                "arb_reserved": cfg.arb_reserved_capital if cfg else 0,
+            },
             "limits": {
                 "max_weather": cfg.max_weather_positions if cfg else 0,
                 "max_crypto": cfg.max_crypto_positions if cfg else 0,
@@ -122,7 +145,14 @@ class RiskEngine:
     # ---- Main Check ----
 
     def check_order(self, order: OrderRecord) -> tuple:
-        """Returns (approved: bool, reason: str)."""
+        """Returns (approved: bool, reason: str).
+
+        Implements hierarchical capital management:
+        1. Per-strategy slot limits (position count)
+        2. Per-strategy exposure caps (capital $)
+        3. Arb reserved capital (exclusive pool)
+        4. Global total exposure cap
+        """
         if not self._state:
             return False, "risk engine not initialized"
 
@@ -140,13 +170,15 @@ class RiskEngine:
         if projected > cfg.max_position_size:
             return False, f"projected position {projected} > max {cfg.max_position_size}"
 
+        # Classify this order's strategy bucket
+        bucket = classify_strategy(order)
+
         # Per-strategy slot check (only for NEW positions)
         if order.token_id not in self._state.positions:
             counts, _ = self._count_positions()
-            bucket = classify_strategy(order)
             total = sum(counts.values())
 
-            # Per-strategy bucket limit
+            # Per-strategy bucket limit (position count)
             limit_map = {
                 "weather": cfg.max_weather_positions,
                 "crypto": cfg.max_crypto_positions,
@@ -160,7 +192,7 @@ class RiskEngine:
                     self._slot_blocks[bucket] += 1
                     return False, f"{bucket} positions ({current}) >= max {bucket_limit}"
 
-            # Global fallback (but never blocks arb if arb has headroom)
+            # Global position count (but never blocks arb if arb has headroom)
             if total >= cfg.max_concurrent_positions:
                 if bucket == "arb" and counts.get("arb", 0) < cfg.max_arb_positions:
                     pass  # arb gets priority — skip global check
@@ -193,13 +225,37 @@ class RiskEngine:
         if self._state.daily_pnl <= -cfg.max_daily_loss:
             return False, f"daily loss limit hit ({self._state.daily_pnl})"
 
-        # Total exposure check
-        total_exposure = sum(
-            p.size * p.current_price for p in self._state.positions.values()
-        )
+        # ---- Per-strategy exposure check (capital $) ----
+        exposure = self._compute_exposure_by_strategy()
         order_value = order.size * order.price
-        if total_exposure + order_value > cfg.max_market_exposure:
-            return False, f"total exposure {total_exposure + order_value:.2f} > max {cfg.max_market_exposure}"
+
+        exposure_cap_map = {
+            "weather": cfg.weather_max_exposure,
+            "crypto": cfg.crypto_max_exposure,
+            "arb": cfg.arb_max_exposure,
+        }
+        strategy_cap = exposure_cap_map.get(bucket)
+        if strategy_cap is not None:
+            current_strategy_exposure = exposure.get(bucket, 0.0)
+            if current_strategy_exposure + order_value > strategy_cap:
+                self._slot_blocks[f"{bucket}_exposure"] = self._slot_blocks.get(f"{bucket}_exposure", 0) + 1
+                return False, f"{bucket} exposure {current_strategy_exposure + order_value:.2f} > cap {strategy_cap}"
+
+        # ---- Total exposure check ----
+        # Arb uses reserved capital: arb exposure is checked against arb_reserved_capital above,
+        # and does NOT compete with other strategies for the global pool.
+        # Non-arb strategies share (max_market_exposure - arb_reserved_capital).
+        total_exposure = sum(exposure.values())
+
+        if bucket == "arb":
+            # Arb only needs to pass its own cap (already checked above) — skip global check
+            pass
+        else:
+            # Non-arb: check against global cap minus arb reserved
+            non_arb_exposure = total_exposure - exposure.get("arb", 0.0)
+            non_arb_cap = cfg.max_market_exposure - cfg.arb_reserved_capital
+            if non_arb_exposure + order_value > non_arb_cap:
+                return False, f"non-arb exposure {non_arb_exposure + order_value:.2f} > cap {non_arb_cap:.2f} (global {cfg.max_market_exposure} - arb_reserved {cfg.arb_reserved_capital})"
 
         return True, "approved"
 

@@ -20,7 +20,7 @@ class ArbConfig(BaseModel):
     min_net_edge_bps: float = 30.0
     min_liquidity: float = 500.0
     min_confidence: float = 0.25
-    max_stale_age_seconds: float = 180.0
+    max_stale_age_seconds: float = 300.0
     max_arb_size: float = 10.0
     max_concurrent_arbs: int = 5
     default_size: float = 5.0

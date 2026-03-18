@@ -310,6 +310,48 @@ async def lifespan(app: FastAPI):
         if rolling_calibration_service and weather_trader_ref:
             rolling_calibration_service.set_config(weather_trader_ref.config)
         logger.info("Persisted configuration applied")
+
+        # ---- CRITICAL SYSTEM UPGRADE migration ----
+        # Force new capital allocation & strategy config values into the running state.
+        # These override persisted values that may carry stale defaults.
+        upgrade_applied = False
+
+        # 1. Risk config: new exposure model
+        if state.risk_config.max_market_exposure < 360.0:
+            state.risk_config.max_market_exposure = 360.0
+            upgrade_applied = True
+        if state.risk_config.crypto_max_exposure != 120.0:
+            state.risk_config.crypto_max_exposure = 120.0
+            upgrade_applied = True
+        if state.risk_config.weather_max_exposure != 120.0:
+            state.risk_config.weather_max_exposure = 120.0
+            upgrade_applied = True
+        if state.risk_config.arb_max_exposure != 120.0:
+            state.risk_config.arb_max_exposure = 120.0
+            upgrade_applied = True
+        if state.risk_config.arb_reserved_capital != 120.0:
+            state.risk_config.arb_reserved_capital = 120.0
+            upgrade_applied = True
+
+        # 2. Arb: increase staleness tolerance
+        if arb_scanner_ref and arb_scanner_ref.config.max_stale_age_seconds < 300.0:
+            arb_scanner_ref.config.max_stale_age_seconds = 300.0
+            upgrade_applied = True
+
+        # 3. Weather: lifecycle to shadow_exit, lower asymmetric filter
+        if weather_trader_ref:
+            if weather_trader_ref.config.lifecycle_mode != "shadow_exit":
+                weather_trader_ref.config.lifecycle_mode = "shadow_exit"
+                upgrade_applied = True
+            if weather_trader_ref.config.asymmetric_min_model_prob > 0.20:
+                weather_trader_ref.config.asymmetric_min_model_prob = 0.20
+                upgrade_applied = True
+
+        if upgrade_applied:
+            # Persist the upgraded config
+            snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
+            await config_service.save(snapshot)
+            logger.info("[UPGRADE] Critical System Upgrade migration applied and persisted")
     else:
         # Save defaults on first boot
         snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
@@ -542,6 +584,8 @@ async def get_controls():
     if not state:
         raise HTTPException(500, "not initialized")
     cfg = state.risk_config
+    exposure_by_strategy = engine.risk_engine._compute_exposure_by_strategy() if engine else {}
+    total_exposure = sum(exposure_by_strategy.values())
     return {
         "mode": "paper",
         "kill_switch_active": cfg.kill_switch_active,
@@ -551,14 +595,18 @@ async def get_controls():
         "max_position_size": cfg.max_position_size,
         "max_concurrent_positions": cfg.max_concurrent_positions,
         "daily_pnl": round(state.daily_pnl, 2),
-        "total_exposure": round(sum(
-            p.size * p.current_price for p in state.positions.values()
-        ), 2),
+        "total_exposure": round(total_exposure, 2),
+        "exposure_by_strategy": {k: round(v, 2) for k, v in exposure_by_strategy.items()},
+        "exposure_caps": {
+            "crypto": cfg.crypto_max_exposure,
+            "weather": cfg.weather_max_exposure,
+            "arb": cfg.arb_max_exposure,
+            "arb_reserved": cfg.arb_reserved_capital,
+            "total": cfg.max_market_exposure,
+        },
         "limits_status": {
             "daily_loss_remaining": round(cfg.max_daily_loss + state.daily_pnl, 2),
-            "exposure_remaining": round(cfg.max_market_exposure - sum(
-                p.size * p.current_price for p in state.positions.values()
-            ), 2),
+            "exposure_remaining": round(cfg.max_market_exposure - total_exposure, 2),
         },
     }
 
@@ -697,6 +745,9 @@ async def update_config_granular(body: dict):
         try:
             from models import RiskConfig
             merged = {**state.risk_config.model_dump(), **body["risk"]}
+            # Filter unknown fields
+            known_fields = set(RiskConfig.model_fields.keys())
+            merged = {k: v for k, v in merged.items() if k in known_fields}
             state.risk_config = RiskConfig(**merged)
             changes["risk"] = "updated"
         except Exception as e:
@@ -1345,6 +1396,7 @@ async def get_weather_exit_candidates():
             "edge_decay_exit_pct": weather_trader_ref.config.edge_decay_exit_pct,
             "time_inefficiency_hours": weather_trader_ref.config.time_inefficiency_hours,
             "time_inefficiency_min_edge_bps": weather_trader_ref.config.time_inefficiency_min_edge_bps,
+            "market_collapse_threshold": weather_trader_ref.config.market_collapse_threshold,
         },
         "candidates": candidates,
         "total_evaluated": len(evals),
@@ -1371,6 +1423,7 @@ async def get_weather_lifecycle_status():
             "edge_decay_exit_pct": weather_trader_ref.config.edge_decay_exit_pct,
             "time_inefficiency_hours": weather_trader_ref.config.time_inefficiency_hours,
             "time_inefficiency_min_edge_bps": weather_trader_ref.config.time_inefficiency_min_edge_bps,
+            "market_collapse_threshold": weather_trader_ref.config.market_collapse_threshold,
         },
     }
 
@@ -3540,6 +3593,109 @@ async def demo_wallet():
 async def demo_execution_orders(limit: int = 50):
     orders = _demo_service.get("orders", [])
     return orders[:limit]
+
+
+# ---- System Upgrade Validation ----
+
+@api_router.get("/admin/upgrade-validation")
+async def upgrade_validation_summary():
+    """Comprehensive validation of the CRITICAL SYSTEM UPGRADE.
+
+    Returns capital allocation, strategy health, zombie resolution stats,
+    shadow exit counts, and any remaining blocked signals.
+    """
+    if not state or not engine:
+        raise HTTPException(500, "Engine not initialized")
+
+    cfg = state.risk_config
+    risk_diag = engine.risk_engine.get_slot_diagnostics()
+
+    # PnL by strategy from trades
+    pnl_by_strategy = {}
+    trade_counts = {}
+    for t in state.trades:
+        sid = t.strategy_id or "unknown"
+        pnl_by_strategy[sid] = round(pnl_by_strategy.get(sid, 0) + t.pnl, 4)
+        trade_counts[sid] = trade_counts.get(sid, 0) + 1
+
+    # Weather lifecycle data
+    lifecycle_data = {}
+    shadow_exit_counts = {}
+    if weather_trader_ref:
+        lm = weather_trader_ref._m.get("lifecycle", {})
+        lifecycle_data = {
+            "mode": lm.get("mode", "unknown"),
+            "positions_evaluated": lm.get("positions_evaluated", 0),
+            "exit_candidates": lm.get("exit_candidates", 0),
+            "shadow_exits_total": lm.get("shadow_exits", 0),
+            "auto_exits_total": lm.get("auto_exits", 0),
+        }
+        # Count shadow exits by reason
+        for se in weather_trader_ref._lifecycle_shadow_exits:
+            reason = se.get("reason", "unknown")
+            shadow_exit_counts[reason] = shadow_exit_counts.get(reason, 0) + 1
+
+    # Arb diagnostics
+    arb_data = {}
+    if arb_scanner_ref:
+        ah = arb_scanner_ref.get_health()
+        arb_data = {
+            "total_scans": ah.get("total_scans", 0),
+            "executed_count": ah.get("executions_submitted", 0),
+            "completed_count": ah.get("executions_completed", 0),
+            "active_count": len(arb_scanner_ref.get_active_executions()),
+            "rejection_reasons": ah.get("rejection_reasons", {}),
+            "max_stale_age_seconds": arb_scanner_ref.config.max_stale_age_seconds,
+        }
+
+    # Crypto diagnostics
+    crypto_data = {}
+    if crypto_sniper_ref:
+        sh = crypto_sniper_ref.get_health()
+        crypto_data = {
+            "total_signals": sh.get("signals_evaluated", 0),
+            "executed_count": sh.get("signals_executed", 0),
+            "rejection_reasons": sh.get("rejection_reasons", {}),
+        }
+
+    # Resolver stats
+    resolver_stats = {}
+    if market_resolver_service:
+        resolver_stats = market_resolver_service.health
+
+    return {
+        "capital_allocation": {
+            "max_total_exposure": cfg.max_market_exposure,
+            "crypto_max_exposure": cfg.crypto_max_exposure,
+            "weather_max_exposure": cfg.weather_max_exposure,
+            "arb_max_exposure": cfg.arb_max_exposure,
+            "arb_reserved_capital": cfg.arb_reserved_capital,
+        },
+        "current_exposure": risk_diag.get("exposure", {}),
+        "exposure_caps": risk_diag.get("exposure_caps", {}),
+        "position_counts": {
+            "weather": risk_diag["weather_count"],
+            "crypto": risk_diag["crypto_count"],
+            "arb": risk_diag["arb_count"],
+            "total": risk_diag["total"],
+        },
+        "pnl_by_strategy": pnl_by_strategy,
+        "trade_counts_by_strategy": trade_counts,
+        "weather_lifecycle": lifecycle_data,
+        "shadow_exit_counts_by_reason": shadow_exit_counts,
+        "arb_health": arb_data,
+        "crypto_health": crypto_data,
+        "resolver_stats": {
+            "total_resolved": resolver_stats.get("positions_resolved", 0),
+            "zombies_force_resolved": resolver_stats.get("zombies_force_resolved", 0),
+            "total_pnl": resolver_stats.get("total_realized_pnl", 0),
+            "recent_resolutions": resolver_stats.get("recent_resolutions", [])[-10:],
+        },
+        "blocked_signals": risk_diag.get("blocked_by_position_limit", {}),
+        "weather_asymmetric_config": {
+            "min_model_prob": weather_trader_ref.config.asymmetric_min_model_prob if weather_trader_ref else None,
+        },
+    }
 
 
 # ---- Wire up ----

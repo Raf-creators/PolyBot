@@ -1179,7 +1179,6 @@ class WeatherTrader(BaseStrategy):
     def _build_thesis(self, mu, sigma, bucket, prob, market_price, edge_bps) -> str:
         """Build human-readable thesis for why a contract is mispriced."""
         label = bucket.label
-        direction = "above" if (bucket.lower_bound and not bucket.upper_bound) else "below" if (bucket.upper_bound and not bucket.lower_bound) else "in"
 
         # Distance from forecast to bucket
         if bucket.lower_bound is not None and bucket.upper_bound is not None:
@@ -1559,8 +1558,17 @@ class WeatherTrader(BaseStrategy):
             exit_reason = None
             exit_detail = ""
 
+            # Rule 0: Market collapse — position value < 5% of entry, essentially dead
+            if profit_multiple < self.config.market_collapse_threshold:
+                is_exit = True
+                exit_reason = ExitReason.MARKET_COLLAPSE.value
+                exit_detail = (
+                    f"Position collapsed: value/entry = {profit_multiple:.4f} "
+                    f"< {self.config.market_collapse_threshold:.2f} threshold"
+                )
+
             # Rule 1: Profit capture
-            if profit_multiple >= self.config.profit_capture_threshold:
+            elif profit_multiple >= self.config.profit_capture_threshold:
                 is_exit = True
                 exit_reason = ExitReason.PROFIT_CAPTURE.value
                 exit_detail = f"Price multiple {profit_multiple:.2f}x >= {self.config.profit_capture_threshold:.1f}x threshold"

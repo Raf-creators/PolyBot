@@ -122,11 +122,16 @@ class ConfigService:
                         f"[CONFIG] Migrated max_concurrent_positions → {new_default}"
                     )
                 # Ensure new per-strategy fields exist
-                for field in ("max_weather_positions", "max_nonweather_positions",
+                for field in ("max_weather_positions",
                               "min_market_freshness_seconds", "max_spread_bps",
-                              "max_size_to_liquidity_ratio"):
+                              "max_size_to_liquidity_ratio",
+                              "crypto_max_exposure", "weather_max_exposure",
+                              "arb_max_exposure", "arb_reserved_capital"):
                     if field not in risk_dict:
                         risk_dict[field] = getattr(RiskConfig(), field)
+                # Remove unknown fields that may exist in persisted config
+                known_fields = set(RiskConfig.model_fields.keys())
+                risk_dict = {k: v for k, v in risk_dict.items() if k in known_fields}
                 state.risk_config = RiskConfig(**risk_dict)
             except Exception as e:
                 logger.warning(f"Failed to apply risk config: {e}")

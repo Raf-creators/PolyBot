@@ -1,0 +1,163 @@
+{
+  "summary": "Iteration 62: CRITICAL SYSTEM UPGRADE validation COMPLETE. All 28 backend tests passed. Verified: (1) Capital allocation with max_total_exposure=360, per-strategy caps=120 each, arb_reserved_capital=120. (2) Arb max_stale_age_seconds=300. (3) Weather asymmetric min_model_prob=0.20. (4) Weather lifecycle_mode=shadow_exit with market_collapse_threshold=0.05. (5) upgrade-validation endpoint returns comprehensive system health data. (6) PnL attribution uses original strategy, not 'resolver'.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/admin/upgrade-validation",
+        "issue": "weather_lifecycle.mode returns metrics-level mode (tag_only) instead of config-level mode (shadow_exit). This is because the metrics dict tracks what was last processed, not what is configured. The authoritative config at /api/positions/weather/lifecycle correctly shows mode=shadow_exit.",
+        "priority": "LOW"
+      }
+    ]
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "controls_endpoint": [
+      "GET /api/controls returns 200 - PASS",
+      "max_market_exposure = 360 - PASS",
+      "exposure_by_strategy has weather, crypto, arb - PASS",
+      "exposure_caps has crypto=120, weather=120, arb=120, arb_reserved=120, total=360 - PASS"
+    ],
+    "upgrade_validation_endpoint": [
+      "GET /api/admin/upgrade-validation returns 200 - PASS",
+      "capital_allocation: max_total_exposure=360, crypto/weather/arb_max_exposure=120, arb_reserved_capital=120 - PASS",
+      "current_exposure present - PASS",
+      "weather_lifecycle has mode, positions_evaluated, exit_candidates, shadow_exits_total - PASS",
+      "shadow_exit_counts_by_reason present - PASS",
+      "arb_health.max_stale_age_seconds = 300 - PASS",
+      "resolver_stats has zombies_force_resolved, total_resolved, recent_resolutions - PASS",
+      "weather_asymmetric_config.min_model_prob = 0.20 - PASS"
+    ],
+    "config_endpoint": [
+      "GET /api/config returns 200 - PASS",
+      "risk has crypto_max_exposure=120, weather_max_exposure=120, arb_max_exposure=120, arb_reserved_capital=120, max_market_exposure=360 - PASS"
+    ],
+    "weather_lifecycle_endpoint": [
+      "GET /api/positions/weather/lifecycle returns 200 - PASS",
+      "config.market_collapse_threshold = 0.05 - PASS",
+      "mode = shadow_exit - PASS"
+    ],
+    "strategy_configs_endpoint": [
+      "GET /api/config/strategies returns 200 - PASS",
+      "arb_scanner.max_stale_age_seconds = 300 - PASS",
+      "weather_trader.asymmetric_min_model_prob = 0.20 - PASS",
+      "weather_trader.lifecycle_mode = shadow_exit - PASS"
+    ],
+    "pnl_attribution": [
+      "No 'resolver' strategy in pnl_by_strategy - PASS",
+      "No 'resolver' strategy in trade_counts_by_strategy - PASS",
+      "resolver_stats has zombies_force_resolved count - PASS"
+    ],
+    "health_endpoint": [
+      "GET /api/health returns 200 - PASS",
+      "engine = running - PASS"
+    ],
+    "exit_candidates_endpoint": [
+      "GET /api/positions/weather/exit-candidates returns 200 - PASS",
+      "config.market_collapse_threshold = 0.05 - PASS",
+      "mode = shadow_exit - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "capital_risk_overhaul": {
+      "status": "PASS",
+      "description": "max_total_exposure=360, per-strategy caps=120 each, arb_reserved_capital=120",
+      "evidence": {
+        "max_market_exposure": 360.0,
+        "crypto_max_exposure": 120.0,
+        "weather_max_exposure": 120.0,
+        "arb_max_exposure": 120.0,
+        "arb_reserved_capital": 120.0
+      }
+    },
+    "arb_stale_age": {
+      "status": "PASS",
+      "description": "arb max_stale_age_seconds increased to 300 (from 180)",
+      "evidence": "arb_scanner.max_stale_age_seconds = 300.0"
+    },
+    "weather_asymmetric": {
+      "status": "PASS",
+      "description": "weather_asymmetric min_model_prob lowered to 0.20 (from 0.40)",
+      "evidence": "weather_trader.asymmetric_min_model_prob = 0.20"
+    },
+    "weather_lifecycle": {
+      "status": "PASS",
+      "description": "lifecycle_mode = shadow_exit with market_collapse_threshold = 0.05",
+      "evidence": {
+        "lifecycle_mode": "shadow_exit",
+        "market_collapse_threshold": 0.05
+      }
+    },
+    "zombie_resolution": {
+      "status": "PASS",
+      "description": "Market resolver tracks zombies_force_resolved with type='zombie_force_resolve' in recent_resolutions",
+      "evidence": "resolver_stats.zombies_force_resolved field present in both /api/admin/upgrade-validation and /api/diagnostics"
+    },
+    "pnl_attribution": {
+      "status": "PASS",
+      "description": "PnL attributed to originating strategy, not 'resolver'",
+      "evidence": "No 'resolver' key in pnl_by_strategy or trade_counts_by_strategy"
+    },
+    "upgrade_validation_endpoint": {
+      "status": "PASS",
+      "description": "New /api/admin/upgrade-validation endpoint returns comprehensive system health",
+      "evidence": "Returns capital_allocation, current_exposure, weather_lifecycle, shadow_exit_counts_by_reason, arb_health, crypto_health, resolver_stats"
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration62_critical_upgrade.py",
+    "/app/test_reports/pytest/pytest_results_iteration62.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "RiskConfig in models.py correctly has crypto_max_exposure, weather_max_exposure, arb_max_exposure, arb_reserved_capital fields",
+    "risk.py check_order() has per-strategy exposure checks and arb reserved capital logic",
+    "crypto_sniper.py has opposite-side prevention (lines 819-834)",
+    "arb_models.py has max_stale_age_seconds=300 (line 23)",
+    "weather_models.py has ExitReason.MARKET_COLLAPSE, market_collapse_threshold=0.05, lifecycle_mode='shadow_exit', asymmetric_min_model_prob=0.20",
+    "market_resolver_service.py has zombie force-resolution logic with 6-hour grace period",
+    "server.py has /api/admin/upgrade-validation endpoint and startup migration that applies upgrade values"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration62_critical_upgrade.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (28/28 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data (65 positions: 34 weather, 11 crypto, 20 arb)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 62 verified the CRITICAL SYSTEM UPGRADE. Key findings: (1) Capital allocation correctly set: max_total=360, per-strategy=120, arb_reserved=120. (2) Per-strategy exposure checked in risk.py check_order(). (3) Arb max_stale_age=300s. (4) Weather asymmetric min_model_prob=0.20. (5) Weather lifecycle in shadow_exit mode with market_collapse_threshold=0.05. (6) Zombie resolver tracks force_resolutions separately. (7) PnL attributed to originating strategy. Minor note: /api/admin/upgrade-validation weather_lifecycle.mode returns metrics-level mode (tag_only) instead of config-level mode (shadow_exit) - this is because metrics track what was processed, not what is configured. The authoritative config at /api/positions/weather/lifecycle correctly shows shadow_exit.",
+
+  "current_position_counts": {
+    "weather": 34,
+    "crypto": 11,
+    "arb": 20,
+    "total": 65
+  },
+
+  "current_exposure": {
+    "weather": 10.99,
+    "crypto": 65.21,
+    "arb": 3.82,
+    "total": 80.02
+  }
+}
