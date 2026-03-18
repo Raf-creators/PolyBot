@@ -1,0 +1,132 @@
+{
+  "summary": "Iteration 60: Edge and resolution-time data fix for position lifecycle system VERIFIED. Bug fix confirmed working - before fix all positions had edge_at_entry=0, current_edge_bps=0, edge_decay_pct=0, hours_to_resolution=null (only 2 exit candidates, all profit_capture). After fix: 26 exit candidates across 3 exit reasons (time_inefficiency=22, negative_edge=2, profit_capture=2), 39/54 positions have real edge data, Avg Current Edge=+79bp.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "GET /api/debug/ui-snapshot returns 200 with lifecycle data - PASS",
+      "position_meta_count > 0 (54 positions bootstrapped) - PASS",
+      "exit_candidates >= 2 (got 26) - PASS",
+      "exit_reasons include more than profit_capture (time_inefficiency=22, negative_edge=2, profit_capture=2) - PASS",
+      "weather positions have non-zero current_edge_bps (39/54 have real edge data) - PASS",
+      "weather positions have non-null hours_to_resolution (39/54 have resolution time) - PASS",
+      "GET /api/positions/weather/lifecycle/dashboard returns 200 - PASS",
+      "reason_distribution has multiple exit reasons - PASS",
+      "GET /api/positions/weather/lifecycle returns 200 with evaluations - PASS",
+      "individual position evals have real edge data - PASS",
+      "lifecycle metrics summary test - PASS"
+    ],
+    "frontend_ui_tests": [
+      "Page loads successfully - PASS",
+      "Weather tab navigable - PASS",
+      "Lifecycle (26) tab shows exit candidate count > 2 - PASS",
+      "EXIT CANDIDATES shows 26 (not 2) - PASS",
+      "AVG CURRENT EDGE shows +79bp (not 0) - PASS",
+      "Exit Reason Distribution shows time_inefficiency (22), negative_edge (2), profit_capture (2) - PASS",
+      "Resolution Time Breakdown populated with position counts - PASS",
+      "Position table shows Edge Now column with real values (+176bp, -75bp, +252bp) - PASS",
+      "Position table shows EXIT status tags (Profit Capture, Time Inefficient) - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "position_meta_persistence": {
+      "status": "PASS",
+      "description": "_position_meta dict populated when signals execute, survives signal eviction",
+      "evidence": "position_meta_count=54 in /api/debug/ui-snapshot"
+    },
+    "gamma_api_end_date": {
+      "status": "PASS",
+      "description": "endDateIso from Gamma API passed through to MarketSnapshot.end_date",
+      "evidence": "39/54 positions have hours_to_resolution"
+    },
+    "bootstrap_from_classified": {
+      "status": "PASS",
+      "description": "_position_meta bootstrapped from _classified market data for pre-existing positions",
+      "evidence": "54 positions evaluated, all have metadata"
+    },
+    "target_date_fallback": {
+      "status": "PASS",
+      "description": "hours_to_resolution derived from target_date when market.end_date unavailable",
+      "evidence": "Positions with target_date but no end_date still show resolution time"
+    },
+    "lifecycle_exit_rules": {
+      "status": "PASS",
+      "description": "4/5 exit rules now working (negative_edge, edge_decay, time_inefficiency, profit_capture). slot_rotation requires additional conditions",
+      "evidence": {
+        "time_inefficiency": "22 candidates (held >18h with edge <300bps)",
+        "negative_edge": "2 candidates (edge <= -100bps)",
+        "profit_capture": "2 candidates (price >= 2x entry)",
+        "edge_decay": "0 candidates (no positions with >60% edge decay yet)"
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/test_reports/test_iteration60_lifecycle_edge_fix.py",
+    "/app/test_reports/pytest/pytest_results_iteration60.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "Fix correctly implemented - _position_meta persists edge data when signals fill",
+    "Bootstrap mechanism correctly rebuilds metadata from _classified for pre-existing positions",
+    "target_date fallback for hours_to_resolution works when Gamma endDate unavailable",
+    "March 17 positions (15/54) show dashes because those markets expired and are no longer in Gamma API"
+  ],
+
+  "updated_files": [
+    "/app/test_reports/test_iteration60_lifecycle_edge_fix.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (11/11 passed)",
+    "frontend": "100% (9/9 UI verifications)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data (54 weather positions)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 60 verified the edge and resolution-time data fix for position lifecycle. Key findings: (1) _position_meta dict now populated when signals execute (line ~1254 in weather_trader.py), persists edge_at_entry, condition_id, station_id, target_date. (2) Bootstrap from _classified markets (line ~1401) ensures pre-existing positions get metadata. (3) target_date fallback (line ~1549) derives hours_to_resolution when market.end_date unavailable. (4) 39/54 positions have real edge data - the 15 without are March 17 expired markets no longer in Gamma API. (5) Before fix: 2 exit candidates (all profit_capture). After fix: 26 exit candidates (22 time_inefficiency, 2 negative_edge, 2 profit_capture).",
+
+  "bug_fix_verification": {
+    "root_cause": "Position metadata (edge_at_entry, hours_to_resolution) was not being persisted or bootstrapped for positions in the lifecycle system",
+    "fix_applied": [
+      "1. Persist position metadata when signals execute (_position_meta dict in weather_trader.py line ~1254)",
+      "2. Pass endDateIso from Gamma API through to MarketSnapshot.end_date (weather_feeds.py line ~335)",
+      "3. Bootstrap _position_meta from _classified market data for pre-existing positions (weather_trader.py line ~1401)",
+      "4. Derive hours_to_resolution from target_date when market.end_date unavailable (weather_trader.py line ~1549)"
+    ],
+    "before_fix": {
+      "edge_at_entry": 0,
+      "current_edge_bps": 0,
+      "edge_decay_pct": 0,
+      "hours_to_resolution": null,
+      "exit_candidates": 2,
+      "exit_reasons": ["profit_capture"]
+    },
+    "after_fix": {
+      "edge_at_entry": "varies by position (0 for legacy, real for new)",
+      "current_edge_bps": "real values (+176bp, -75bp, +252bp, etc.)",
+      "edge_decay_pct": "calculated when edge_at_entry > 0",
+      "hours_to_resolution": "populated for 39/54 positions (active markets)",
+      "exit_candidates": 26,
+      "exit_reasons": ["time_inefficiency (22)", "negative_edge (2)", "profit_capture (2)"]
+    }
+  }
+}

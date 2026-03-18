@@ -100,6 +100,10 @@ class WeatherTrader(BaseStrategy):
         # token_id → {first_flagged_at, flagged_price, avg_cost, size, reason, market_question}
         self._exit_candidate_snapshots: Dict[str, dict] = {}
 
+        # Persistent position metadata: token_id → {edge_at_entry, condition_id, station_id, target_date, model_prob_at_entry, market_price_at_entry}
+        # Populated when a signal is filled, survives signal eviction
+        self._position_meta: Dict[str, dict] = {}
+
         # Metrics
         self._m: Dict = {
             "total_scans": 0,
@@ -518,12 +522,32 @@ class WeatherTrader(BaseStrategy):
                             last_price=m["mid_price"],
                             volume_24h=0,
                             liquidity=m.get("liquidity", 0),
+                            end_date=m.get("end_date_iso") or None,
                         ))
 
                 classifications, cls_errors = classify_binary_weather_markets(raw_markets)
                 for cm in classifications:
                     if cm.condition_id not in results:
                         results[cm.condition_id] = cm
+
+                # Backfill end_date on existing markets & derive from target_date if Gamma didn't provide it
+                for m in raw_markets:
+                    tid = m.get("yes_token_id", "")
+                    if not tid:
+                        continue
+                    existing = self._state.get_market(tid)
+                    if existing and not existing.end_date:
+                        # Try Gamma's end_date first
+                        edt = m.get("end_date_iso") or ""
+                        if not edt:
+                            # Derive from target_date in classification (end of day UTC)
+                            cid = m.get("condition_id", "")
+                            cm_match = results.get(cid)
+                            if cm_match and cm_match.target_date:
+                                edt = cm_match.target_date + "T23:59:59+00:00"
+                        if edt:
+                            existing.end_date = edt
+
                 for err in cls_errors:
                     fail_reasons[err] = fail_reasons.get(err, 0) + 1
 
@@ -1225,6 +1249,18 @@ class WeatherTrader(BaseStrategy):
         self._cooldown[cooldown_key] = time.time()
         self._m["signals_executed"] += 1
         self._m["active_executions"] = len(self._active_executions)
+
+        # Persist position metadata for lifecycle (survives signal eviction)
+        self._position_meta[signal.token_id] = {
+            "edge_at_entry": signal.edge_bps,
+            "model_prob_at_entry": signal.model_prob,
+            "market_price_at_entry": signal.market_price,
+            "condition_id": signal.condition_id,
+            "station_id": signal.station_id,
+            "target_date": signal.target_date,
+            "bucket_label": signal.bucket_label,
+        }
+
         if signal.is_asymmetric:
             self._m["asymmetric"]["signals_executed"] += 1
 
@@ -1340,14 +1376,50 @@ class WeatherTrader(BaseStrategy):
                 except (ValueError, TypeError):
                     pass
 
-        # Build entry-edge map from completed executions + active executions
+        # Build entry-edge map: prefer _position_meta (persistent), fall back to execution/signal join
         entry_edge_map: Dict[str, float] = {}  # token_id → edge_bps at entry
+        for tid, meta in self._position_meta.items():
+            entry_edge_map[tid] = meta.get("edge_at_entry", 0.0)
+        # Fallback: try execution→signal join for positions not yet in _position_meta
         for ex in list(self._completed_executions) + list(self._active_executions.values()):
             for sig in self._signals:
                 if sig.id == ex.signal_id and sig.token_id:
                     if sig.token_id not in entry_edge_map:
                         entry_edge_map[sig.token_id] = ex.target_edge_bps
+                        # Backfill _position_meta for future cycles
+                        self._position_meta[sig.token_id] = {
+                            "edge_at_entry": ex.target_edge_bps,
+                            "model_prob_at_entry": sig.model_prob,
+                            "market_price_at_entry": sig.market_price,
+                            "condition_id": sig.condition_id,
+                            "station_id": sig.station_id,
+                            "target_date": sig.target_date,
+                            "bucket_label": sig.bucket_label,
+                        }
                     break
+
+        # Bootstrap _position_meta for pre-existing positions from classified market data
+        # This ensures old positions (opened before this fix) get weather context
+        if self._classified:
+            token_to_classification: Dict[str, tuple] = {}  # token_id → (condition_id, bucket_label)
+            for cid, cm in self._classified.items():
+                for b in cm.buckets:
+                    if b.token_id:
+                        token_to_classification[b.token_id] = (cid, b.label)
+            for pos in self._state.positions.values():
+                tid = pos.token_id
+                if tid not in self._position_meta and tid in token_to_classification:
+                    cid, blabel = token_to_classification[tid]
+                    cm = self._classified[cid]
+                    self._position_meta[tid] = {
+                        "edge_at_entry": 0.0,  # unknown for legacy positions
+                        "model_prob_at_entry": 0.0,
+                        "market_price_at_entry": pos.avg_cost or 0.0,
+                        "condition_id": cid,
+                        "station_id": cm.station_id,
+                        "target_date": cm.target_date,
+                        "bucket_label": blabel,
+                    }
 
         for pos in self._state.positions.values():
             strategy_id = getattr(pos, 'strategy_id', '') or ''
@@ -1375,24 +1447,35 @@ class WeatherTrader(BaseStrategy):
             # ---- Compute metrics ----
             profit_multiple = round(current_price / avg_cost, 4)
 
-            # Entry edge
+            # Entry edge (from persistent metadata)
             edge_at_entry = entry_edge_map.get(token_id, 0.0)
 
-            # Current edge: reprice using current model if we have classification context
+            # Current edge: reprice using current model
             current_model_prob = 0.0
             current_edge_bps = 0.0
+
+            # Get weather context from _position_meta (persistent) or fallback to signal join
+            meta = self._position_meta.get(token_id)
             weather_ctx = None
-            for ex in list(self._completed_executions[-50:]) + list(self._active_executions.values()):
-                for sig in self._signals:
-                    if sig.id == ex.signal_id and sig.token_id == token_id:
-                        weather_ctx = {
-                            'station_id': sig.station_id,
-                            'target_date': sig.target_date,
-                            'condition_id': sig.condition_id,
-                        }
+            if meta:
+                weather_ctx = {
+                    'station_id': meta['station_id'],
+                    'target_date': meta['target_date'],
+                    'condition_id': meta['condition_id'],
+                }
+            else:
+                # Fallback: scan executions/signals (may work for very recent positions)
+                for ex in list(self._completed_executions[-50:]) + list(self._active_executions.values()):
+                    for sig in self._signals:
+                        if sig.id == ex.signal_id and sig.token_id == token_id:
+                            weather_ctx = {
+                                'station_id': sig.station_id,
+                                'target_date': sig.target_date,
+                                'condition_id': sig.condition_id,
+                            }
+                            break
+                    if weather_ctx:
                         break
-                if weather_ctx:
-                    break
 
             # Try to reprice from current classified market data
             if weather_ctx:
@@ -1459,6 +1542,14 @@ class WeatherTrader(BaseStrategy):
                 try:
                     end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
                     ttr = (end_dt - now).total_seconds()
+                    hours_to_res = round(ttr / 3600, 1) if ttr > 0 else 0.0
+                except (ValueError, TypeError):
+                    pass
+            # Fallback: derive from target_date in position metadata (end of day UTC)
+            if hours_to_res is None and meta and meta.get("target_date"):
+                try:
+                    td = datetime.fromisoformat(meta["target_date"] + "T23:59:59+00:00")
+                    ttr = (td - now).total_seconds()
                     hours_to_res = round(ttr / 3600, 1) if ttr > 0 else 0.0
                 except (ValueError, TypeError):
                     pass

@@ -331,6 +331,7 @@ class WeatherFeedManager:
             "yes_token_id": yes_token,
             "mid_price": yes_price,
             "liquidity": float(m.get("liquidity", 0)),
+            "end_date_iso": m.get("endDateIso") or m.get("endDate") or "",
         }
 
     def get_cached_forecast(self, station_id: str, target_date: str) -> Optional[ForecastSnapshot]:

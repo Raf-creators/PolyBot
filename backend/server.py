@@ -2731,6 +2731,7 @@ def _build_state_snapshot():
             "shadow_exits_total": lc_m.get("shadow_exits", 0),
             "auto_exits_total": lc_m.get("auto_exits", 0),
             "last_eval_time": lc_m.get("last_eval_time"),
+            "position_meta_count": len(weather_trader_ref._position_meta),
             "exit_candidates_detail": [
                 {
                     "token_id": ev.token_id[:12],
