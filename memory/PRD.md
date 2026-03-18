@@ -36,17 +36,22 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 ### Slot Rotation / Inventory Cleanup (March 18)
 - **New exit reason**: `SLOT_ROTATION` — flags weak long-dated positions blocking better signals
 - **Book-level ranking**: All positions scored by composite (edge 40% + profit 35% + time preference 25%)
-- **Criteria**: Bottom 30% of book AND >24h to resolution AND <200bp edge AND <1.2x profit
-- **Config**: slot_rotation_enabled=true, slot_rotation_bottom_pct=0.30, slot_rotation_min_hours_to_res=24, slot_rotation_max_edge_bps=200, slot_rotation_max_profit_mult=1.2
-- **UI**: Slot Rotations count card, Rank column (#rank/total with color coding), EXIT: Slot Rotation badge (cyan)
-- **Simulator**: Includes slot rotation in per-reason simulation
+- **UI**: Slot Rotations count card, Rank column, EXIT: Slot Rotation badge (cyan)
 - **Asymmetric**: NEVER ranked or flagged for slot rotation
 
 ### UI Snapshot Export (March 18)
-- **Export Snapshot button** in Lifecycle Dashboard header — downloads full system state as `snapshot-YYYY-MM-DD-HHMM.json`
-- **Copy to Clipboard button** — copies snapshot JSON for quick sharing
-- **Internal endpoint** `/api/debug/ui-snapshot` — no key required (UI-facing, read-only)
-- **Keyed endpoint** `/api/debug/state-snapshot` preserved for external/curl access
+- **Export Snapshot button** in Lifecycle Dashboard — downloads `snapshot-YYYY-MM-DD-HHMM.json`
+- **Copy to Clipboard button** for quick sharing
+- **Internal endpoint** `/api/debug/ui-snapshot` (no key required)
+- **Keyed endpoint** `/api/debug/state-snapshot` preserved for external access
+
+### Edge & Resolution Data Pipeline Fix (March 18) — CRITICAL BUG FIX
+- **Root cause**: Position metadata (edge, resolution time, weather context) was stored only in transient signal/execution lists that get evicted after ~300 items. All lifecycle exit rules except profit_capture were effectively disabled.
+- **Fix 1**: Persistent `_position_meta` dict stores edge_at_entry, condition_id, station_id, target_date when signals execute — survives signal list eviction
+- **Fix 2**: `endDateIso` from Gamma API now passed through to `MarketSnapshot.end_date`
+- **Fix 3**: Bootstrap mechanism rebuilds `_position_meta` from `_classified` market data for pre-existing positions
+- **Fix 4**: `target_date` fallback derives `hours_to_resolution` when `market.end_date` unavailable
+- **Result**: 39/54 positions now have real edge + resolution data. Exit candidates went from 2 (profit_capture only) to 26 (22 time_inefficiency + 2 negative_edge + 2 profit_capture)
 
 ## Key Endpoints
 | Endpoint | Method | Description |
@@ -62,11 +67,10 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 | /api/debug/state-snapshot | GET | Keyed state snapshot (X-Debug-Snapshot-Key) |
 
 ## Prioritized Backlog
-### P0: Observe TAG_ONLY + entry quality + slot rotation flags (VALIDATION PHASE)
-### P1: Enable SHADOW_EXIT, evaluate all exit paths
+### P0: VALIDATION PHASE — observe TAG_ONLY with working edge/resolution data
+### P1: Enable SHADOW_EXIT, evaluate all exit paths with real data
 ### P2: Resolution Timeline visualization (useful for validation)
 ### P3: Copy Trading Skeleton
 ### P4: Manual Order Entry
 ### P5: UI toggle for auto-tune sigma multiplier
-### P6: Resolution Timeline visualization
-### P7: Live Trading Mode Integration
+### P6: Live Trading Mode Integration
