@@ -180,6 +180,7 @@ export default function Weather() {
     edge_decay: 'Edge Decay',
     time_inefficiency: 'Time Inefficient',
     model_shift: 'Model Shift',
+    slot_rotation: 'Slot Rotation',
   };
   const EXIT_REASON_COLORS = {
     profit_capture: 'border-emerald-500/40 bg-emerald-950/30 text-emerald-400',
@@ -187,6 +188,7 @@ export default function Weather() {
     edge_decay: 'border-amber-500/40 bg-amber-950/30 text-amber-400',
     time_inefficiency: 'border-orange-500/40 bg-orange-950/30 text-orange-400',
     model_shift: 'border-violet-500/40 bg-violet-950/30 text-violet-400',
+    slot_rotation: 'border-cyan-500/40 bg-cyan-950/30 text-cyan-400',
   };
 
   const lifecycleMode = strategyPositions?.lifecycle?.mode || 'off';
@@ -244,6 +246,13 @@ export default function Weather() {
           EXIT: {EXIT_REASON_LABELS[reason] || reason}
         </Badge>
       );
+    }},
+    { key: 'lifecycle_rank', label: 'Rank', align: 'right', render: (_, row) => {
+      const lc = row.lifecycle;
+      if (!lc || !lc.book_total) return <span className="text-zinc-700">—</span>;
+      const pct = lc.book_rank / lc.book_total;
+      const color = pct <= 0.3 ? 'text-emerald-400' : pct <= 0.7 ? 'text-zinc-400' : 'text-red-400';
+      return <span className={`font-mono text-[10px] ${color}`} data-testid="lifecycle-book-rank">#{lc.book_rank}/{lc.book_total}</span>;
     }},
     { key: 'resolves_at', label: 'Resolves', align: 'right', render: (v) => (
       <span className="text-zinc-300 text-[10px] font-mono">{formatResolvesAt(v)}</span>
@@ -1598,7 +1607,7 @@ function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
     model_shift: { bg: 'bg-violet-950/30', border: 'border-violet-500/30', text: 'text-violet-400', bar: 'bg-violet-500' },
   };
   const REASON_LABELS = { profit_capture: 'Profit Capture', negative_edge: 'Negative Edge', edge_decay: 'Edge Decay', time_inefficiency: 'Time Inefficient', model_shift: 'Model Shift' };
-  const ALL_REASONS = ['profit_capture', 'negative_edge', 'edge_decay', 'time_inefficiency', 'model_shift'];
+  const ALL_REASONS = ['profit_capture', 'negative_edge', 'edge_decay', 'time_inefficiency', 'model_shift', 'slot_rotation'];
   const totalCandidates = summary?.total_exit_candidates || 0;
 
   return (
@@ -1607,13 +1616,20 @@ function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
       <LifecycleModeControl currentMode={config?.lifecycle_mode || 'off'} config={config} onModeChange={onModeChange} />
 
       {/* Section 1: Summary Cards */}
-      <div data-testid="lifecycle-summary-cards" className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div data-testid="lifecycle-summary-cards" className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
           <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Exit Candidates</div>
           <div data-testid="lifecycle-total-candidates" className={`text-2xl font-mono font-bold ${totalCandidates > 0 ? 'text-amber-400' : 'text-zinc-600'}`}>
             {totalCandidates}
           </div>
           <div className="text-[10px] text-zinc-600 mt-0.5">of {summary?.total_positions_evaluated || 0} evaluated</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Slot Rotations</div>
+          <div data-testid="lifecycle-slot-rotations" className={`text-2xl font-mono font-bold ${(summary?.slot_rotations || 0) > 0 ? 'text-cyan-400' : 'text-zinc-600'}`}>
+            {summary?.slot_rotations || 0}
+          </div>
+          <div className="text-[10px] text-zinc-600 mt-0.5">weak long-dated flagged</div>
         </div>
         <div className="rounded-lg border border-zinc-800/50 bg-zinc-950 p-3.5">
           <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Avg Profit Multiple</div>
@@ -1647,7 +1663,7 @@ function LifecycleDashboard({ data, formatPnl, entryQuality, onModeChange }) {
       </div>
 
       {/* Entry Quality Summary */}
-      {entryQuality && <EntryQualitySummary data={entryQuality} />}
+      {entryQuality && <EntryQualitySummary data={entryQuality} lifecycleConfig={config} />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Section 2: Exit Reason Distribution */}
@@ -1911,8 +1927,9 @@ const REASON_SIM_COLORS = {
   edge_decay: { text: 'text-amber-400', bg: 'bg-amber-950/30', border: 'border-amber-500/30' },
   time_inefficiency: { text: 'text-orange-400', bg: 'bg-orange-950/30', border: 'border-orange-500/30' },
   model_shift: { text: 'text-violet-400', bg: 'bg-violet-950/30', border: 'border-violet-500/30' },
+  slot_rotation: { text: 'text-cyan-400', bg: 'bg-cyan-950/30', border: 'border-cyan-500/30' },
 };
-const REASON_SIM_LABELS = { profit_capture: 'Profit Capture', negative_edge: 'Negative Edge', edge_decay: 'Edge Decay', time_inefficiency: 'Time Inefficient', model_shift: 'Model Shift' };
+const REASON_SIM_LABELS = { profit_capture: 'Profit Capture', negative_edge: 'Negative Edge', edge_decay: 'Edge Decay', time_inefficiency: 'Time Inefficient', model_shift: 'Model Shift', slot_rotation: 'Slot Rotation' };
 
 function ThresholdSimulator({ currentConfig, formatPnl }) {
   const [params, setParams] = useState({
@@ -2344,7 +2361,7 @@ function LifecycleModeControl({ currentMode, config, onModeChange }) {
 }
 
 
-function EntryQualitySummary({ data }) {
+function EntryQualitySummary({ data, lifecycleConfig }) {
   if (!data) return null;
   const { config, rejections, passed_signals, open_positions } = data;
   const totalRejections = (rejections?.low_quality || 0) + (rejections?.low_edge_long || 0) + (rejections?.long_hold_penalty || 0);
@@ -2410,6 +2427,7 @@ function EntryQualitySummary({ data }) {
         <span>Long cutoff: <span className="text-zinc-400 font-mono">{config?.long_resolution_hours}h</span></span>
         <span>Time weight: <span className="text-zinc-400 font-mono">{config?.time_preference_weight}</span></span>
         <span>Hold penalty: <span className="text-zinc-400 font-mono">{config?.long_hold_penalty}</span></span>
+        <span>Slot rotate: <span className="text-zinc-400 font-mono">{lifecycleConfig?.slot_rotation_enabled ? `bottom ${((lifecycleConfig?.slot_rotation_bottom_pct || 0) * 100)}%` : 'off'}</span></span>
       </div>
     </div>
   );

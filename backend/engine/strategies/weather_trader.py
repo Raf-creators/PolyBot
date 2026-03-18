@@ -139,6 +139,7 @@ class WeatherTrader(BaseStrategy):
                 "mode": "tag_only",
                 "positions_evaluated": 0,
                 "exit_candidates": 0,
+                "slot_rotations": 0,
                 "shadow_exits": 0,
                 "auto_exits": 0,
                 "last_eval_time": None,
@@ -1566,6 +1567,110 @@ class WeatherTrader(BaseStrategy):
         self._m["lifecycle"]["shadow_exits"] += shadow_exits_this_scan
         self._m["lifecycle"]["last_eval_time"] = utc_now()
 
+        # ---- Second pass: Slot Rotation (book-level ranking) ----
+        # Score ALL evaluated positions, then flag bottom N% that meet criteria
+        if self.config.slot_rotation_enabled and len(new_evals) > 1:
+            scored = []
+            for tid, ev in new_evals.items():
+                # Composite book score: edge + profit preference + time preference
+                # Normalize each component to ~0-1 range
+                edge_score = max(min(ev.current_edge_bps / 1500.0, 1.0), -0.5)  # 1500bp = excellent
+                profit_score = max(min((ev.profit_multiple - 0.5) / 1.5, 1.0), 0.0)  # 0.5x-2.0x range
+                # Nearer resolution = better (inverse hours, capped)
+                h = ev.hours_to_resolution if ev.hours_to_resolution is not None else 48.0
+                time_score = max(1.0 - (h / 72.0), 0.0)  # 0h = 1.0, 72h = 0.0
+
+                book_score = round(edge_score * 0.40 + profit_score * 0.35 + time_score * 0.25, 4)
+                scored.append((tid, book_score))
+
+            # Sort by score descending (strongest first)
+            scored.sort(key=lambda x: -x[1])
+            total = len(scored)
+
+            # Assign rank and score to all evals
+            for rank_idx, (tid, bscore) in enumerate(scored):
+                ev = new_evals[tid]
+                ev.book_score = bscore
+                ev.book_rank = rank_idx + 1
+                ev.book_total = total
+
+            # Find slot rotation candidates: bottom N% that meet ALL criteria
+            cutoff_rank = max(1, int(total * (1.0 - self.config.slot_rotation_bottom_pct)))
+            slot_rotation_count = 0
+
+            for tid, bscore in scored:
+                ev = new_evals[tid]
+
+                # Skip positions already flagged by rules 1-4
+                if ev.is_exit_candidate:
+                    continue
+
+                # Must be in the bottom portion of the book
+                if ev.book_rank <= cutoff_rank:
+                    continue
+
+                # Must meet ALL slot rotation criteria
+                h_to_res = ev.hours_to_resolution
+                if h_to_res is None or h_to_res <= self.config.slot_rotation_min_hours_to_res:
+                    continue
+                if ev.current_edge_bps >= self.config.slot_rotation_max_edge_bps:
+                    continue
+                if ev.profit_multiple >= self.config.slot_rotation_max_profit_mult:
+                    continue
+
+                # Flag as slot rotation candidate
+                ev.is_exit_candidate = True
+                ev.exit_reason = ExitReason.SLOT_ROTATION.value
+                ev.exit_reason_detail = (
+                    f"Weak position: rank {ev.book_rank}/{total} "
+                    f"(score={bscore:.3f}), {h_to_res:.0f}h to resolution, "
+                    f"edge={ev.current_edge_bps:.0f}bp, profit={ev.profit_multiple:.2f}x"
+                )
+                slot_rotation_count += 1
+                candidates += 1
+
+                logger.info(
+                    f"[LIFECYCLE-SLOT] Rotation candidate: {tid[:12]}.. "
+                    f"rank={ev.book_rank}/{total} score={bscore:.3f} "
+                    f"edge={ev.current_edge_bps:.0f}bp profit={ev.profit_multiple:.2f}x "
+                    f"res={h_to_res:.0f}h mode={mode}"
+                )
+
+                # Snapshot + shadow exit tracking (reuse existing logic)
+                pos = self._state.positions.get(tid)
+                if tid not in self._exit_candidate_snapshots and pos:
+                    market = self._state.get_market(tid)
+                    cur_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+                    self._exit_candidate_snapshots[tid] = {
+                        "first_flagged_at": utc_now(),
+                        "flagged_price": cur_price,
+                        "avg_cost": pos.avg_cost or 0,
+                        "size": pos.size,
+                        "reason": ExitReason.SLOT_ROTATION.value,
+                        "profit_multiple_at_flag": ev.profit_multiple,
+                        "market_question": getattr(pos, 'market_question', ''),
+                    }
+                if mode == "shadow_exit" and pos:
+                    market = self._state.get_market(tid)
+                    cur_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+                    self._lifecycle_shadow_exits.append({
+                        "token_id": tid, "reason": ExitReason.SLOT_ROTATION.value,
+                        "detail": ev.exit_reason_detail,
+                        "profit_multiple": ev.profit_multiple,
+                        "current_edge_bps": ev.current_edge_bps,
+                        "time_held_hours": ev.time_held_hours,
+                        "would_sell_at": cur_price,
+                        "avg_cost": pos.avg_cost or 0, "size": pos.size,
+                        "market_question": getattr(pos, 'market_question', ''),
+                        "timestamp": utc_now(),
+                    })
+                    if len(self._lifecycle_shadow_exits) > 100:
+                        self._lifecycle_shadow_exits = self._lifecycle_shadow_exits[-100:]
+                    shadow_exits_this_scan += 1
+
+            self._m["lifecycle"]["exit_candidates"] = candidates
+            self._m["lifecycle"]["slot_rotations"] = slot_rotation_count
+
         # Clean up snapshots for positions that no longer exist
         active_tokens = set(new_evals.keys())
         stale = [t for t in self._exit_candidate_snapshots if t not in active_tokens]
@@ -1643,6 +1748,7 @@ class WeatherTrader(BaseStrategy):
         summary = {
             "total_positions_evaluated": len(evals),
             "total_exit_candidates": len(candidates),
+            "slot_rotations": sum(1 for ev in candidates.values() if ev.exit_reason == ExitReason.SLOT_ROTATION.value),
             "avg_profit_multiple": avg_profit_mult,
             "avg_current_edge_bps": avg_current_edge,
             "avg_edge_decay_pct": avg_edge_decay,
@@ -1774,6 +1880,11 @@ class WeatherTrader(BaseStrategy):
                 "edge_decay_exit_pct": self.config.edge_decay_exit_pct,
                 "time_inefficiency_hours": self.config.time_inefficiency_hours,
                 "time_inefficiency_min_edge_bps": self.config.time_inefficiency_min_edge_bps,
+                "slot_rotation_enabled": self.config.slot_rotation_enabled,
+                "slot_rotation_min_hours_to_res": self.config.slot_rotation_min_hours_to_res,
+                "slot_rotation_max_edge_bps": self.config.slot_rotation_max_edge_bps,
+                "slot_rotation_max_profit_mult": self.config.slot_rotation_max_profit_mult,
+                "slot_rotation_bottom_pct": self.config.slot_rotation_bottom_pct,
             },
         }
 
@@ -1898,6 +2009,9 @@ class WeatherTrader(BaseStrategy):
                 "current_edge_bps": edge,
                 "edge_decay_pct": decay,
                 "time_held_hours": held_h,
+                "hours_to_resolution": ev.hours_to_resolution,
+                "book_rank": ev.book_rank,
+                "book_score": ev.book_score,
                 "avg_cost": round(avg_cost, 4),
                 "current_price": round(current_price, 4),
                 "size": size,
@@ -1909,8 +2023,37 @@ class WeatherTrader(BaseStrategy):
                 "change": decision,
             })
 
+        # --- Simulated slot rotation (second pass, book-level) ---
+        sim_sr_enabled = params.get("slot_rotation_enabled", self.config.slot_rotation_enabled)
+        sim_sr_min_h = params.get("slot_rotation_min_hours_to_res", self.config.slot_rotation_min_hours_to_res)
+        sim_sr_max_edge = params.get("slot_rotation_max_edge_bps", self.config.slot_rotation_max_edge_bps)
+        sim_sr_max_mult = params.get("slot_rotation_max_profit_mult", self.config.slot_rotation_max_profit_mult)
+        sim_sr_bottom = params.get("slot_rotation_bottom_pct", self.config.slot_rotation_bottom_pct)
+
+        if sim_sr_enabled and len(positions_detail) > 1:
+            cutoff_rank = max(1, int(len(positions_detail) * (1.0 - sim_sr_bottom)))
+            for p in positions_detail:
+                if p["sim_exit"]:
+                    continue
+                h_to_res = p.get("hours_to_resolution")
+                if h_to_res is None or h_to_res <= sim_sr_min_h:
+                    continue
+                if p["current_edge_bps"] >= sim_sr_max_edge:
+                    continue
+                if p["profit_multiple"] >= sim_sr_max_mult:
+                    continue
+                if p["book_rank"] <= cutoff_rank:
+                    continue
+                p["sim_exit"] = True
+                p["sim_reason"] = "slot_rotation"
+                sim_exits[p["token_id"]] = "slot_rotation"
+                if not p["live_exit"]:
+                    p["change"] = "new_exit"
+                elif p["live_reason"] != "slot_rotation":
+                    p["change"] = "reason_changed"
+
         # --- Per-reason aggregation ---
-        all_reasons = ["profit_capture", "negative_edge", "edge_decay", "time_inefficiency", "model_shift"]
+        all_reasons = ["profit_capture", "negative_edge", "edge_decay", "time_inefficiency", "model_shift", "slot_rotation"]
         per_reason = {}
         for reason in all_reasons:
             sim_in = [p for p in positions_detail if p["sim_reason"] == reason]
@@ -2139,9 +2282,12 @@ class WeatherTrader(BaseStrategy):
                     "edge_decay_exit_pct": self.config.edge_decay_exit_pct,
                     "time_inefficiency_hours": self.config.time_inefficiency_hours,
                     "time_inefficiency_min_edge_bps": self.config.time_inefficiency_min_edge_bps,
+                    "slot_rotation_enabled": self.config.slot_rotation_enabled,
+                    "slot_rotation_bottom_pct": self.config.slot_rotation_bottom_pct,
                 },
                 "positions_evaluated": self._m["lifecycle"]["positions_evaluated"],
                 "exit_candidates": self._m["lifecycle"]["exit_candidates"],
+                "slot_rotations": self._m["lifecycle"]["slot_rotations"],
                 "shadow_exits_total": self._m["lifecycle"]["shadow_exits"],
                 "auto_exits_total": self._m["lifecycle"]["auto_exits"],
                 "last_eval_time": self._m["lifecycle"]["last_eval_time"],

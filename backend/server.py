@@ -1273,6 +1273,9 @@ async def get_positions_by_strategy():
                         "current_model_prob": lc.current_model_prob,
                         "time_held_hours": lc.time_held_hours,
                         "lifecycle_mode": lc.lifecycle_mode,
+                        "book_rank": lc.book_rank,
+                        "book_score": lc.book_score,
+                        "book_total": lc.book_total,
                     }
                 else:
                     d["lifecycle"] = None

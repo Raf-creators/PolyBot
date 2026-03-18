@@ -56,6 +56,7 @@ class ExitReason(str, Enum):
     EDGE_DECAY = "edge_decay"                   # Edge decayed significantly from entry
     TIME_INEFFICIENCY = "time_inefficiency"      # Long time held with low remaining edge
     MODEL_SHIFT = "model_shift"                  # Model probability shifted against position
+    SLOT_ROTATION = "slot_rotation"              # Weak long-dated position blocking better signals
 
 
 # ---- Configuration ----
@@ -129,6 +130,13 @@ class WeatherConfig(BaseModel):
     long_hold_penalty: float = 0.20                          # penalty applied to rank score for long+moderate signals
     long_hold_moderate_quality: float = 0.50                 # quality below this is "moderate" for penalty purposes
     long_hold_moderate_edge_bps: float = 800.0               # edge below this is "moderate" for penalty purposes
+
+    # Slot rotation / inventory cleanup (standard weather only)
+    slot_rotation_enabled: bool = True                        # enable slot rotation exit candidate tagging
+    slot_rotation_min_hours_to_res: float = 24.0              # only flag positions with >24h to resolution
+    slot_rotation_max_edge_bps: float = 200.0                 # only flag if current edge < this
+    slot_rotation_max_profit_mult: float = 1.2                # only flag if profit multiple < this
+    slot_rotation_bottom_pct: float = 0.30                    # flag bottom 30% of book by composite score
 
     # Asymmetric mode settings
     asymmetric_enabled: bool = True
@@ -401,6 +409,9 @@ class PositionLifecycleEval(BaseModel):
     time_held_hours: float = 0.0                   # hours since open
     hours_to_resolution: Optional[float] = None    # hours until market resolves
     lifecycle_mode: str = "tag_only"               # the mode that produced this eval
+    book_score: float = 0.0                        # composite book-ranking score (higher = stronger)
+    book_rank: int = 0                             # rank within the book (1 = strongest)
+    book_total: int = 0                            # total positions in book
     evaluated_at: str = Field(default_factory=utc_now)
 
 
