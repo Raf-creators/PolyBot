@@ -15,62 +15,69 @@ A full-stack Polymarket trading bot (FastAPI + React + MongoDB) that executes pa
 ### Core Infrastructure
 - Engine with paper trading adapter, market discovery, price feeds, risk management, Telegram alerts
 
-### Weather V2 + Asymmetric + Calibration (March 17)
-- Overtrading filter, quality score, multi-market types
-- Asymmetric hold-to-resolution strategy (unchanged)
+### Weather V2 + Asymmetric + Calibration
+- Overtrading filter, quality score, multi-market types, asymmetric hold-to-resolution
 - Sigma widening, Brier score, auto-tune framework (disabled by default)
-- PnL attribution fix, resolution time visibility
 
-### Position Lifecycle Management (March 17-18)
+### Position Lifecycle Management
 - **Modes**: OFF, TAG_ONLY (default), SHADOW_EXIT, AUTO_EXIT
-- **Exit rules**: Profit capture (2.0x), Negative edge (-100bp), Edge decay (60%), Time inefficiency (18h/300bp)
-- **Lifecycle Dashboard**: Summary cards, reason distribution, time buckets, shadow timeline, sold-vs-held comparison
-- **Threshold Simulator**: 5 sliders, 3 presets, per-reason performance, decision quality
-- **Mode Control**: Segmented UI with confirmation modals, MongoDB persistence
+- **Exit rules**: Profit capture, Negative edge, Edge decay, Time inefficiency, Slot rotation
+- **Lifecycle Dashboard**: Summary cards, reason distribution, shadow timeline, sold-vs-held comparison
+- **Threshold Simulator**: 5 sliders, 3 presets, decision quality metrics
+- **Mode Control**: Segmented UI with confirmation modals
 
-### Standard Weather Entry Quality Tightening (March 18)
-- Min quality score (0.35), time-aware edge filter (700bp for >24h), long-hold penalty
-- Composite signal ranking with time-to-resolution preference
-- Entry quality observability: rejection counters, avg quality/edge/lead
+### Entry Quality Tightening
+- Min quality score (0.35), time-aware edge filter, long-hold penalty, signal ranking, observability
 
-### Slot Rotation / Inventory Cleanup (March 18)
-- **New exit reason**: `SLOT_ROTATION` — flags weak long-dated positions blocking better signals
-- **Book-level ranking**: All positions scored by composite (edge 40% + profit 35% + time preference 25%)
-- **UI**: Slot Rotations count card, Rank column, EXIT: Slot Rotation badge (cyan)
-- **Asymmetric**: NEVER ranked or flagged for slot rotation
+### Slot Rotation / Inventory Cleanup
+- Book-level ranking, SLOT_ROTATION exit reason, configurable thresholds
 
-### UI Snapshot Export (March 18)
-- **Export Snapshot button** in Lifecycle Dashboard — downloads `snapshot-YYYY-MM-DD-HHMM.json`
-- **Copy to Clipboard button** for quick sharing
-- **Internal endpoint** `/api/debug/ui-snapshot` (no key required)
-- **Keyed endpoint** `/api/debug/state-snapshot` preserved for external access
+### UI Snapshot Export
+- Export Snapshot + Copy to Clipboard buttons in Lifecycle Dashboard
+- Internal endpoint `/api/debug/ui-snapshot` (no key)
+- Keyed endpoint `/api/debug/state-snapshot` (X-Debug-Snapshot-Key)
 
-### Edge & Resolution Data Pipeline Fix (March 18) — CRITICAL BUG FIX
-- **Root cause**: Position metadata (edge, resolution time, weather context) was stored only in transient signal/execution lists that get evicted after ~300 items. All lifecycle exit rules except profit_capture were effectively disabled.
-- **Fix 1**: Persistent `_position_meta` dict stores edge_at_entry, condition_id, station_id, target_date when signals execute — survives signal list eviction
-- **Fix 2**: `endDateIso` from Gamma API now passed through to `MarketSnapshot.end_date`
-- **Fix 3**: Bootstrap mechanism rebuilds `_position_meta` from `_classified` market data for pre-existing positions
-- **Fix 4**: `target_date` fallback derives `hours_to_resolution` when `market.end_date` unavailable
-- **Result**: 39/54 positions now have real edge + resolution data. Exit candidates went from 2 (profit_capture only) to 26 (22 time_inefficiency + 2 negative_edge + 2 profit_capture)
+### Edge & Resolution Data Pipeline Fix (March 18)
+- Persistent `_position_meta` dict for entry edge/weather context
+- `endDateIso` from Gamma API → MarketSnapshot.end_date
+- Bootstrap mechanism from classified markets for legacy positions
+- target_date fallback for hours_to_resolution
+
+### Global System Snapshot v2.0 (March 18)
+- Restructured from weather-biased flat layout to balanced hierarchy:
+  ```
+  { freshness, portfolio, strategies: { weather, weather_asymmetric, crypto, arb } }
+  ```
+- **Portfolio section**: total_capital_deployed, capital_allocation (per-strategy % + counts), pnl_by_strategy (realized, win_rate, sharpe, profit_factor), concentration_risk (HHI, top_3_pct, largest_position)
+- **Equal-depth strategy sections**: Each strategy has positions, scan_health, config + strategy-specific data (lifecycle/entry_quality for weather, execution_stats/volatility for crypto, diagnostics for arb)
+- **Enriched positions**: All positions now include invested, current_value, profit_multiple. Crypto positions have strategy_meta (asset, time_window). Arb positions have strategy_meta (market_type)
 
 ## Key Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
 | /api/positions/by-strategy | GET | Positions with lifecycle + book rank |
 | /api/positions/weather/exit-candidates | GET | Exit candidates + config |
-| /api/positions/weather/lifecycle | GET | Full lifecycle evals with book ranking |
-| /api/positions/weather/lifecycle/dashboard | GET | Dashboard with slot rotation counts |
-| /api/positions/weather/lifecycle/simulate | POST | Simulate thresholds + slot rotation |
+| /api/positions/weather/lifecycle | GET | Full lifecycle evals |
+| /api/positions/weather/lifecycle/dashboard | GET | Dashboard data |
+| /api/positions/weather/lifecycle/simulate | POST | Simulate thresholds |
 | /api/strategies/weather/lifecycle/mode | POST | Switch lifecycle mode |
-| /api/strategies/weather/entry-quality | GET | Entry quality + rejection metrics |
-| /api/debug/ui-snapshot | GET | UI-facing state snapshot (no key) |
-| /api/debug/state-snapshot | GET | Keyed state snapshot (X-Debug-Snapshot-Key) |
+| /api/strategies/weather/entry-quality | GET | Entry quality metrics |
+| /api/debug/ui-snapshot | GET | Global system snapshot v2 (no key) |
+| /api/debug/state-snapshot | GET | Global system snapshot v2 (keyed) |
 
 ## Prioritized Backlog
 ### P0: VALIDATION PHASE — observe TAG_ONLY with working edge/resolution data
 ### P1: Enable SHADOW_EXIT, evaluate all exit paths with real data
-### P2: Resolution Timeline visualization (useful for validation)
+### P2: Resolution Timeline visualization
 ### P3: Copy Trading Skeleton
 ### P4: Manual Order Entry
 ### P5: UI toggle for auto-tune sigma multiplier
 ### P6: Live Trading Mode Integration
+
+## Audit Findings (from live snapshot March 18)
+- 4/5 lifecycle exit rules now active (edge_decay inert for legacy positions)
+- 10 exit candidates correctly identified across 3 rules
+- March 17 zombie positions (6 weather + 6 arb) not resolving — blocks capital recycling
+- Quality floor (0.35) too lenient — 0 rejections
+- Consider adding "market_collapse" exit rule for positions at <5% entry value
+- Singapore profit_capture may be premature when remaining edge is high
