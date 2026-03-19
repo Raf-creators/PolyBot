@@ -1,7 +1,7 @@
-import { useMemo, useState, useRef, useCallback } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine, Brush,
+  Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 
 function CustomTooltip({ active, payload }) {
@@ -27,7 +27,6 @@ function formatChartTime(isoString) {
   if (!isoString) return '';
   const d = new Date(isoString);
   if (isNaN(d.getTime())) return '';
-  // Always show in UTC so it matches Telegram / server timestamps
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
@@ -48,37 +47,45 @@ function buildTickFormatter(points) {
   if (!points || points.length < 2) return formatChartTime;
   const first = new Date(points[0].timestamp);
   const last = new Date(points[points.length - 1].timestamp);
-  // If range spans more than 18 hours, show date + time
   if (last - first > 18 * 3600_000) return formatChartDate;
   return formatChartTime;
 }
 
+const VIEW_MODES = [
+  { key: '1h', label: '1H', hours: 1 },
+  { key: '6h', label: '6H', hours: 6 },
+  { key: '1d', label: '1D', hours: 24 },
+  { key: 'all', label: 'All', hours: null },
+];
+
 export function PnlChart({ data, testId }) {
-  const { points, current_pnl, peak_pnl, trough_pnl, max_drawdown, total_trades, latest_close_at, server_time } = data;
-  const [viewRange, setViewRange] = useState('recent'); // 'recent' | 'all'
+  const { points, current_pnl, peak_pnl, trough_pnl, max_drawdown, latest_close_at } = data;
+  const [viewMode, setViewMode] = useState('6h');
 
   const isPositive = current_pnl >= 0;
   const strokeColor = isPositive ? '#34d399' : '#f87171';
   const gradientId = 'pnl-gradient';
 
-  const tickFormatter = useMemo(() => buildTickFormatter(points), [points]);
+  // Slice data based on selected time range — stable across re-renders
+  const visiblePoints = useMemo(() => {
+    if (!points.length) return [];
+    const mode = VIEW_MODES.find((m) => m.key === viewMode);
+    if (!mode || !mode.hours) return points; // 'all'
+    const cutoff = Date.now() - mode.hours * 3600_000;
+    const filtered = points.filter((p) => new Date(p.timestamp).getTime() >= cutoff);
+    return filtered.length > 0 ? filtered : points.slice(-10); // fallback to last 10 if window is empty
+  }, [points, viewMode]);
 
-  // Default to showing the recent ~30% of data for easier inspection
-  const brushDefault = useMemo(() => {
-    if (!points.length) return { start: 0, end: 0 };
-    if (viewRange === 'all') return { start: 0, end: points.length - 1 };
-    const recentStart = Math.max(0, Math.floor(points.length * 0.7));
-    return { start: recentStart, end: points.length - 1 };
-  }, [points, viewRange]);
+  const tickFormatter = useMemo(() => buildTickFormatter(visiblePoints), [visiblePoints]);
 
   const yDomain = useMemo(() => {
-    if (!points.length) return [-1, 1];
-    const vals = points.map((p) => p.cumulative_pnl);
+    if (!visiblePoints.length) return [-1, 1];
+    const vals = visiblePoints.map((p) => p.cumulative_pnl);
     const min = Math.min(0, ...vals);
     const max = Math.max(0, ...vals);
     const pad = Math.max(Math.abs(max - min) * 0.15, 0.5);
     return [min - pad, max + pad];
-  }, [points]);
+  }, [visiblePoints]);
 
   const lastCloseLabel = useMemo(() => {
     if (!latest_close_at) return null;
@@ -110,33 +117,24 @@ export function PnlChart({ data, testId }) {
           )}
         </div>
         <div className="flex items-center gap-4 text-xs font-mono">
-          {/* View range toggle */}
-          <div className="flex items-center gap-1 mr-2">
-            <button
-              data-testid="pnl-chart-recent"
-              onClick={() => setViewRange('recent')}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
-                viewRange === 'recent'
-                  ? 'bg-zinc-700 text-zinc-200'
-                  : 'text-zinc-500 hover:text-zinc-400'
-              }`}
-            >
-              Recent
-            </button>
-            <button
-              data-testid="pnl-chart-all"
-              onClick={() => setViewRange('all')}
-              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
-                viewRange === 'all'
-                  ? 'bg-zinc-700 text-zinc-200'
-                  : 'text-zinc-500 hover:text-zinc-400'
-              }`}
-            >
-              All
-            </button>
+          {/* Time range selector */}
+          <div data-testid="pnl-chart-range" className="flex items-center gap-0.5 bg-zinc-800/60 rounded p-0.5">
+            {VIEW_MODES.map((m) => (
+              <button
+                key={m.key}
+                data-testid={`pnl-range-${m.key}`}
+                onClick={() => setViewMode(m.key)}
+                className={`px-2.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  viewMode === m.key
+                    ? 'bg-zinc-600 text-zinc-100 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
           <span className="text-zinc-600">Peak <span className="text-emerald-400">{peak_pnl >= 0 ? '+' : ''}${peak_pnl.toFixed(2)}</span></span>
-          <span className="text-zinc-600">Trough <span className="text-red-400">{trough_pnl >= 0 ? '+' : ''}${trough_pnl.toFixed(2)}</span></span>
           <span className="text-zinc-600">DD <span className="text-amber-400">${max_drawdown.toFixed(2)}</span></span>
           <span className={`font-semibold ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
             {current_pnl >= 0 ? '+' : ''}${current_pnl.toFixed(2)}
@@ -145,7 +143,7 @@ export function PnlChart({ data, testId }) {
       </div>
       <div className="p-3">
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={points} margin={{ top: 4, right: 8, bottom: 24, left: 4 }}>
+          <AreaChart data={visiblePoints} margin={{ top: 4, right: 8, bottom: 4, left: 4 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={strokeColor} stopOpacity={0.25} />
@@ -181,30 +179,6 @@ export function PnlChart({ data, testId }) {
               activeDot={{ r: 3, fill: strokeColor, stroke: '#18181b', strokeWidth: 2 }}
               isAnimationActive={false}
             />
-            {points.length > 20 && (
-              <Brush
-                dataKey="timestamp"
-                height={20}
-                stroke="#3f3f46"
-                fill="#18181b"
-                tickFormatter={tickFormatter}
-                startIndex={brushDefault.start}
-                endIndex={brushDefault.end}
-                travellerWidth={8}
-              >
-                <AreaChart data={points}>
-                  <Area
-                    type="monotone"
-                    dataKey="cumulative_pnl"
-                    stroke={strokeColor}
-                    strokeWidth={0.5}
-                    fill={`url(#${gradientId})`}
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                </AreaChart>
-              </Brush>
-            )}
           </AreaChart>
         </ResponsiveContainer>
       </div>
