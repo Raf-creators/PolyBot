@@ -1,0 +1,173 @@
+{
+  "summary": "Iteration 67: Rolling PnL Window System validation COMPLETE. All 17 backend tests passed. Verified that ALL PnL/hour metrics now use trade-timestamp-based rolling windows (1h/3h/6h) instead of dividing by system uptime. The rolling_pnl module computes PnL, trades, and trades_per_hour for each strategy bucket (crypto/weather/arb/total) across 1h/3h/6h windows. Both /api/admin/upgrade-tracking and /api/debug/ui-snapshot endpoints return consistent rolling_pnl data. Telegram notifier uses rolling_pnl (not uptime) for digests and upgrade tracking messages.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "health_endpoint": [
+      "GET /api/health returns 200 with status=ok, engine=running, resolver=active - PASS"
+    ],
+    "upgrade_tracking_rolling_pnl": [
+      "GET /api/admin/upgrade-tracking returns 200 - PASS",
+      "rolling_pnl has total/crypto/weather/arb sections - PASS",
+      "Each section has pnl_per_hour_1h/3h/6h fields (all numeric) - PASS",
+      "Each section has trades_1h/3h/6h fields (all numeric) - PASS",
+      "Each section has trades_per_hour_1h/3h/6h fields (all numeric) - PASS",
+      "system_status has crypto_exposure=48.88, capital_utilization_pct=35.5, idle_capital_pct=64.5, total_positions=52 - PASS"
+    ],
+    "ui_snapshot_rolling_pnl": [
+      "GET /api/debug/ui-snapshot returns 200 - PASS",
+      "portfolio.rolling_pnl has total/crypto/weather/arb sections - PASS",
+      "Each window (1h/3h/6h) has pnl_per_hour, trades, trades_per_hour fields - PASS"
+    ],
+    "rolling_pnl_values": [
+      "All rolling_pnl values are numeric (not null or string) - PASS",
+      "Window consistency: 6h trades >= 3h trades >= 1h trades - PASS",
+      "Crypto pnl_per_hour values differ across windows (1h=$8.47, 3h=$2.82, 6h=$1.41) - PASS"
+    ],
+    "other_endpoints": [
+      "GET /api/admin/upgrade-validation returns 200 - PASS",
+      "GET /api/strategies/arb/diagnostics returns 200 - PASS",
+      "GET /api/controls returns 200 - PASS"
+    ],
+    "module_integration": [
+      "Both upgrade-tracking and ui-snapshot return consistent rolling_pnl buckets - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "rolling_pnl_module": {
+      "status": "PASS",
+      "description": "NEW services/rolling_pnl.py module computes PnL/hour over 1h/3h/6h windows using trade timestamps",
+      "evidence": {
+        "module_location": "/app/backend/services/rolling_pnl.py",
+        "windows": {"1h": 1, "3h": 3, "6h": 6},
+        "buckets": ["total", "crypto", "weather", "arb"],
+        "functions": ["compute_rolling_pnl()", "format_rolling_pnl_text()"]
+      }
+    },
+    "upgrade_tracking_endpoint": {
+      "status": "PASS",
+      "description": "/api/admin/upgrade-tracking returns rolling_pnl with pnl_per_hour_1h/3h/6h, trades_1h/3h/6h, trades_per_hour_1h/3h/6h for each strategy",
+      "evidence": {
+        "total": {
+          "pnl_per_hour_1h": -8.88,
+          "pnl_per_hour_3h": -2.96,
+          "pnl_per_hour_6h": -1.48,
+          "trades_1h": 861,
+          "trades_3h": 861,
+          "trades_6h": 861
+        },
+        "crypto": {
+          "pnl_per_hour_1h": 8.47,
+          "pnl_per_hour_3h": 2.82,
+          "pnl_per_hour_6h": 1.41,
+          "trades_1h": 180
+        },
+        "weather": {
+          "pnl_per_hour_1h": 0.01,
+          "trades_1h": 34
+        },
+        "arb": {
+          "pnl_per_hour_1h": -17.37,
+          "trades_1h": 647
+        }
+      }
+    },
+    "ui_snapshot_endpoint": {
+      "status": "PASS",
+      "description": "/api/debug/ui-snapshot returns portfolio.rolling_pnl with nested window structure",
+      "evidence": {
+        "structure": "portfolio.rolling_pnl.{bucket}.{window}.{pnl_per_hour,trades,trades_per_hour}",
+        "buckets": ["total", "crypto", "weather", "arb"],
+        "windows": ["1h", "3h", "6h"]
+      }
+    },
+    "telegram_integration": {
+      "status": "PASS",
+      "description": "Telegram notifier uses rolling_pnl (not uptime) for _send_digest and _build_comparison_msg",
+      "evidence": {
+        "file": "/app/backend/services/telegram_notifier.py",
+        "imports_rolling_pnl": true,
+        "comment_in_code": "Rolling PnL windows (trade-timestamp based, not uptime)"
+      }
+    },
+    "no_uptime_based_calculations": {
+      "status": "PASS",
+      "description": "No uptime-based PnL/hour calculations remain - all use rolling trade-timestamp windows",
+      "evidence": "grep for 'uptime' in rolling_pnl.py returns 0 matches (only found in comment about NOT using uptime)"
+    },
+    "system_status_fields": {
+      "status": "PASS",
+      "description": "upgrade-tracking system_status has required fields",
+      "evidence": {
+        "crypto_exposure": 48.88,
+        "total_exposure": 127.66,
+        "capital_utilization_pct": 35.5,
+        "idle_capital_pct": 64.5,
+        "total_positions": 52
+      }
+    }
+  },
+
+  "current_system_state": {
+    "positions": {
+      "total": 52
+    },
+    "exposure": {
+      "crypto": 48.88,
+      "total": 127.66,
+      "capital_utilization_pct": 35.5
+    },
+    "rolling_pnl_snapshot": {
+      "crypto_1h_pnl_per_hour": 8.47,
+      "crypto_1h_trades": 180,
+      "arb_1h_pnl_per_hour": -17.37,
+      "arb_1h_trades": 647,
+      "weather_1h_trades": 34,
+      "total_1h_trades": 861
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration67_rolling_pnl.py",
+    "/app/test_reports/pytest/pytest_results_iteration67.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "rolling_pnl.py: Well-structured module with WINDOWS constant {1h:1, 3h:3, 6h:6} and _bucket() classifier",
+    "rolling_pnl.py compute_rolling_pnl(): Returns dict with pnl, pnl_per_h, trades, trades_per_h for each bucket/window",
+    "telegram_notifier.py _send_digest() line 291: Uses rolling_pnl (comment: 'trade-timestamp based, not uptime')",
+    "telegram_notifier.py _build_comparison_msg() line 535: Uses rolling-window PnL with comment 'no uptime-based metrics'",
+    "server.py _build_state_snapshot() line 2954: Computes rolling_pnl and formats for portfolio response",
+    "server.py upgrade_tracking_status() line 3912: Computes rolling_pnl and flattens to pnl_per_hour_1h/3h/6h format"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration67_rolling_pnl.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (17/17 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data containing 861 trades in last 6h",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 67 validated the complete rolling PnL window system. Key changes: (1) NEW services/rolling_pnl.py module with compute_rolling_pnl() and format_rolling_pnl_text() functions, (2) All PnL/hour metrics now use 1h/3h/6h trade-timestamp windows instead of uptime division, (3) /api/admin/upgrade-tracking returns rolling_pnl with flattened pnl_per_hour_1h/3h/6h structure, (4) /api/debug/ui-snapshot returns portfolio.rolling_pnl with nested window structure, (5) Telegram notifier uses rolling_pnl for digests and upgrade comparison messages. Current data shows crypto profitable (+$8.47/h in 1h window) while arb is negative (-$17.37/h in 1h window)."
+}

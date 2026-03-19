@@ -278,25 +278,18 @@ class TelegramNotifier:
             await asyncio.sleep(3 * 3600)  # 3 hours
 
     async def _send_digest(self):
-        """Build and send a structured system performance digest."""
+        """Build and send a structured system performance digest with rolling PnL windows."""
         if not self.enabled or not self._state:
             return
 
         from engine.risk import classify_strategy
+        from services.rolling_pnl import compute_rolling_pnl, format_rolling_pnl_text
 
         state = self._state
         cfg = state.risk_config
 
-        # PnL by strategy
-        pnl_map = {}
-        trade_count_map = {}
-        for t in state.trades:
-            sid = t.strategy_id or "unknown"
-            bucket = "crypto" if "crypto" in sid or "sniper" in sid else \
-                     "weather" if "weather" in sid else \
-                     "arb" if "arb" in sid else "other"
-            pnl_map[bucket] = pnl_map.get(bucket, 0) + t.pnl
-            trade_count_map[bucket] = trade_count_map.get(bucket, 0) + 1
+        # Rolling PnL windows (trade-timestamp based, not uptime)
+        rolling = compute_rolling_pnl(state.trades)
 
         # Position counts and exposure by strategy
         pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
@@ -310,7 +303,7 @@ class TelegramNotifier:
             exposure[bucket] = exposure.get(bucket, 0) + exp
             unrealized[bucket] = unrealized.get(bucket, 0) + (pos.current_price - pos.avg_cost) * pos.size
 
-        total_realized = sum(pnl_map.values())
+        total_realized = sum(t.pnl for t in state.trades if t.pnl)
         total_unrealized = sum(unrealized.values())
         total_exposure = sum(exposure.values())
         total_positions = sum(pos_counts.values())
@@ -339,10 +332,8 @@ class TelegramNotifier:
             f"Exposure: ${total_exposure:.0f} / ${cfg.max_market_exposure:.0f} ({total_exposure/max(cfg.max_market_exposure,1)*100:.0f}%)",
             f"Positions: {total_positions} / {cfg.max_concurrent_positions}",
             "",
-            "<b>By Strategy:</b>",
-            f"  CRYPTO: ${pnl_map.get('crypto',0):+.2f} | {pos_counts.get('crypto',0)} pos | ${exposure.get('crypto',0):.0f} exp",
-            f"  WEATHER: ${pnl_map.get('weather',0):+.2f} | {pos_counts.get('weather',0)} pos | ${exposure.get('weather',0):.0f} exp",
-            f"  ARB: ${pnl_map.get('arb',0):+.2f} | {pos_counts.get('arb',0)} pos | ${exposure.get('arb',0):.0f} exp",
+            "<b>=== PnL/hour (rolling windows) ===</b>",
+            format_rolling_pnl_text(rolling),
             "",
             f"Arb: {arb_opps} opps | {arb_exec} executed",
             f"Weather exits: {exit_candidates} candidates",
@@ -491,9 +482,11 @@ class TelegramNotifier:
                 logger.warning(f"[UPGRADE-TRACK] Error: {e}")
 
     def _compute_current_metrics(self, deploy_time):
-        """Compute incremental metrics since deployment for comparison."""
+        """Compute current metrics using rolling trade-timestamp windows."""
         if not self._state:
             return None
+
+        from services.rolling_pnl import compute_rolling_pnl
         from engine.risk import classify_strategy
 
         bl = getattr(self, "_upgrade_baseline", None)
@@ -504,16 +497,10 @@ class TelegramNotifier:
         elapsed_s = time.time() - bl["deploy_time_unix"]
         elapsed_h = max(elapsed_s / 3600, 0.01)
 
-        pnl_map = {}
-        trade_count_map = {}
-        for t in state.trades:
-            sid = t.strategy_id or "unknown"
-            bucket = "crypto" if "crypto" in sid or "sniper" in sid else \
-                     "weather" if "weather" in sid else \
-                     "arb" if "arb" in sid else "other"
-            pnl_map[bucket] = pnl_map.get(bucket, 0) + t.pnl
-            trade_count_map[bucket] = trade_count_map.get(bucket, 0) + 1
+        # Rolling PnL windows (trade-timestamp based)
+        rolling = compute_rolling_pnl(state.trades)
 
+        # Current exposure
         exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
         pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
         for pos in state.positions.values():
@@ -521,16 +508,9 @@ class TelegramNotifier:
             pos_counts[bucket] = pos_counts.get(bucket, 0) + 1
             exposure[bucket] = exposure.get(bucket, 0) + pos.size * (pos.current_price or pos.avg_cost or 0)
 
-        total_realized = sum(pnl_map.values())
         total_exposure = sum(exposure.values())
 
-        # Incremental = current absolute - baseline absolute
-        incr_pnl = total_realized - bl["abs_total_realized"]
-        incr_crypto_pnl = pnl_map.get("crypto", 0) - bl["abs_crypto_realized"]
-        incr_trades = sum(trade_count_map.values()) - bl["abs_total_trades"]
-        incr_crypto_trades = trade_count_map.get("crypto", 0) - bl["abs_crypto_trades"]
-
-        # Crypto scan health
+        # Crypto scan health (exec rate)
         crypto_ref = self._strategy_refs.get("crypto")
         crypto_exec_rate = 0
         if crypto_ref:
@@ -542,17 +522,8 @@ class TelegramNotifier:
 
         return {
             "elapsed_h": round(elapsed_h, 2),
-            # Incremental rates (post-upgrade performance only)
-            "incr_pnl": round(incr_pnl, 2),
-            "incr_pnl_per_h": round(incr_pnl / elapsed_h, 2),
-            "incr_crypto_pnl": round(incr_crypto_pnl, 2),
-            "incr_crypto_pnl_per_h": round(incr_crypto_pnl / elapsed_h, 2),
-            "incr_trades": incr_trades,
-            "incr_trades_per_h": round(incr_trades / elapsed_h, 0),
-            "incr_crypto_trades": incr_crypto_trades,
-            "incr_crypto_trades_per_h": round(incr_crypto_trades / elapsed_h, 0),
+            "rolling": rolling,
             "crypto_exec_rate": round(crypto_exec_rate, 2),
-            # Current snapshot
             "crypto_exposure": round(exposure.get("crypto", 0), 2),
             "total_exposure": round(total_exposure, 2),
             "total_positions": sum(pos_counts.values()),
@@ -561,62 +532,37 @@ class TelegramNotifier:
         }
 
     def _build_comparison_msg(self, baseline, current, elapsed_h, is_final):
-        """Build a comparison message using incremental post-upgrade metrics vs pre-upgrade baseline."""
+        """Build comparison message using rolling-window PnL (no uptime-based metrics)."""
+        from services.rolling_pnl import format_rolling_pnl_text
+
         ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
         header = "UPGRADE IMPACT REPORT (FINAL)" if is_final else "SYSTEM PERFORMANCE UPDATE"
 
-        # Pre-upgrade rates (from the audit snapshot)
-        pre_pnl_h = baseline["pre_upgrade_pnl_per_h"]
-        pre_crypto_h = baseline["pre_upgrade_crypto_pnl_per_h"]
-        pre_trades_h = baseline["pre_upgrade_trades_per_h"]
-        pre_exec_rate = baseline["pre_upgrade_exec_rate"]
-        pre_cap_util = baseline["pre_upgrade_cap_util_pct"]
-
-        # Post-upgrade rates (incremental since deployment)
-        post_pnl_h = current["incr_pnl_per_h"]
-        post_crypto_h = current["incr_crypto_pnl_per_h"]
-        post_trades_h = current["incr_crypto_trades_per_h"]
-        post_exec_rate = current["crypto_exec_rate"]
-        post_cap_util = current["capital_utilization_pct"]
-
-        # Deltas
-        d_pnl_h = post_pnl_h - pre_pnl_h
-        d_crypto_h = post_crypto_h - pre_crypto_h
-        d_trades_h = post_trades_h - pre_trades_h
-        pct_pnl = d_pnl_h / max(abs(pre_pnl_h), 0.01) * 100
-        pct_crypto = d_crypto_h / max(abs(pre_crypto_h), 0.01) * 100
+        rolling = current.get("rolling", {})
 
         lines = [
             f"<b>{header}</b> {ts}",
             f"Time since upgrade: {elapsed_h:.1f}h",
             "",
-            "<b>CRYPTO (post-upgrade):</b>",
-            f"  PnL/hour: ${post_crypto_h:.2f}/h (was ${pre_crypto_h:.0f}/h)",
-            f"  Trades: {current['incr_crypto_trades']:,d} ({post_trades_h:.0f}/h)",
-            f"  Exec rate: {post_exec_rate:.2f}%",
-            f"  Exposure: ${current['crypto_exposure']:.0f}",
+            "<b>=== PERFORMANCE SNAPSHOT ===</b>",
             "",
-            "<b>SYSTEM (post-upgrade):</b>",
-            f"  Total PnL/hour: ${post_pnl_h:.2f}/h (was ${pre_pnl_h:.0f}/h)",
-            f"  Total new PnL: ${current['incr_pnl']:.2f}",
-            f"  Capital utilization: {post_cap_util:.0f}%",
+            format_rolling_pnl_text(rolling),
+            "",
+            "<b>SYSTEM STATUS:</b>",
+            f"  Crypto exposure: ${current['crypto_exposure']:.0f}",
+            f"  Capital utilization: {current['capital_utilization_pct']:.0f}%",
             f"  Idle capital: {current['idle_capital_pct']:.0f}%",
-            "",
-            "<b>vs PRE-UPGRADE BASELINE:</b>",
-            f"  PnL/h: ${pre_pnl_h:.0f} -> ${post_pnl_h:.2f} ({pct_pnl:+.1f}%)",
-            f"  Crypto/h: ${pre_crypto_h:.0f} -> ${post_crypto_h:.2f} ({pct_crypto:+.1f}%)",
-            f"  Trades/h: {pre_trades_h:.0f} -> {post_trades_h:.0f} ({d_trades_h:+.0f})",
-            f"  Exec rate: {pre_exec_rate:.2f}% -> {post_exec_rate:.2f}%",
-            f"  Cap util: {pre_cap_util:.0f}% -> {post_cap_util:.0f}%",
+            f"  Crypto exec rate: {current['crypto_exec_rate']:.2f}%",
         ]
 
         # Warnings
         warnings = []
-        if post_trades_h > pre_trades_h * 3:
-            warnings.append("OVERTRADING: Trades/h >3x baseline")
-        if post_crypto_h < pre_crypto_h * 0.5 and elapsed_h > 1:
-            warnings.append("DRAWDOWN: Crypto PnL/h dropped >50%")
-        if post_cap_util > 95:
+        crypto_1h = rolling.get("crypto", {}).get("1h", {})
+        if crypto_1h.get("trades_per_h", 0) > 5000:
+            warnings.append("OVERTRADING: Crypto >5000 trades/h")
+        if crypto_1h.get("pnl_per_h", 0) < -50 and elapsed_h > 1:
+            warnings.append(f"DRAWDOWN: Crypto -${abs(crypto_1h['pnl_per_h']):.2f}/h in last hour")
+        if current["capital_utilization_pct"] > 95:
             warnings.append("EXPOSURE: Capital util >95%")
 
         if warnings:
@@ -630,12 +576,12 @@ class TelegramNotifier:
 
         if is_final:
             lines.append("")
-            improved = pct_pnl > 0
-            lines.append(f"<b>VERDICT:</b> {'Performance IMPROVED' if improved else 'Performance DECLINED or FLAT'}")
-            lines.append(f"  PnL delta: {pct_pnl:+.1f}%")
-            lines.append(f"  New PnL generated: ${current['incr_pnl']:.2f} in {elapsed_h:.1f}h")
-            if not improved and elapsed_h > 3:
-                lines.append("  Consider reviewing filter changes.")
+            total_6h = rolling.get("total", {}).get("6h", {})
+            pnl_6h = total_6h.get("pnl_per_h", 0)
+            lines.append("<b>VERDICT:</b>")
+            lines.append(f"  6h average PnL/hour: ${pnl_6h:.2f}/h")
+            lines.append(f"  6h total PnL: ${total_6h.get('pnl', 0):.2f}")
+            lines.append(f"  6h total trades: {total_6h.get('trades', 0)}")
 
         return "\n".join(lines)
 

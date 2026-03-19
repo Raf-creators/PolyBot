@@ -2950,6 +2950,10 @@ def _build_state_snapshot():
     except Exception:
         pass
 
+    # Rolling PnL windows (trade-timestamp based, not uptime)
+    from services.rolling_pnl import compute_rolling_pnl
+    rolling_pnl = compute_rolling_pnl(state.trades)
+
     portfolio = {
         "total_capital_deployed": round(total_capital, 4),
         "total_unrealized_pnl": round(total_unrealized, 4),
@@ -2957,6 +2961,17 @@ def _build_state_snapshot():
         "total_pnl": round(total_realized + total_unrealized, 4),
         "total_trades": len(state.trades),
         "open_positions": len(state.positions),
+        "rolling_pnl": {
+            bucket: {
+                window: {
+                    "pnl_per_hour": data.get("pnl_per_h", 0),
+                    "trades": data.get("trades", 0),
+                    "trades_per_hour": data.get("trades_per_h", 0),
+                }
+                for window, data in windows.items()
+            }
+            for bucket, windows in rolling_pnl.items()
+        },
         "capital_allocation": {
             k: {
                 "capital_deployed": round(capital_by_strat.get(k, 0), 4),
@@ -3888,48 +3903,53 @@ async def upgrade_validation_summary():
 
 @api_router.get("/admin/upgrade-tracking")
 async def upgrade_tracking_status():
-    """Live before/after comparison of the current upgrade."""
-    if not telegram_notifier:
-        raise HTTPException(500, "Telegram notifier not initialized")
+    """Live before/after comparison with rolling-window PnL metrics."""
+    if not state:
+        raise HTTPException(500, "State not initialized")
 
-    bl = getattr(telegram_notifier, "_upgrade_baseline", None)
-    if not bl:
-        return {"status": "no_baseline", "message": "No upgrade baseline captured yet"}
+    from services.rolling_pnl import compute_rolling_pnl
 
-    current = telegram_notifier._compute_current_metrics(None)
-    if not current:
-        return {"status": "no_state", "baseline": bl}
+    rolling = compute_rolling_pnl(state.trades)
 
-    # Pre-upgrade rates vs post-upgrade incremental rates
-    pre_pnl_h = bl["pre_upgrade_pnl_per_h"]
-    post_pnl_h = current["incr_pnl_per_h"]
-    pct_change = (post_pnl_h - pre_pnl_h) / max(abs(pre_pnl_h), 0.01) * 100
+    # Flatten for API response
+    def _flatten_rolling(r: dict, bucket: str) -> dict:
+        b = r.get(bucket, {})
+        return {
+            f"pnl_per_hour_{w}": b.get(w, {}).get("pnl_per_h", 0)
+            for w in ["1h", "3h", "6h"]
+        } | {
+            f"trades_{w}": b.get(w, {}).get("trades", 0)
+            for w in ["1h", "3h", "6h"]
+        } | {
+            f"trades_per_hour_{w}": b.get(w, {}).get("trades_per_h", 0)
+            for w in ["1h", "3h", "6h"]
+        }
+
+    from engine.risk import classify_strategy
+
+    # Current exposure
+    exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+    for pos in state.positions.values():
+        bucket = classify_strategy(pos)
+        exposure[bucket] = exposure.get(bucket, 0) + pos.size * (pos.current_price or pos.avg_cost or 0)
+
+    total_exposure = sum(exposure.values())
+    cap_util = round(total_exposure / max(state.risk_config.max_market_exposure, 1) * 100, 1)
 
     return {
         "status": "tracking",
-        "baseline_pre_upgrade": {
-            "pnl_per_h": bl["pre_upgrade_pnl_per_h"],
-            "crypto_pnl_per_h": bl["pre_upgrade_crypto_pnl_per_h"],
-            "trades_per_h": bl["pre_upgrade_trades_per_h"],
-            "exec_rate": bl["pre_upgrade_exec_rate"],
-            "cap_util_pct": bl["pre_upgrade_cap_util_pct"],
+        "rolling_pnl": {
+            "total": _flatten_rolling(rolling, "total"),
+            "crypto": _flatten_rolling(rolling, "crypto"),
+            "weather": _flatten_rolling(rolling, "weather"),
+            "arb": _flatten_rolling(rolling, "arb"),
         },
-        "post_upgrade": {
-            "elapsed_h": current["elapsed_h"],
-            "incr_pnl": current["incr_pnl"],
-            "pnl_per_h": current["incr_pnl_per_h"],
-            "crypto_pnl_per_h": current["incr_crypto_pnl_per_h"],
-            "trades": current["incr_trades"],
-            "trades_per_h": current["incr_trades_per_h"],
-            "crypto_trades_per_h": current["incr_crypto_trades_per_h"],
-            "exec_rate": current["crypto_exec_rate"],
-            "cap_util_pct": current["capital_utilization_pct"],
-            "idle_pct": current["idle_capital_pct"],
-        },
-        "deltas": {
-            "pnl_per_h_change": round(post_pnl_h - pre_pnl_h, 2),
-            "pnl_pct_change": round(pct_change, 1),
-            "trades_per_h_change": round(current["incr_crypto_trades_per_h"] - bl["pre_upgrade_trades_per_h"], 0),
+        "system_status": {
+            "crypto_exposure": round(exposure.get("crypto", 0), 2),
+            "total_exposure": round(total_exposure, 2),
+            "capital_utilization_pct": cap_util,
+            "idle_capital_pct": round(100 - cap_util, 1),
+            "total_positions": len(state.positions),
         },
     }
 
