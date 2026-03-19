@@ -42,33 +42,38 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 - Trade-by-trade notifications (existing)
 - Upgrade tracking (2h intervals, final at 6h)
 
+### Stale Arb Cleanup Cron
+- Runs every 4 hours
+- Closes arb positions older than 48h with negative/zero unrealized PnL
+- Records close trades in MongoDB
+- Sends Telegram notification on cleanup
+
 ## What Has Been Implemented
 1. Complete multi-strategy trading engine (crypto, weather, arb)
 2. Rolling PnL window system (1h, 3h, 6h from actual trade timestamps)
-3. Comprehensive Telegram notification system
+3. Comprehensive Telegram notification system (bihourly + hourly + trade alerts)
 4. Risk engine with per-strategy exposure caps and position limits
 5. Market resolver service with auto-resolution
 6. Weather calibration system with 17 historical stations
 7. Forensic rollback configuration (Mar 19 2026)
+8. Stale arb position cleanup cron (Mar 19 2026)
 
 ## Testing Status
 - iteration_68.json: Forensic Rollback — 18/18 passed (100%)
-- All config values verified against forensic recommendations
-- Telegram sending 200 OK
-- All strategies running
+- Stale arb cleanup verified: service running, trade data accessible
 
 ## Backlog
 
 ### P1 — Next Up
-- Monitor forensic rollback performance (2h, 6h checkpoints)
-- Implement cron job for stale arb position cleanup (>48h, negative PnL)
-- Force-close legacy arb positions once they go stale enough
+- Monitor forensic rollback performance (2h, 6h checkpoints via Telegram)
+- Confirm crypto PnL/h recovery toward $20-56/h range
 
-### P2 — Planned
+### P2 — Planned (DO NOT IMPLEMENT YET — isolate rollback impact first)
 - Add real-time weather observations API for near-resolution markets
 - Add Coinbase WebSocket as second crypto feed (redundancy + VWAP)
 - Add second forecast source for weather cross-validation
 - Re-evaluate asymmetric weather mode after base performance stabilizes
+- Regime detection system for auto position sizing
 
 ### P3 — Future
 - Add XRP/SOL price feeds for alt-coin markets

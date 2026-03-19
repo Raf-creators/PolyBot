@@ -58,6 +58,7 @@ from services.rolling_calibration_service import RollingCalibrationService
 from services.liquidity_service import LiquidityService
 from services.auto_resolver_service import AutoResolverService
 from services.market_resolver_service import MarketResolverService
+from services.stale_arb_cleanup import StaleArbCleanupService
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -77,6 +78,7 @@ weather_alert_service: Optional[WeatherAlertService] = None
 rolling_calibration_service: Optional[RollingCalibrationService] = None
 auto_resolver_service: Optional[AutoResolverService] = None
 market_resolver_service: Optional[MarketResolverService] = None
+stale_arb_cleanup: Optional[StaleArbCleanupService] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -187,7 +189,7 @@ async def _notify_trade_closed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, ws_broadcast_task
     global _server_start_time, _git_commit, _build_info, _trades_loaded_from_db
 
     # Diagnostics — capture at boot
@@ -305,6 +307,14 @@ async def lifespan(app: FastAPI):
         on_trade_closed=_notify_trade_closed,
     )
     await market_resolver_service.start(state, bus)
+
+    # Stale arb position cleanup cron
+    stale_arb_cleanup = StaleArbCleanupService(
+        state=state,
+        db=db,
+        telegram_notifier=telegram_notifier,
+    )
+    await stale_arb_cleanup.start()
 
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
@@ -594,6 +604,8 @@ async def lifespan(app: FastAPI):
         await auto_resolver_service.stop()
     if market_resolver_service:
         await market_resolver_service.stop()
+    if stale_arb_cleanup:
+        await stale_arb_cleanup.stop()
     mongo_client.close()
 
 
@@ -2790,6 +2802,8 @@ async def get_global_analytics():
     # Inject auto-resolver health
     if auto_resolver_service:
         report["auto_resolver"] = auto_resolver_service.health
+    if stale_arb_cleanup:
+        report["stale_arb_cleanup"] = stale_arb_cleanup.health
     return report
 
 
