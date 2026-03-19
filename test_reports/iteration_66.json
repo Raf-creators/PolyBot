@@ -1,0 +1,191 @@
+{
+  "summary": "Iteration 66: FULL PROFITABILITY UPGRADE validation COMPLETE. All 25 backend tests passed. Verified all upgrade changes: (1) opposite_side_held filter REMOVED from crypto_sniper (not in rejection_reasons), (2) crypto_max_exposure=180 (up from 120), (3) max_position_size=40 (up from 25), (4) max_tte_seconds=43200 (12h, up from 8h), (5) Weather auto_exit for NEGATIVE_EDGE + TIME_INEFFICIENCY verified in shadow_exit_counts, (6) min_edge_bps_long=500 (down from 700), (7) Arb positions cleaned (<$0.50) - current count=19 (<25), (8) hard_max_stale_seconds=2400 (up from 1800) + staleness_per_minute_bps=6 (up from 5), (9) asymmetric_enabled=False (disabled), (10) Telegram upgrade tracking active with baseline capture and periodic comparison.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "health_endpoint": [
+      "GET /api/health returns 200 with status=ok - PASS"
+    ],
+    "upgrade_validation_endpoint": [
+      "GET /api/admin/upgrade-validation returns 200 - PASS",
+      "crypto_max_exposure = 180.0 (upgraded from 120) - PASS",
+      "opposite_side_held NOT in crypto rejection_reasons - PASS",
+      "weather_lifecycle.mode = shadow_exit - PASS",
+      "weather_asymmetric.signals_generated = 0 (disabled) - PASS",
+      "shadow_exit_counts includes negative_edge and time_inefficiency - PASS"
+    ],
+    "controls_endpoint": [
+      "GET /api/controls returns 200 - PASS",
+      "max_position_size = 40 (upgraded from 25) - PASS",
+      "exposure_caps.crypto = 180 - PASS"
+    ],
+    "arb_diagnostics_endpoint": [
+      "GET /api/strategies/arb/diagnostics returns 200 - PASS",
+      "hard_max_stale_seconds = 2400 (upgraded from 1800) - PASS",
+      "staleness_edge_per_minute_bps = 6 (upgraded from 5) - PASS",
+      "min_net_edge_bps = 15 (absolute floor) - PASS"
+    ],
+    "arb_opportunities_endpoint": [
+      "GET /api/strategies/arb/opportunities returns tradable/rejected lists - PASS"
+    ],
+    "upgrade_tracking_endpoint": [
+      "GET /api/admin/upgrade-tracking returns 200 - PASS",
+      "status = tracking - PASS",
+      "baseline_pre_upgrade: pnl_per_h=161, crypto_pnl_per_h=160, trades_per_h=1721 - PASS",
+      "post_upgrade: elapsed_h, incr_pnl, pnl_per_h, trades, exec_rate fields present - PASS",
+      "deltas: pnl_per_h_change and pnl_pct_change fields present - PASS"
+    ],
+    "arb_position_cleanup": [
+      "Arb position count = 19 (< 25, tiny positions cleaned) - PASS"
+    ],
+    "strategy_configs": [
+      "crypto_sniper.max_tte_seconds = 43200 (12h) - PASS",
+      "weather_trader.asymmetric_enabled = False - PASS",
+      "weather_trader.min_edge_bps_long = 500 (down from 700) - PASS",
+      "weather_trader.lifecycle_mode = shadow_exit - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "opposite_side_held_filter_removed": {
+      "status": "PASS",
+      "description": "Crypto sniper no longer rejects signals due to opposite_side_held",
+      "evidence": "opposite_side_held NOT in crypto_health.rejection_reasons (only: insufficient_vol_data, tte)"
+    },
+    "crypto_max_exposure_increased": {
+      "status": "PASS",
+      "description": "crypto_max_exposure increased from 120 to 180",
+      "evidence": "capital_allocation.crypto_max_exposure = 180.0"
+    },
+    "max_position_size_increased": {
+      "status": "PASS",
+      "description": "max_position_size increased from 25 to 40",
+      "evidence": "controls.max_position_size = 40.0"
+    },
+    "max_tte_seconds_increased": {
+      "status": "PASS",
+      "description": "crypto sniper max_tte_seconds increased from 28800 (8h) to 43200 (12h)",
+      "evidence": "config/strategies.crypto_sniper.max_tte_seconds = 43200.0"
+    },
+    "weather_auto_exit_expanded": {
+      "status": "PASS",
+      "description": "Weather auto_exit now triggers for NEGATIVE_EDGE and TIME_INEFFICIENCY",
+      "evidence": {
+        "shadow_exit_counts_by_reason": {
+          "negative_edge": 1,
+          "time_inefficiency": 1
+        }
+      }
+    },
+    "min_edge_bps_long_reduced": {
+      "status": "PASS",
+      "description": "Weather min_edge_bps_long reduced from 700 to 500",
+      "evidence": "config/strategies.weather_trader.min_edge_bps_long = 500.0"
+    },
+    "arb_tiny_positions_cleaned": {
+      "status": "PASS",
+      "description": "Arb positions <$0.50 force-cleaned on startup",
+      "evidence": "arb_position_count = 19 (< 25 limit)"
+    },
+    "arb_staleness_thresholds_increased": {
+      "status": "PASS",
+      "description": "hard_max_stale_seconds increased from 1800 to 2400, staleness_per_minute_bps from 5 to 6",
+      "evidence": {
+        "hard_max_stale_seconds": 2400.0,
+        "staleness_edge_per_minute_bps": 6.0
+      }
+    },
+    "asymmetric_strategy_disabled": {
+      "status": "PASS",
+      "description": "Weather asymmetric strategy disabled (asymmetric_enabled=False)",
+      "evidence": {
+        "asymmetric_enabled": false,
+        "signals_generated": 0,
+        "all_candidates_rejected_as_disabled": true
+      }
+    },
+    "telegram_upgrade_tracking_active": {
+      "status": "PASS",
+      "description": "Telegram upgrade tracking system active with baseline and post-upgrade comparison",
+      "evidence": {
+        "status": "tracking",
+        "baseline_pre_upgrade": {
+          "pnl_per_h": 161.0,
+          "crypto_pnl_per_h": 160.0,
+          "trades_per_h": 1721.0
+        },
+        "post_upgrade_has_metrics": true,
+        "deltas_has_change_fields": true
+      }
+    }
+  },
+
+  "current_system_state": {
+    "positions": {
+      "weather": 6,
+      "crypto": 8,
+      "arb": 19,
+      "total": 33
+    },
+    "exposure": {
+      "weather": 0.55,
+      "crypto": 57.58,
+      "arb": 53.89,
+      "total": 112.02
+    },
+    "pnl_by_strategy": {
+      "crypto_sniper": 172.17,
+      "arb_scanner": 72.73,
+      "weather_trader": -0.16
+    },
+    "arb_health": {
+      "executed_count": 2,
+      "multi_executed": 2,
+      "trades_per_hour": 57.07,
+      "avg_realized_edge_bps": 673.5
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration66_profitability_upgrade.py",
+    "/app/test_reports/pytest/pytest_results_iteration66.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "server.py line 495-548: Startup upgrade tracking with baseline capture, arb cleanup, and deployment notification working correctly",
+    "telegram_notifier.py line 366-645: Upgrade tracking system with capture_baseline(), send_upgrade_deployed(), _upgrade_tracking_loop() implemented",
+    "crypto_sniper.py line 826: opposite_side_held filter confirmed REMOVED (comment indicates removal)",
+    "sniper_models.py line 27: max_tte_seconds = 43200 (12h)",
+    "weather_models.py line 128: min_edge_bps_long = 500, line 143: asymmetric_enabled = False, line 154: lifecycle_mode = shadow_exit",
+    "arb_models.py: hard_max_stale_seconds = 2400, staleness_edge_per_minute_bps = 6"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration66_profitability_upgrade.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (25/25 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 66 validated the complete profitability upgrade rollout. All 10 config/feature changes verified: (1) opposite_side_held filter removed, (2) crypto_max_exposure=180, (3) max_position_size=40, (4) max_tte_seconds=43200, (5) weather auto_exit for negative_edge+time_inefficiency, (6) min_edge_bps_long=500, (7) tiny arb cleanup, (8) hard_max_stale=2400 + staleness_per_min=6, (9) asymmetric disabled, (10) Telegram upgrade tracking active. The upgrade tracking system shows baseline vs post-upgrade metrics and will send periodic updates (2h intervals) and final report (6h). Current crypto rejection reasons: insufficient_vol_data (600), tte (25) - no opposite_side_held."
+}

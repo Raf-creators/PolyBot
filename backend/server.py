@@ -10,6 +10,7 @@ import json as _json
 import os
 import logging
 import subprocess
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Set
@@ -368,18 +369,35 @@ async def lifespan(app: FastAPI):
             arb_scanner_ref.config.min_net_edge_bps = 15.0
             upgrade_applied = True
         # Ensure dynamic threshold params are set (upgrade from flat thresholds)
-        if arb_scanner_ref and arb_scanner_ref.config.hard_max_stale_seconds < 1800.0:
-            arb_scanner_ref.config.hard_max_stale_seconds = 1800.0
+        if arb_scanner_ref and arb_scanner_ref.config.hard_max_stale_seconds < 2400.0:
+            arb_scanner_ref.config.hard_max_stale_seconds = 2400.0
+            upgrade_applied = True
+        if arb_scanner_ref and arb_scanner_ref.config.staleness_edge_per_minute_bps < 6.0:
+            arb_scanner_ref.config.staleness_edge_per_minute_bps = 6.0
             upgrade_applied = True
 
-        # 3. Weather: lifecycle to shadow_exit, lower asymmetric filter
+        # 3. Weather: lifecycle to shadow_exit, disable asymmetric, lower long-hold edge
         if weather_trader_ref:
             if weather_trader_ref.config.lifecycle_mode != "shadow_exit":
                 weather_trader_ref.config.lifecycle_mode = "shadow_exit"
                 upgrade_applied = True
-            if weather_trader_ref.config.asymmetric_min_model_prob > 0.20:
-                weather_trader_ref.config.asymmetric_min_model_prob = 0.20
+            if weather_trader_ref.config.asymmetric_enabled:
+                weather_trader_ref.config.asymmetric_enabled = False
                 upgrade_applied = True
+            if weather_trader_ref.config.min_edge_bps_long > 500.0:
+                weather_trader_ref.config.min_edge_bps_long = 500.0
+                upgrade_applied = True
+
+        # 4. Crypto: expand caps
+        if state.risk_config.max_position_size < 40.0:
+            state.risk_config.max_position_size = 40.0
+            upgrade_applied = True
+        if state.risk_config.crypto_max_exposure < 180.0:
+            state.risk_config.crypto_max_exposure = 180.0
+            upgrade_applied = True
+        if crypto_sniper_ref and crypto_sniper_ref.config.max_tte_seconds < 43200.0:
+            crypto_sniper_ref.config.max_tte_seconds = 43200.0
+            upgrade_applied = True
 
         if upgrade_applied:
             # Persist the upgraded config
@@ -473,6 +491,63 @@ async def lifespan(app: FastAPI):
             adapter.set_fill_ws(clob_fill_ws_client)
             clob_fill_ws_client._fill_callback = adapter.on_ws_fill
         logger.info("Engine auto-started — all strategies and feeds active")
+
+    # ---- UPGRADE TRACKING: Capture baseline, cleanup arb, send deploy notification ----
+    try:
+        # 1. Capture baseline before upgrade effects take hold
+        if telegram_notifier:
+            telegram_notifier.capture_baseline()
+
+        # 2. Force-resolve tiny arb positions (<$0.50) to free slots
+        tiny_arb_cleaned = 0
+        for tid, pos in list(state.positions.items()):
+            if pos.strategy_id == "arb_scanner" and pos.size * (pos.avg_cost or 0) < 0.50:
+                # Mark as resolved with zero value
+                pos.current_price = 0.0
+                if hasattr(pos, "is_resolved"):
+                    pos.is_resolved = True
+                state.positions.pop(tid, None)
+                # Record as a trade for bookkeeping
+                from models import TradeRecord
+                close_trade = TradeRecord(
+                    id=str(uuid.uuid4()),
+                    order_id=f"cleanup-{str(uuid.uuid4())[:8]}",
+                    token_id=tid,
+                    side="sell",
+                    price=pos.current_price or 0.01,
+                    size=pos.size,
+                    strategy_id="arb_scanner",
+                    market_question=pos.market_question or "",
+                    outcome=getattr(pos, "outcome", ""),
+                    signal_reason="upgrade_cleanup_tiny_position",
+                    pnl=-(pos.size * pos.avg_cost),  # total loss of invested capital
+                )
+                state.trades.append(close_trade)
+                await db.trades.insert_one({k: v for k, v in close_trade.model_dump().items() if k != "_id"})
+                await db.positions.delete_one({"token_id": tid})
+                tiny_arb_cleaned += 1
+
+        if tiny_arb_cleaned:
+            logger.info(f"[UPGRADE] Cleaned {tiny_arb_cleaned} tiny arb positions (<$0.50) to free slots")
+
+        # 3. Send upgrade deployed notification
+        if telegram_notifier:
+            changes = [
+                "Removed opposite_side_held filter for crypto",
+                "crypto_max_exposure: $120 -> $180",
+                "max_position_size: 25 -> 40 shares",
+                "max_tte_seconds: 8h -> 12h",
+                "Weather auto_exit: +negative_edge, +time_inefficiency",
+                "Weather min_edge_bps_long: 700 -> 500",
+                f"Arb: cleaned {tiny_arb_cleaned} tiny positions (<$0.50)",
+                "Arb: hard_max_stale: 1800s -> 2400s",
+                "Disabled asymmetric strategy",
+            ]
+            telegram_notifier.send_upgrade_deployed(changes)
+            telegram_notifier.start_upgrade_tracking()
+
+    except Exception as e:
+        logger.warning(f"[UPGRADE-TRACK] Baseline/cleanup error: {e}")
 
     yield
 
@@ -2116,7 +2191,7 @@ async def get_weather_by_market_type():
         unrealized = round(data.get("unrealized_pnl", 0), 4)
         closes = data["close_count"]
         w = data["wins"]
-        l = data["losses"]
+        losses = data["losses"]
         result[mt] = {
             "buy_count": data["buy_count"],
             "close_count": closes,
@@ -2126,8 +2201,8 @@ async def get_weather_by_market_type():
             "unrealized_pnl": unrealized,
             "total_pnl": round(realized + unrealized, 4),
             "wins": w,
-            "losses": l,
-            "win_rate": round(w / max(w + l, 1) * 100, 1),
+            "losses": losses,
+            "win_rate": round(w / max(w + losses, 1) * 100, 1),
         }
 
     return result
@@ -3807,6 +3882,54 @@ async def upgrade_validation_summary():
             "max_crypto_positions": cfg.max_crypto_positions,
             "max_weather_positions": cfg.max_weather_positions,
             "max_concurrent_positions": cfg.max_concurrent_positions,
+        },
+    }
+
+
+@api_router.get("/admin/upgrade-tracking")
+async def upgrade_tracking_status():
+    """Live before/after comparison of the current upgrade."""
+    if not telegram_notifier:
+        raise HTTPException(500, "Telegram notifier not initialized")
+
+    bl = getattr(telegram_notifier, "_upgrade_baseline", None)
+    if not bl:
+        return {"status": "no_baseline", "message": "No upgrade baseline captured yet"}
+
+    current = telegram_notifier._compute_current_metrics(None)
+    if not current:
+        return {"status": "no_state", "baseline": bl}
+
+    # Pre-upgrade rates vs post-upgrade incremental rates
+    pre_pnl_h = bl["pre_upgrade_pnl_per_h"]
+    post_pnl_h = current["incr_pnl_per_h"]
+    pct_change = (post_pnl_h - pre_pnl_h) / max(abs(pre_pnl_h), 0.01) * 100
+
+    return {
+        "status": "tracking",
+        "baseline_pre_upgrade": {
+            "pnl_per_h": bl["pre_upgrade_pnl_per_h"],
+            "crypto_pnl_per_h": bl["pre_upgrade_crypto_pnl_per_h"],
+            "trades_per_h": bl["pre_upgrade_trades_per_h"],
+            "exec_rate": bl["pre_upgrade_exec_rate"],
+            "cap_util_pct": bl["pre_upgrade_cap_util_pct"],
+        },
+        "post_upgrade": {
+            "elapsed_h": current["elapsed_h"],
+            "incr_pnl": current["incr_pnl"],
+            "pnl_per_h": current["incr_pnl_per_h"],
+            "crypto_pnl_per_h": current["incr_crypto_pnl_per_h"],
+            "trades": current["incr_trades"],
+            "trades_per_h": current["incr_trades_per_h"],
+            "crypto_trades_per_h": current["incr_crypto_trades_per_h"],
+            "exec_rate": current["crypto_exec_rate"],
+            "cap_util_pct": current["capital_utilization_pct"],
+            "idle_pct": current["idle_capital_pct"],
+        },
+        "deltas": {
+            "pnl_per_h_change": round(post_pnl_h - pre_pnl_h, 2),
+            "pnl_pct_change": round(pct_change, 1),
+            "trades_per_h_change": round(current["incr_crypto_trades_per_h"] - bl["pre_upgrade_trades_per_h"], 0),
         },
     }
 

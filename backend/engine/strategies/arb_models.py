@@ -40,8 +40,8 @@ class ArbConfig(BaseModel):
     failure_cooldown_seconds: float = 300.0
     # Dynamic threshold: staleness-adjusted edge floor
     staleness_edge_base_bps: float = 15.0     # min edge for fresh data (<60s)
-    staleness_edge_per_minute_bps: float = 5.0  # addl bps per minute of staleness
-    hard_max_stale_seconds: float = 1800.0    # absolute hard reject (30 min)
+    staleness_edge_per_minute_bps: float = 6.0  # addl bps per minute of staleness
+    hard_max_stale_seconds: float = 2400.0    # absolute hard reject (40 min)
     # Dynamic threshold: liquidity-adjusted edge buffer
     liquidity_deep_threshold: float = 2000.0  # above this = no liq buffer
     liquidity_mid_threshold: float = 500.0    # above this = half buffer

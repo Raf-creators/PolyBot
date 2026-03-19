@@ -132,10 +132,10 @@ class TradeRecord(BaseModel):
 class RiskConfig(BaseModel):
     max_daily_loss: float = 100.0
     max_loss_per_strategy: float = 50.0
-    max_position_size: float = 25.0
+    max_position_size: float = 40.0
     max_market_exposure: float = 360.0          # total exposure cap across all strategies
     # Per-strategy exposure caps (capital $, not position count)
-    crypto_max_exposure: float = 120.0
+    crypto_max_exposure: float = 180.0
     weather_max_exposure: float = 120.0
     arb_max_exposure: float = 120.0
     arb_reserved_capital: float = 120.0         # exclusive capital pool for arb, bypasses global competition

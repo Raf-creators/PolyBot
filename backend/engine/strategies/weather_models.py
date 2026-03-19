@@ -125,7 +125,7 @@ class WeatherConfig(BaseModel):
 
     # Standard weather entry quality (tighter selectivity)
     min_quality_score: float = 0.35                          # minimum composite quality (edge/conf/liq) for standard
-    min_edge_bps_long: float = 700.0                         # higher edge required for >24h markets
+    min_edge_bps_long: float = 500.0                         # higher edge required for >24h markets
     long_resolution_hours: float = 24.0                      # defines "long-dated" market threshold
     time_preference_weight: float = 0.15                     # weight for time-to-resolution in signal ranking
     long_hold_penalty: float = 0.20                          # penalty applied to rank score for long+moderate signals
@@ -140,7 +140,7 @@ class WeatherConfig(BaseModel):
     slot_rotation_bottom_pct: float = 0.30                    # flag bottom 30% of book by composite score
 
     # Asymmetric mode settings
-    asymmetric_enabled: bool = True
+    asymmetric_enabled: bool = False
     asymmetric_max_market_price: float = 0.25               # only trade contracts priced ≤ 25¢
     asymmetric_min_model_prob: float = 0.20                 # model must assign ≥ 20% probability
     asymmetric_min_edge: float = 0.15                       # edge = model_prob - market_price ≥ 0.15

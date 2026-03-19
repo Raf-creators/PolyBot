@@ -24,7 +24,7 @@ class SniperConfig(BaseModel):
     max_spread: float = 0.10
     max_stale_age_seconds: float = 60.0
     min_tte_seconds: float = 30.0
-    max_tte_seconds: float = 28800.0  # 8h — supports 4h+ updown windows
+    max_tte_seconds: float = 43200.0  # 12h — supports longer updown windows
 
     # Volatility
     vol_lookback_minutes: float = 60.0

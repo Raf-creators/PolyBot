@@ -58,6 +58,9 @@ class TelegramNotifier:
         self._send_times: list = []
         self._total_sent = 0
         self._total_failed = 0
+        self._strategy_refs: dict = {}
+        self._upgrade_baseline: dict = {}
+        self._upgrade_tracking_task = None
 
     @property
     def configured(self) -> bool:
@@ -357,3 +360,287 @@ class TelegramNotifier:
         text = "\n".join(lines)
         self._fire(text)
         logger.info("[TELEGRAM] Periodic digest sent")
+
+    # ---- UPGRADE TRACKING SYSTEM ----
+
+    def capture_baseline(self):
+        """Capture current absolute metric values as a baseline for before/after comparison.
+
+        Records raw totals at deploy time. Later updates compute incremental
+        performance (new PnL, new trades) since this snapshot.
+        """
+        if not self._state:
+            return
+        from engine.risk import classify_strategy
+
+        state = self._state
+
+        # PnL by strategy — absolute totals at deploy time
+        pnl_map = {}
+        trade_count_map = {}
+        for t in state.trades:
+            sid = t.strategy_id or "unknown"
+            bucket = "crypto" if "crypto" in sid or "sniper" in sid else \
+                     "weather" if "weather" in sid else \
+                     "arb" if "arb" in sid else "other"
+            pnl_map[bucket] = pnl_map.get(bucket, 0) + t.pnl
+            trade_count_map[bucket] = trade_count_map.get(bucket, 0) + 1
+
+        # Exposure
+        exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+        pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
+        for pos in state.positions.values():
+            bucket = classify_strategy(pos)
+            pos_counts[bucket] = pos_counts.get(bucket, 0) + 1
+            exposure[bucket] = exposure.get(bucket, 0) + pos.size * (pos.current_price or pos.avg_cost or 0)
+
+        total_realized = sum(pnl_map.values())
+        total_exposure = sum(exposure.values())
+
+        self._upgrade_baseline = {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "deploy_time_unix": time.time(),
+            # Absolute values at deploy — used as starting point for incremental calc
+            "abs_total_realized": round(total_realized, 2),
+            "abs_crypto_realized": round(pnl_map.get("crypto", 0), 2),
+            "abs_crypto_trades": trade_count_map.get("crypto", 0),
+            "abs_total_trades": sum(trade_count_map.values()),
+            # Snapshot values (for display)
+            "crypto_exposure": round(exposure.get("crypto", 0), 2),
+            "total_exposure": round(total_exposure, 2),
+            "total_positions": sum(pos_counts.values()),
+            "capital_utilization_pct": round(total_exposure / max(state.risk_config.max_market_exposure, 1) * 100, 1),
+            # Pre-upgrade rates from the live snapshot (user-provided context)
+            # These are the "before" rates that the system was achieving
+            "pre_upgrade_pnl_per_h": 161.0,       # $1161.69 / 7.2h from audit
+            "pre_upgrade_crypto_pnl_per_h": 160.0, # $1161.69 / 7.2h (99.6% from crypto)
+            "pre_upgrade_trades_per_h": 1721.0,     # 12425 / 7.2h
+            "pre_upgrade_exec_rate": 0.94,          # from snapshot
+            "pre_upgrade_cap_util_pct": 41.6,       # from snapshot
+        }
+        logger.info(f"[UPGRADE-TRACK] Baseline captured (abs PnL=${total_realized:.2f}, {sum(trade_count_map.values())} trades)")
+        return self._upgrade_baseline
+
+    def send_upgrade_deployed(self, changes: list):
+        """Send 'UPGRADE DEPLOYED' Telegram alert with baseline metrics."""
+        if not self.enabled:
+            return
+        bl = getattr(self, "_upgrade_baseline", None)
+        if not bl:
+            return
+
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        lines = [
+            f"<b>UPGRADE DEPLOYED</b> {ts}",
+            "",
+            "<b>Changes Applied:</b>",
+        ]
+        for c in changes:
+            lines.append(f"  {c}")
+
+        lines += [
+            "",
+            "<b>PRE-UPGRADE BASELINE:</b>",
+            f"  Total PnL/hour: ${bl['pre_upgrade_pnl_per_h']:.0f}/h",
+            f"  Crypto PnL/hour: ${bl['pre_upgrade_crypto_pnl_per_h']:.0f}/h",
+            f"  Crypto trades/hour: {bl['pre_upgrade_trades_per_h']:.0f}",
+            f"  Crypto exec rate: {bl['pre_upgrade_exec_rate']:.2f}%",
+            f"  Capital utilization: {bl['pre_upgrade_cap_util_pct']:.0f}%",
+            "",
+            "Tracking updates every 2h. Final report at +6h.",
+        ]
+        self._fire("\n".join(lines))
+        logger.info("[UPGRADE-TRACK] Deployment notification sent")
+
+    async def _upgrade_tracking_loop(self):
+        """Background loop: send performance updates every 2h, final report at 6h."""
+        if not self.enabled or not self._state:
+            return
+
+        bl = getattr(self, "_upgrade_baseline", None)
+        if not bl:
+            return
+
+        deploy_time = datetime.now(timezone.utc)
+        update_interval_s = 2 * 3600  # 2 hours
+        final_report_s = 6 * 3600     # 6 hours
+        update_count = 0
+
+        while True:
+            try:
+                await asyncio.sleep(update_interval_s)
+                update_count += 1
+                elapsed_s = (datetime.now(timezone.utc) - deploy_time).total_seconds()
+                elapsed_h = elapsed_s / 3600
+
+                current = self._compute_current_metrics(deploy_time)
+                if not current:
+                    continue
+
+                is_final = elapsed_s >= final_report_s
+
+                msg = self._build_comparison_msg(bl, current, elapsed_h, is_final)
+                self._fire(msg)
+                logger.info(f"[UPGRADE-TRACK] Update #{update_count} sent (elapsed={elapsed_h:.1f}h, final={is_final})")
+
+                if is_final:
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[UPGRADE-TRACK] Error: {e}")
+
+    def _compute_current_metrics(self, deploy_time):
+        """Compute incremental metrics since deployment for comparison."""
+        if not self._state:
+            return None
+        from engine.risk import classify_strategy
+
+        bl = getattr(self, "_upgrade_baseline", None)
+        if not bl:
+            return None
+
+        state = self._state
+        elapsed_s = time.time() - bl["deploy_time_unix"]
+        elapsed_h = max(elapsed_s / 3600, 0.01)
+
+        pnl_map = {}
+        trade_count_map = {}
+        for t in state.trades:
+            sid = t.strategy_id or "unknown"
+            bucket = "crypto" if "crypto" in sid or "sniper" in sid else \
+                     "weather" if "weather" in sid else \
+                     "arb" if "arb" in sid else "other"
+            pnl_map[bucket] = pnl_map.get(bucket, 0) + t.pnl
+            trade_count_map[bucket] = trade_count_map.get(bucket, 0) + 1
+
+        exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+        pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
+        for pos in state.positions.values():
+            bucket = classify_strategy(pos)
+            pos_counts[bucket] = pos_counts.get(bucket, 0) + 1
+            exposure[bucket] = exposure.get(bucket, 0) + pos.size * (pos.current_price or pos.avg_cost or 0)
+
+        total_realized = sum(pnl_map.values())
+        total_exposure = sum(exposure.values())
+
+        # Incremental = current absolute - baseline absolute
+        incr_pnl = total_realized - bl["abs_total_realized"]
+        incr_crypto_pnl = pnl_map.get("crypto", 0) - bl["abs_crypto_realized"]
+        incr_trades = sum(trade_count_map.values()) - bl["abs_total_trades"]
+        incr_crypto_trades = trade_count_map.get("crypto", 0) - bl["abs_crypto_trades"]
+
+        # Crypto scan health
+        crypto_ref = self._strategy_refs.get("crypto")
+        crypto_exec_rate = 0
+        if crypto_ref:
+            m = crypto_ref._m
+            exec_count = m.get("signals_executed", 0)
+            rej_count = m.get("signals_rejected", 0)
+            total = exec_count + rej_count
+            crypto_exec_rate = exec_count / max(total, 1) * 100
+
+        return {
+            "elapsed_h": round(elapsed_h, 2),
+            # Incremental rates (post-upgrade performance only)
+            "incr_pnl": round(incr_pnl, 2),
+            "incr_pnl_per_h": round(incr_pnl / elapsed_h, 2),
+            "incr_crypto_pnl": round(incr_crypto_pnl, 2),
+            "incr_crypto_pnl_per_h": round(incr_crypto_pnl / elapsed_h, 2),
+            "incr_trades": incr_trades,
+            "incr_trades_per_h": round(incr_trades / elapsed_h, 0),
+            "incr_crypto_trades": incr_crypto_trades,
+            "incr_crypto_trades_per_h": round(incr_crypto_trades / elapsed_h, 0),
+            "crypto_exec_rate": round(crypto_exec_rate, 2),
+            # Current snapshot
+            "crypto_exposure": round(exposure.get("crypto", 0), 2),
+            "total_exposure": round(total_exposure, 2),
+            "total_positions": sum(pos_counts.values()),
+            "capital_utilization_pct": round(total_exposure / max(self._state.risk_config.max_market_exposure, 1) * 100, 1),
+            "idle_capital_pct": round(100 - total_exposure / max(self._state.risk_config.max_market_exposure, 1) * 100, 1),
+        }
+
+    def _build_comparison_msg(self, baseline, current, elapsed_h, is_final):
+        """Build a comparison message using incremental post-upgrade metrics vs pre-upgrade baseline."""
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        header = "UPGRADE IMPACT REPORT (FINAL)" if is_final else "SYSTEM PERFORMANCE UPDATE"
+
+        # Pre-upgrade rates (from the audit snapshot)
+        pre_pnl_h = baseline["pre_upgrade_pnl_per_h"]
+        pre_crypto_h = baseline["pre_upgrade_crypto_pnl_per_h"]
+        pre_trades_h = baseline["pre_upgrade_trades_per_h"]
+        pre_exec_rate = baseline["pre_upgrade_exec_rate"]
+        pre_cap_util = baseline["pre_upgrade_cap_util_pct"]
+
+        # Post-upgrade rates (incremental since deployment)
+        post_pnl_h = current["incr_pnl_per_h"]
+        post_crypto_h = current["incr_crypto_pnl_per_h"]
+        post_trades_h = current["incr_crypto_trades_per_h"]
+        post_exec_rate = current["crypto_exec_rate"]
+        post_cap_util = current["capital_utilization_pct"]
+
+        # Deltas
+        d_pnl_h = post_pnl_h - pre_pnl_h
+        d_crypto_h = post_crypto_h - pre_crypto_h
+        d_trades_h = post_trades_h - pre_trades_h
+        pct_pnl = d_pnl_h / max(abs(pre_pnl_h), 0.01) * 100
+        pct_crypto = d_crypto_h / max(abs(pre_crypto_h), 0.01) * 100
+
+        lines = [
+            f"<b>{header}</b> {ts}",
+            f"Time since upgrade: {elapsed_h:.1f}h",
+            "",
+            "<b>CRYPTO (post-upgrade):</b>",
+            f"  PnL/hour: ${post_crypto_h:.2f}/h (was ${pre_crypto_h:.0f}/h)",
+            f"  Trades: {current['incr_crypto_trades']:,d} ({post_trades_h:.0f}/h)",
+            f"  Exec rate: {post_exec_rate:.2f}%",
+            f"  Exposure: ${current['crypto_exposure']:.0f}",
+            "",
+            "<b>SYSTEM (post-upgrade):</b>",
+            f"  Total PnL/hour: ${post_pnl_h:.2f}/h (was ${pre_pnl_h:.0f}/h)",
+            f"  Total new PnL: ${current['incr_pnl']:.2f}",
+            f"  Capital utilization: {post_cap_util:.0f}%",
+            f"  Idle capital: {current['idle_capital_pct']:.0f}%",
+            "",
+            "<b>vs PRE-UPGRADE BASELINE:</b>",
+            f"  PnL/h: ${pre_pnl_h:.0f} -> ${post_pnl_h:.2f} ({pct_pnl:+.1f}%)",
+            f"  Crypto/h: ${pre_crypto_h:.0f} -> ${post_crypto_h:.2f} ({pct_crypto:+.1f}%)",
+            f"  Trades/h: {pre_trades_h:.0f} -> {post_trades_h:.0f} ({d_trades_h:+.0f})",
+            f"  Exec rate: {pre_exec_rate:.2f}% -> {post_exec_rate:.2f}%",
+            f"  Cap util: {pre_cap_util:.0f}% -> {post_cap_util:.0f}%",
+        ]
+
+        # Warnings
+        warnings = []
+        if post_trades_h > pre_trades_h * 3:
+            warnings.append("OVERTRADING: Trades/h >3x baseline")
+        if post_crypto_h < pre_crypto_h * 0.5 and elapsed_h > 1:
+            warnings.append("DRAWDOWN: Crypto PnL/h dropped >50%")
+        if post_cap_util > 95:
+            warnings.append("EXPOSURE: Capital util >95%")
+
+        if warnings:
+            lines.append("")
+            lines.append("<b>WARNINGS:</b>")
+            for w in warnings:
+                lines.append(f"  {w}")
+        else:
+            lines.append("")
+            lines.append("No warnings. System healthy.")
+
+        if is_final:
+            lines.append("")
+            improved = pct_pnl > 0
+            lines.append(f"<b>VERDICT:</b> {'Performance IMPROVED' if improved else 'Performance DECLINED or FLAT'}")
+            lines.append(f"  PnL delta: {pct_pnl:+.1f}%")
+            lines.append(f"  New PnL generated: ${current['incr_pnl']:.2f} in {elapsed_h:.1f}h")
+            if not improved and elapsed_h > 3:
+                lines.append("  Consider reviewing filter changes.")
+
+        return "\n".join(lines)
+
+    def start_upgrade_tracking(self):
+        """Start the upgrade tracking background loop."""
+        self._upgrade_tracking_task = asyncio.create_task(self._upgrade_tracking_loop())
+        logger.info("[UPGRADE-TRACK] Periodic tracking started (updates every 2h, final at 6h)")
+

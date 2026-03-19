@@ -1707,9 +1707,14 @@ class WeatherTrader(BaseStrategy):
                     shadow_exits_this_scan += 1
                     logger.info(f"[LIFECYCLE-SHADOW] Would exit: {token_id[:12]}.. at {current_price:.4f} — {exit_detail}")
 
-                    # Selective auto-exit: always execute market_collapse and profit_capture
-                    # even in shadow_exit mode (these are always correct exits)
-                    if exit_reason in (ExitReason.MARKET_COLLAPSE.value, ExitReason.PROFIT_CAPTURE.value):
+                    # Selective auto-exit: always execute market_collapse, profit_capture,
+                    # negative_edge, and time_inefficiency even in shadow_exit mode
+                    if exit_reason in (
+                        ExitReason.MARKET_COLLAPSE.value,
+                        ExitReason.PROFIT_CAPTURE.value,
+                        ExitReason.NEGATIVE_EDGE.value,
+                        ExitReason.TIME_INEFFICIENCY.value,
+                    ):
                         # Don't auto-exit asymmetric positions (hold-to-resolution)
                         if strategy_id != "weather_asymmetric":
                             await self._auto_exit_position(pos, exit_reason, exit_detail)
