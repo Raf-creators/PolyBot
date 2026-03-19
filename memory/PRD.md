@@ -10,53 +10,68 @@ Build an autonomous trading engine that identifies and exploits pricing ineffici
 - **Services**: market_resolver, auto_resolver, persistence, analytics, telegram_notifier
 
 ## Key Config Model
-- `RiskConfig`: Global + per-strategy exposure caps, arb reserved capital
-- `WeatherTradingConfig`: Lifecycle management, exit rules, model parameters
-- `ArbScannerConfig`: Staleness, spread, edge thresholds
-- `SniperConfig`: Signal classification, execution parameters
+- `RiskConfig`: Global + per-strategy exposure caps ($120 each), arb reserved capital ($120)
+- `WeatherTradingConfig`: Lifecycle management (shadow_exit), exit rules, model parameters
+- `ArbScannerConfig`: Universal market scanning, staleness=300s, liquidity=200
+- `SniperConfig`: Signal classification, opposite-side prevention
 
 ## What's Been Implemented
 
-### Phase 1-4: Critical System Upgrade (March 2026)
-1. **Global Capital Configuration**: max_total_exposure=360, per-strategy caps=120 each
-2. **Reserved Capital for Arbitrage**: arb_reserved_capital=120, exclusive pool
-3. **Per-Strategy Risk Checks**: Refactored risk.py with hierarchical capital management
-4. **Crypto Opposite-Side Prevention**: Blocks opening both YES+NO on same market
-5. **Force Zombie Resolution**: Auto-resolves positions past end_date + 6h grace
-6. **Arb Pipeline Unblocked**: max_stale_age_seconds=300 (was 180)
-7. **Weather Asymmetric Fix**: min_model_prob=0.20 (was 0.40)
-8. **Market Collapse Exit Rule**: Triggers when position_value/entry_value < 0.05
-9. **Shadow Exit Mode**: Lifecycle in shadow_exit, tracking exit candidates
-10. **PnL Attribution Fix**: All trades attributed to originating strategy
-11. **Validation Endpoint**: /api/admin/upgrade-validation for system health
+### Critical System Upgrade Phase 1 (March 2026)
+1. Global capital: max_total_exposure=360, per-strategy caps=120 each
+2. Reserved capital for arb: arb_reserved_capital=120, exclusive pool
+3. Per-strategy risk checks in risk.py (hierarchical capital management)
+4. SELL order fast-path (exits never blocked by risk)
+5. Crypto opposite-side prevention (new trades) + cleanup (existing positions)
+6. Market collapse exit rule (threshold=0.05)
+7. Shadow exit mode with selective auto-exit for market_collapse + profit_capture
+8. PnL attribution fix (startup migration re-attributes "resolver" trades)
+
+### Critical Expansion Phase 2 (March 2026)
+1. Position limits expanded: max_arb=40, max_concurrent=85
+2. Zombie resolver: infers expiry from market question text (no end_date dependency)
+3. Force-resolved 32+ zombie positions across sessions
+4. Universal arb scanner: ALL Polymarket categories (1,800+ markets, 500 binary pairs)
+5. Multi-outcome detection for weather + universal markets
+6. Arb min_liquidity lowered 500→200
+7. Arb max_stale_age_seconds 180→300
+8. Weather asymmetric: min_model_prob 0.40→0.20 (CONFIRMED NON-VIABLE)
+9. Asymmetric diagnostic logging (candidates_scanned, rejection breakdowns)
+10. Telegram periodic digest (every 3h with full PnL/exposure/arb stats)
+11. Validation endpoint: /api/admin/upgrade-validation
 
 ### Earlier Work
-- Position Lifecycle Management system (shadow_exit, tag_only, auto_exit modes)
-- UI Dashboard with Weather.jsx
-- Lifecycle simulator
-- Debug snapshot v2.0 (balanced, all-strategy)
+- Position Lifecycle Management system
+- UI Dashboard, Simulator, Debug Snapshot v2.0
 - Edge & Resolution data pipeline fix
-- Snapshot export (Export/Copy buttons)
+
+## Confirmed Findings
+- **Asymmetric strategy is NON-VIABLE**: Model assigns 0-3% probability to all low-priced weather contracts. 86% of candidates killed by model_prob filter. The strategy's premise (model disagrees with market) doesn't hold for weather multi-outcome markets.
+- **Arb slot limit was the real bottleneck**: Not capital. 20 tiny positions ($1 total) blocked $120 of reserved capital.
+- **Zombie resolver needs date parsing**: Markets on Polymarket don't consistently provide end_date in API responses.
 
 ## Prioritized Backlog
 
 ### P0 — None (all P0 items resolved)
 
 ### P1 — Next Up
-- **Enable AUTO_EXIT**: After validating shadow exit results with live data, switch weather lifecycle to auto_exit for profit_capture, negative_edge, time_inefficiency
-- **"Apply These Thresholds" Workflow**: Push validated simulator thresholds to live config
+- **Enable full AUTO_EXIT**: After sufficient shadow data, switch time_inefficiency + negative_edge to auto_exit
+- **"Apply These Thresholds" Workflow**: Push simulator thresholds to live config
+- **Disable asymmetric strategy**: Mark as non-viable, free up compute
+- **Monitor arb execution rate**: Track whether 40 slots + 200 liquidity actually produces consistent trades
 
 ### P2
 - Resolution Timeline visualization
-- UI toggle for auto-tune sigma multiplier
+- UI toggle for auto-tune sigma
+- Expand Telegram alerts (per-trade notifications for large wins/losses)
 
 ### P3
 - Copy Trading Skeleton
 - Manual Order Entry
 
 ## Key API Endpoints
-- `GET /api/admin/upgrade-validation` — System upgrade validation summary
-- `GET /api/controls` — Risk controls with exposure data
+- `GET /api/admin/upgrade-validation` — Full system validation summary
+- `GET /api/controls` — Risk controls with per-strategy exposure data
 - `GET /api/positions/weather/lifecycle` — Lifecycle status & config
 - `GET /api/positions/weather/exit-candidates` — Exit candidate analysis
 - `GET /api/debug/ui-snapshot` — Full system snapshot
@@ -66,9 +81,8 @@ Build an autonomous trading engine that identifies and exploits pricing ineffici
 - Polymarket Gamma API
 - Polymarket CLOB WebSocket
 - Open-Meteo API
-- Telegram notifications
+- Telegram
 
 ## Test Reports
+- iteration_63.json: Critical Expansion — 33/33 passed (100%)
 - iteration_62.json: Critical System Upgrade — 28/28 passed (100%)
-- iteration_61.json: Snapshot v2.0 — all passed
-- iteration_60.json: Data Pipeline Fix — all passed
