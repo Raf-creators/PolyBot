@@ -1,57 +1,78 @@
 # Polymarket Edge OS — PRD
 
 ## Original Problem Statement
-Build an autonomous trading engine that identifies and exploits pricing inefficiencies on Polymarket across weather, crypto, and arbitrage markets. Paper-trading mode with real market data.
+Multi-strategy automated trading system for Polymarket prediction markets. Operates three strategies:
+1. **Crypto Sniper** — Primary profit driver. Trades BTC/ETH up/down markets on 5min-4h windows using Binance real-time price feeds.
+2. **Weather Trader** — Trades temperature/weather outcome markets using Open-Meteo forecasts.
+3. **Arb Scanner** — Multi-outcome arbitrage across weather and other markets.
 
 ## Core Architecture
-- **Backend**: FastAPI + MongoDB + Motor (async)
-- **Frontend**: React + Shadcn/UI
-- **Strategies**: `weather_trader`, `crypto_sniper`, `arb_scanner` (asymmetric disabled)
-- **Services**: market_resolver, auto_resolver, persistence, analytics, telegram_notifier, rolling_pnl
+- **Backend**: FastAPI + MongoDB, manages engine state, strategies, risk, positions
+- **Frontend**: React dashboard for monitoring and configuration
+- **External Data**: Binance WebSocket (BTC/ETH), Open-Meteo (weather), Polymarket Gamma API + CLOB WebSocket
+- **Notifications**: Telegram bot for trade alerts, performance reports
 
-## What's Been Implemented
+## Current Configuration (Post Forensic Rollback, Mar 19 2026)
 
-### Rolling PnL Window System (March 19, 2026)
-- **NEW**: `services/rolling_pnl.py` — computes PnL/hour over 1h, 3h, 6h windows from trade timestamps
-- Replaced ALL uptime-based PnL/h calculations across entire codebase
-- Per-strategy breakdown: crypto, weather, arb, total
-- Integrated into: Telegram digest, upgrade tracking messages, `/api/admin/upgrade-tracking`, `/api/debug/ui-snapshot` (portfolio.rolling_pnl)
-- Format: `{pnl_per_hour, trades, trades_per_hour}` for each window/strategy combo
+### Risk Config
+- max_position_size: 25 (REVERTED from 40)
+- crypto_max_exposure: $250 (increased from $180)
+- arb_max_exposure: $25 (REDUCED from $120)
+- arb_reserved_capital: $25 (REDUCED from $120)
+- max_arb_positions: 10 (REDUCED from 40)
+- weather_max_exposure: $120
+- max_market_exposure: $360
 
-### Profitability Upgrade Rollout (March 19, 2026)
-- Removed opposite_side_held filter for crypto (+11.7% signals unblocked)
-- crypto_max_exposure: $120->$180, max_position_size: 25->40, TTE 8h->12h
-- Weather: auto_exit for negative_edge + time_inefficiency, min_edge_bps_long 700->500
-- Arb: 28 tiny positions cleaned, staleness 1800->2400s
-- Asymmetric strategy disabled
-- Telegram baseline/tracking system with periodic 2h updates
+### Crypto Sniper
+- max_tte_seconds: 28800 (8h, REVERTED from 12h)
+- opposite_side_held filter: RE-ACTIVATED
+- min_edge_bps: 200
 
-### Previous Implementations
-- Hybrid staleness-adjusted arb execution
-- Critical arb engine rewrite (binary + multi-outcome, all Polymarket categories)
-- System upgrade (per-strategy capital, shadow exit, zombie resolver, PnL attribution)
+### Weather Trader
+- min_edge_bps: 350 (reduced from 500)
+- min_confidence: 0.45 (reduced from 0.55)
+- default_size: 5.0 (increased from 3.0)
+- max_signal_size: 12.0 (increased from 8.0)
+- lifecycle_mode: shadow_exit
+- asymmetric_enabled: False
 
-## Key API Endpoints
-- `GET /api/admin/upgrade-tracking` — Rolling PnL windows (1h/3h/6h) per strategy + system status
-- `GET /api/debug/ui-snapshot` — Full snapshot with portfolio.rolling_pnl
-- `GET /api/admin/upgrade-validation` — System validation
-- `GET /api/strategies/arb/diagnostics` — Arb raw edges, rejections, dynamic thresholds
+### Telegram Monitoring
+- Bihourly full performance report (crypto, arb, weather, system, baseline comparison)
+- Hourly win/streak report (biggest win, streaks, loss warnings)
+- Trade-by-trade notifications (existing)
+- Upgrade tracking (2h intervals, final at 6h)
 
-## Prioritized Backlog
-### P1
-- Event-driven Telegram alerts (per-trade for large wins/losses)
-- Monitor upgrade impact via 6h final report
+## What Has Been Implemented
+1. Complete multi-strategy trading engine (crypto, weather, arb)
+2. Rolling PnL window system (1h, 3h, 6h from actual trade timestamps)
+3. Comprehensive Telegram notification system
+4. Risk engine with per-strategy exposure caps and position limits
+5. Market resolver service with auto-resolution
+6. Weather calibration system with 17 historical stations
+7. Forensic rollback configuration (Mar 19 2026)
 
-### P2
-- "Apply These Thresholds" workflow
+## Testing Status
+- iteration_68.json: Forensic Rollback — 18/18 passed (100%)
+- All config values verified against forensic recommendations
+- Telegram sending 200 OK
+- All strategies running
+
+## Backlog
+
+### P1 — Next Up
+- Monitor forensic rollback performance (2h, 6h checkpoints)
+- Implement cron job for stale arb position cleanup (>48h, negative PnL)
+- Force-close legacy arb positions once they go stale enough
+
+### P2 — Planned
+- Add real-time weather observations API for near-resolution markets
+- Add Coinbase WebSocket as second crypto feed (redundancy + VWAP)
+- Add second forecast source for weather cross-validation
+- Re-evaluate asymmetric weather mode after base performance stabilizes
+
+### P3 — Future
+- Add XRP/SOL price feeds for alt-coin markets
+- Trailing stop-loss for large crypto positions
 - Resolution Timeline visualization
-
-### P3
-- Copy Trading Skeleton
-- Manual Order Entry
-
-## Test Reports
-- iteration_67.json: Rolling PnL Windows — 17/17 passed (100%)
-- iteration_66.json: Profitability Upgrade — 25/25 passed (100%)
-- iteration_65.json: Dynamic Threshold — 25/25 passed (100%)
-- iteration_64.json: Arb Engine Rewrite — 30/30 passed (100%)
+- Copy Trading / Manual Order Entry skeleton
+- Dedicated analytics module for forensic audits
