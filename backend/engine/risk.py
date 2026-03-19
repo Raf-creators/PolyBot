@@ -161,6 +161,11 @@ class RiskEngine:
         if cfg.kill_switch_active:
             return False, "kill switch active"
 
+        # SELL orders always pass — they reduce exposure and free capital
+        from models import OrderSide
+        if hasattr(order, 'side') and order.side == OrderSide.SELL:
+            return True, "approved (sell/exit)"
+
         if order.size > cfg.max_order_size:
             return False, f"order size {order.size} > max {cfg.max_order_size}"
 

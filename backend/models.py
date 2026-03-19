@@ -139,10 +139,10 @@ class RiskConfig(BaseModel):
     weather_max_exposure: float = 120.0
     arb_max_exposure: float = 120.0
     arb_reserved_capital: float = 120.0         # exclusive capital pool for arb, bypasses global competition
-    max_concurrent_positions: int = 65          # global safety cap
+    max_concurrent_positions: int = 85          # global safety cap
     max_weather_positions: int = 25             # weather reserved slots
     max_crypto_positions: int = 20              # crypto sniper reserved slots
-    max_arb_positions: int = 20                 # arb scanner reserved slots
+    max_arb_positions: int = 40                 # arb scanner reserved slots
     max_order_size: float = 10.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0

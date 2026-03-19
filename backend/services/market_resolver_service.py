@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
+import re
 
 import aiohttp
 
@@ -219,6 +220,7 @@ class MarketResolverService:
 
         # ---- Second pass: Force-resolve zombie positions ----
         # Positions that are past end_date + grace period and were NOT resolved by Gamma API
+        # If end_date is missing, infer expiry from market question text (date parsing)
         zombie_count = 0
         zombie_pnl = 0.0
         remaining_positions = list(self._state.positions.items())
@@ -229,14 +231,26 @@ class MarketResolverService:
                 break
 
             market = self._state.get_market(token_id)
-            if not market or not market.end_date:
-                continue
 
-            try:
-                end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
-                if end_dt.tzinfo is None:
-                    end_dt = end_dt.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
+            # Try to determine end_date from multiple sources
+            end_dt = None
+
+            # Source 1: market.end_date
+            if market and market.end_date:
+                try:
+                    end_dt = datetime.fromisoformat(market.end_date.replace("Z", "+00:00"))
+                    if end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    pass
+
+            # Source 2: Parse date from market question text
+            if end_dt is None:
+                end_dt = self._infer_expiry_from_question(
+                    getattr(pos, 'market_question', '') or (market.question if market else '')
+                )
+
+            if end_dt is None:
                 continue
 
             # Only force-resolve if past end_date + grace period
@@ -244,13 +258,20 @@ class MarketResolverService:
                 continue
 
             # This position is a zombie — force-resolve at current market price
-            current_price = (market.mid_price if market and market.mid_price else pos.current_price) or 0
+            current_price = 0
+            if market and market.mid_price:
+                current_price = market.mid_price
+            elif pos.current_price:
+                current_price = pos.current_price
+
             pnl = round((current_price - pos.avg_cost) * pos.size, 4)
             zombie_pnl += pnl
             total_pnl += pnl
 
             original_strategy = getattr(pos, "strategy_id", "") or "unknown"
-            outcome = (market.outcome or "").strip()
+            outcome = ""
+            if market and market.outcome:
+                outcome = market.outcome.strip()
 
             trade = TradeRecord(
                 id=new_id(),
@@ -278,10 +299,11 @@ class MarketResolverService:
             else:
                 self._stats["losses"] += 1
 
+            hours_expired = (now - end_dt).total_seconds() / 3600
             logger.warning(
                 f"[RESOLVER] Zombie force-resolved: {pos.market_question[:40]}... "
                 f"outcome={outcome} pnl=${pnl:+.4f} "
-                f"(expired {(now - end_dt).total_seconds()/3600:.1f}h ago, strategy={original_strategy})"
+                f"(expired {hours_expired:.1f}h ago, strategy={original_strategy})"
             )
 
             self._stats["recent_resolutions"].append({
@@ -352,6 +374,64 @@ class MarketResolverService:
             "checked": len(positions),
             "duration_ms": round(elapsed_ms, 1),
         }
+
+    def _infer_expiry_from_question(self, question: str) -> datetime | None:
+        """Infer market expiry datetime from the question text.
+
+        Parses patterns like:
+        - "March 17" / "March 17, 2026"
+        - "3:00PM-4:00PM ET" (use the end time)
+        - "March 17, 6:00PM-6:05PM ET"
+        """
+        if not question:
+            return None
+
+        try:
+            now = datetime.now(timezone.utc)
+            year = now.year
+
+            # Pattern: "Month Day" with optional time window
+            month_map = {
+                'january': 1, 'february': 2, 'march': 3, 'april': 4,
+                'may': 5, 'june': 6, 'july': 7, 'august': 8,
+                'september': 9, 'october': 10, 'november': 11, 'december': 12,
+            }
+
+            # Match "March 17" style dates
+            date_match = re.search(
+                r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})',
+                question, re.IGNORECASE
+            )
+            if not date_match:
+                return None
+
+            month = month_map[date_match.group(1).lower()]
+            day = int(date_match.group(2))
+
+            # Try to find end time like "6:05PM" or "8:00PM" in time ranges
+            time_match = re.search(r'(\d{1,2}):(\d{2})(AM|PM)', question.split('-')[-1] if '-' in question else question, re.IGNORECASE)
+            hour, minute = 23, 59  # default to end of day
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2))
+                ampm = time_match.group(3).upper()
+                if ampm == 'PM' and hour != 12:
+                    hour += 12
+                elif ampm == 'AM' and hour == 12:
+                    hour = 0
+
+            # Build datetime (assume ET = UTC-5, but use UTC with offset)
+            try:
+                end_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+                # ET is UTC-5 (EST) or UTC-4 (EDT), add 5 hours to convert to UTC
+                end_dt += timedelta(hours=5)
+            except ValueError:
+                return None
+
+            return end_dt
+
+        except Exception:
+            return None
 
     async def _check_resolution_by_token(self, clob_token_id: str) -> dict | None:
         """Query Gamma API by CLOB token ID for unique market resolution.

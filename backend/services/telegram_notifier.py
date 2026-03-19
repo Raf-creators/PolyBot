@@ -89,15 +89,26 @@ class TelegramNotifier:
         self._state = state
         self._bus = bus
         self._client = httpx.AsyncClient(timeout=10)
+        self._digest_task = None
+        self._strategy_refs = {}  # set from server.py: {"weather": ref, "arb": ref, "crypto": ref}
 
         from models import EventType
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
         bus.on(EventType.SYSTEM_EVENT, self._on_system_event)
 
+        # Start periodic digest (every 3 hours)
+        self._digest_task = asyncio.create_task(self._periodic_digest_loop())
+
         status = "enabled" if self.configured else "disabled (no credentials)"
         logger.info(f"Telegram notifier started [{status}]")
 
     async def stop(self):
+        if self._digest_task:
+            self._digest_task.cancel()
+            try:
+                await self._digest_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if self._bus:
             from models import EventType
             self._bus.off(EventType.ORDER_UPDATE, self._on_order_update)
@@ -245,3 +256,104 @@ class TelegramNotifier:
                 if t.order_id == order_id:
                     return t
         return None
+
+
+    def set_strategy_refs(self, refs: dict):
+        """Set references to strategy instances for digest metrics."""
+        self._strategy_refs = refs
+
+    async def _periodic_digest_loop(self):
+        """Send a system digest every 3 hours."""
+        await asyncio.sleep(300)  # wait 5 min after startup for data to accumulate
+        while True:
+            try:
+                await self._send_digest()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[TELEGRAM] Digest error: {e}")
+            await asyncio.sleep(3 * 3600)  # 3 hours
+
+    async def _send_digest(self):
+        """Build and send a structured system performance digest."""
+        if not self.enabled or not self._state:
+            return
+
+        from engine.risk import classify_strategy
+
+        state = self._state
+        cfg = state.risk_config
+
+        # PnL by strategy
+        pnl_map = {}
+        trade_count_map = {}
+        for t in state.trades:
+            sid = t.strategy_id or "unknown"
+            bucket = "crypto" if "crypto" in sid or "sniper" in sid else \
+                     "weather" if "weather" in sid else \
+                     "arb" if "arb" in sid else "other"
+            pnl_map[bucket] = pnl_map.get(bucket, 0) + t.pnl
+            trade_count_map[bucket] = trade_count_map.get(bucket, 0) + 1
+
+        # Position counts and exposure by strategy
+        pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
+        exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+        unrealized = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+
+        for pos in state.positions.values():
+            bucket = classify_strategy(pos)
+            pos_counts[bucket] = pos_counts.get(bucket, 0) + 1
+            exp = pos.size * (pos.current_price or pos.avg_cost or 0)
+            exposure[bucket] = exposure.get(bucket, 0) + exp
+            unrealized[bucket] = unrealized.get(bucket, 0) + (pos.current_price - pos.avg_cost) * pos.size
+
+        total_realized = sum(pnl_map.values())
+        total_unrealized = sum(unrealized.values())
+        total_exposure = sum(exposure.values())
+        total_positions = sum(pos_counts.values())
+
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+
+        # Arb stats
+        arb_opps = 0
+        arb_exec = 0
+        arb_ref = self._strategy_refs.get("arb")
+        if arb_ref:
+            ah = arb_ref.get_health()
+            arb_opps = ah.get("eligible_count", 0)
+            arb_exec = ah.get("executions_submitted", 0)
+
+        # Weather exit candidates
+        exit_candidates = 0
+        weather_ref = self._strategy_refs.get("weather")
+        if weather_ref:
+            exit_candidates = weather_ref._m.get("lifecycle", {}).get("exit_candidates", 0)
+
+        lines = [
+            f"<b>SYSTEM DIGEST</b> {ts}",
+            "",
+            f"PnL: <b>${total_realized + total_unrealized:+.2f}</b> (R: ${total_realized:+.2f} / U: ${total_unrealized:+.2f})",
+            f"Exposure: ${total_exposure:.0f} / ${cfg.max_market_exposure:.0f} ({total_exposure/max(cfg.max_market_exposure,1)*100:.0f}%)",
+            f"Positions: {total_positions} / {cfg.max_concurrent_positions}",
+            "",
+            "<b>By Strategy:</b>",
+            f"  CRYPTO: ${pnl_map.get('crypto',0):+.2f} | {pos_counts.get('crypto',0)} pos | ${exposure.get('crypto',0):.0f} exp",
+            f"  WEATHER: ${pnl_map.get('weather',0):+.2f} | {pos_counts.get('weather',0)} pos | ${exposure.get('weather',0):.0f} exp",
+            f"  ARB: ${pnl_map.get('arb',0):+.2f} | {pos_counts.get('arb',0)} pos | ${exposure.get('arb',0):.0f} exp",
+            "",
+            f"Arb: {arb_opps} opps | {arb_exec} executed",
+            f"Weather exits: {exit_candidates} candidates",
+        ]
+
+        # Large win/loss alerts
+        recent_trades = state.trades[-20:] if state.trades else []
+        big_wins = [t for t in recent_trades if t.pnl > 1.0]
+        big_losses = [t for t in recent_trades if t.pnl < -1.0]
+        if big_wins:
+            lines.append(f"\nBig wins: {len(big_wins)} (best ${max(t.pnl for t in big_wins):+.2f})")
+        if big_losses:
+            lines.append(f"Big losses: {len(big_losses)} (worst ${min(t.pnl for t in big_losses):+.2f})")
+
+        text = "\n".join(lines)
+        self._fire(text)
+        logger.info("[TELEGRAM] Periodic digest sent")

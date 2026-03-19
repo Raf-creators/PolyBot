@@ -162,6 +162,12 @@ class ArbScanner(BaseStrategy):
         total_combos = len(binary_pairs) + len(multi_groups)
         self._diag["markets_scanned"] = len(self._state.markets)
         self._diag["combinations_generated"] = total_combos
+        self._diag["binary_pairs_found"] = len(binary_pairs)
+        self._diag["multi_outcome_groups_found"] = len(multi_groups)
+        weather_groups = sum(1 for k in multi_groups if k.startswith("weather|"))
+        universal_groups = sum(1 for k in multi_groups if k.startswith("universal|"))
+        self._diag["multi_outcome_weather_groups"] = weather_groups
+        self._diag["multi_outcome_universal_groups"] = universal_groups
         self._diag["raw_edges"] = raw_edges[-50:]
         self._diag["rejection_log"] = rejection_log[-50:]
 
@@ -198,41 +204,58 @@ class ArbScanner(BaseStrategy):
         }
 
     def _find_multi_outcome_groups(self) -> Dict:
-        """Find multi-outcome markets by grouping weather event buckets.
+        """Find multi-outcome markets by grouping related YES tokens.
 
-        Weather markets on Polymarket are binary (YES/NO) per bucket, but the
-        event groups 5-7 buckets. If sum(YES prices) < 1.0, buying all YES
-        outcomes guarantees profit.
+        Multi-outcome markets on Polymarket are binary (YES/NO) per outcome,
+        but the event groups 3+ outcomes. If sum(YES prices) < 1.0, buying all
+        YES outcomes guarantees profit.
 
-        Groups by extracting (city, date) from question text.
+        Universal grouping: Uses condition_id prefix (first 30 chars) and
+        question similarity to group related markets across ALL categories
+        (weather, crypto, politics, sports, etc.).
         """
         import re
-
-        # Pattern: "highest temperature in <city> be X°F ... on <date>"
-        weather_pattern = re.compile(
-            r'(?:highest|high)\s+temp.*?in\s+(.+?)\s+be\s+.*?on\s+(.+?)[\?$]',
-            re.IGNORECASE,
-        )
 
         by_event: Dict[str, List] = {}
 
         for snap in self._state.markets.values():
+            if not snap.mid_price or snap.mid_price <= 0 or snap.mid_price >= 1.0:
+                continue
+            out = (snap.outcome or "").upper()
+            if "NO" in out and "YES" not in out:
+                continue  # Only track YES outcomes
+
             q = snap.question or ""
-            m = weather_pattern.search(q)
-            if not m:
+            if not q:
                 continue
 
-            city = m.group(1).strip().lower()
-            date_str = m.group(2).strip().lower().rstrip("?")
-            event_key = f"{city}|{date_str}"
+            # Strategy 1: Weather pattern (city|date)
+            weather_m = re.search(
+                r'(?:highest|high)\s+temp.*?in\s+(.+?)\s+be\s+.*?on\s+(.+?)[\?$]',
+                q, re.IGNORECASE
+            )
+            if weather_m:
+                city = weather_m.group(1).strip().lower()
+                date_str = weather_m.group(2).strip().lower().rstrip("?")
+                event_key = f"weather|{city}|{date_str}"
+            else:
+                # Strategy 2: Universal grouping by question prefix
+                # Remove specific outcome values (numbers, ranges, names after "be")
+                # to find the shared event question
+                # E.g. "Will Bitcoin be above 90000 on March 20?" -> "will bitcoin be ... on march 20"
+                normalized = q.lower().strip().rstrip("?")
+                # Remove specific numbers/ranges/dollar signs that distinguish outcomes
+                normalized = re.sub(r'[\$€£]\s*[\d,]+\.?\d*', 'X', normalized)
+                normalized = re.sub(r'\d+[°℉℃]?\s*[-–]\s*\d+[°℉℃]?', 'X', normalized)
+                normalized = re.sub(r'(?:above|below|over|under|between|exactly)\s+[\d,.]+', 'X', normalized)
+                # Keep first 80 chars as event key
+                event_key = f"universal|{normalized[:80]}"
 
-            # Use mid_price as the YES price
-            if snap.mid_price and 0 < snap.mid_price < 1.0:
-                if event_key not in by_event:
-                    by_event[event_key] = []
-                by_event[event_key].append(snap)
+            if event_key not in by_event:
+                by_event[event_key] = []
+            by_event[event_key].append(snap)
 
-        # Only keep events with 3+ buckets
+        # Only keep events with 3+ outcomes (multi-outcome arb needs at least 3)
         return {
             key: snaps for key, snaps in by_event.items()
             if len(snaps) >= 3

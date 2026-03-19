@@ -15,13 +15,13 @@ import logging
 import math
 import re
 import time
-from collections import deque
+from collections import deque, defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from models import (
-    Event, EventType, OrderRecord, OrderSide,
-    StrategyConfig, StrategyStatusEnum, utc_now,
+    Event, EventType, OrderRecord, OrderSide, TradeRecord,
+    StrategyConfig, StrategyStatusEnum, utc_now, new_id,
 )
 from engine.strategies.base import BaseStrategy
 from engine.strategies.sniper_models import (
@@ -481,6 +481,9 @@ class CryptoSniper(BaseStrategy):
                         break
                     await self._execute_signal(sig)
 
+                # Stage 6: Cleanup opposite-side positions (runs every scan)
+                await self._cleanup_opposite_side_positions()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -899,6 +902,78 @@ class CryptoSniper(BaseStrategy):
             self._finalize_execution(execution)
 
     # ---- Fill Tracking ----
+
+    async def _cleanup_opposite_side_positions(self):
+        """Detect and close weaker side of opposite-side positions on the same market."""
+        if not self._state or not self._execution_engine:
+            return
+
+        # Group positions by condition_id
+        by_condition: Dict[str, List] = defaultdict(list)
+        for token_id, pos in self._state.positions.items():
+            sid = getattr(pos, "strategy_id", "") or ""
+            if "crypto" not in sid and "sniper" not in sid:
+                continue
+            # Find the condition_id for this token
+            for cid, cm in self._classified_cache.items():
+                if cm.yes_token_id == token_id or cm.no_token_id == token_id:
+                    side = "yes" if cm.yes_token_id == token_id else "no"
+                    by_condition[cid].append((token_id, pos, side))
+                    break
+
+        closed = 0
+        for cid, positions_list in by_condition.items():
+            if len(positions_list) < 2:
+                continue
+
+            yes_pos = [(tid, p) for tid, p, s in positions_list if s == "yes"]
+            no_pos = [(tid, p) for tid, p, s in positions_list if s == "no"]
+
+            if not yes_pos or not no_pos:
+                continue
+
+            # Both sides held — close the weaker one (lower unrealized PnL)
+            for y_tid, y_p in yes_pos:
+                for n_tid, n_p in no_pos:
+                    y_pnl = (y_p.current_price - y_p.avg_cost) * y_p.size
+                    n_pnl = (n_p.current_price - n_p.avg_cost) * n_p.size
+
+                    # Close the weaker side
+                    if y_pnl <= n_pnl:
+                        close_tid, close_pos = y_tid, y_p
+                        kept_side = "NO"
+                    else:
+                        close_tid, close_pos = n_tid, n_p
+                        kept_side = "YES"
+
+                    close_price = close_pos.current_price or close_pos.avg_cost
+                    pnl = round((close_price - close_pos.avg_cost) * close_pos.size, 4)
+
+                    trade = TradeRecord(
+                        id=new_id(),
+                        order_id="opposite_side_cleanup",
+                        token_id=close_tid,
+                        market_question=close_pos.market_question,
+                        outcome=f"closed_weaker_side:kept_{kept_side}",
+                        side=OrderSide.SELL,
+                        price=close_price,
+                        size=close_pos.size,
+                        fees=0.0,
+                        pnl=pnl,
+                        strategy_id=getattr(close_pos, "strategy_id", self.strategy_id),
+                        signal_reason="opposite_side_cleanup",
+                    )
+                    self._state.add_trade(trade)
+                    self._state.positions.pop(close_tid, None)
+                    closed += 1
+
+                    logger.warning(
+                        f"[SNIPER-CLEANUP] Closed opposite-side position: {close_pos.market_question[:40]}.. "
+                        f"kept={kept_side} pnl=${pnl:+.4f}"
+                    )
+
+        if closed > 0:
+            self._m["opposite_side_cleanups"] = self._m.get("opposite_side_cleanups", 0) + closed
 
     async def _on_order_update(self, event: Event):
         if event.source != "paper_adapter":

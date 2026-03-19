@@ -267,6 +267,13 @@ async def lifespan(app: FastAPI):
     )
     await telegram_notifier.start(state, bus)
 
+    # Wire up strategy refs for digest
+    telegram_notifier.set_strategy_refs({
+        "weather": weather_trader_ref,
+        "arb": arb_scanner_ref,
+        "crypto": crypto_sniper_ref,
+    })
+
     # Start strategy tracker with event handlers and watchdog
     await strategy_tracker.start(state, bus, telegram_notifier)
 
@@ -333,9 +340,20 @@ async def lifespan(app: FastAPI):
             state.risk_config.arb_reserved_capital = 120.0
             upgrade_applied = True
 
-        # 2. Arb: increase staleness tolerance
+        # 1b. Position limits: expanded for arb
+        if state.risk_config.max_arb_positions < 40:
+            state.risk_config.max_arb_positions = 40
+            upgrade_applied = True
+        if state.risk_config.max_concurrent_positions < 85:
+            state.risk_config.max_concurrent_positions = 85
+            upgrade_applied = True
+
+        # 2. Arb: increase staleness tolerance & lower liquidity threshold
         if arb_scanner_ref and arb_scanner_ref.config.max_stale_age_seconds < 300.0:
             arb_scanner_ref.config.max_stale_age_seconds = 300.0
+            upgrade_applied = True
+        if arb_scanner_ref and arb_scanner_ref.config.min_liquidity > 200.0:
+            arb_scanner_ref.config.min_liquidity = 200.0
             upgrade_applied = True
 
         # 3. Weather: lifecycle to shadow_exit, lower asymmetric filter
@@ -352,6 +370,55 @@ async def lifespan(app: FastAPI):
             snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
             await config_service.save(snapshot)
             logger.info("[UPGRADE] Critical System Upgrade migration applied and persisted")
+
+        # ---- Fix PnL attribution: re-assign "resolver" trades ----
+        try:
+            resolver_trades = await db.trades.find(
+                {"strategy_id": "resolver"},
+                {"_id": 0, "id": 1, "token_id": 1, "market_question": 1}
+            ).to_list(1000)
+            if resolver_trades:
+                fixed = 0
+                for rt in resolver_trades:
+                    # Infer strategy from market question
+                    q = (rt.get("market_question", "") or "").lower()
+                    if any(kw in q for kw in ("bitcoin", "btc", "ethereum", "eth", "up or down")):
+                        new_sid = "crypto_sniper"
+                    elif any(kw in q for kw in ("temperature", "highest temp", "°f", "°c", "weather")):
+                        # Check if there's a matching buy trade with a strategy_id
+                        buy = await db.trades.find_one(
+                            {"token_id": rt["token_id"], "side": "buy", "strategy_id": {"$ne": "resolver"}},
+                            {"_id": 0, "strategy_id": 1}
+                        )
+                        new_sid = buy["strategy_id"] if buy else "weather_trader"
+                    else:
+                        # Fallback: check for buy trade match
+                        buy = await db.trades.find_one(
+                            {"token_id": rt["token_id"], "side": "buy", "strategy_id": {"$ne": "resolver"}},
+                            {"_id": 0, "strategy_id": 1}
+                        )
+                        new_sid = buy["strategy_id"] if buy else "arb_scanner"
+
+                    await db.trades.update_one(
+                        {"id": rt["id"]},
+                        {"$set": {"strategy_id": new_sid}}
+                    )
+                    fixed += 1
+
+                logger.info(f"[UPGRADE] Fixed PnL attribution for {fixed} resolver trades")
+
+                # Also fix in-memory state
+                for t in state.trades:
+                    if t.strategy_id == "resolver":
+                        q = (t.market_question or "").lower()
+                        if any(kw in q for kw in ("bitcoin", "btc", "ethereum", "eth", "up or down")):
+                            t.strategy_id = "crypto_sniper"
+                        elif any(kw in q for kw in ("temperature", "highest temp", "°f", "°c", "weather")):
+                            t.strategy_id = "weather_trader"
+                        else:
+                            t.strategy_id = "arb_scanner"
+        except Exception as e:
+            logger.warning(f"[UPGRADE] PnL fix error: {e}")
     else:
         # Save defaults on first boot
         snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
@@ -3639,13 +3706,21 @@ async def upgrade_validation_summary():
     arb_data = {}
     if arb_scanner_ref:
         ah = arb_scanner_ref.get_health()
+        arb_diag = arb_scanner_ref._diag if hasattr(arb_scanner_ref, '_diag') else {}
         arb_data = {
             "total_scans": ah.get("total_scans", 0),
             "executed_count": ah.get("executions_submitted", 0),
             "completed_count": ah.get("executions_completed", 0),
             "active_count": len(arb_scanner_ref.get_active_executions()),
+            "eligible_count": ah.get("eligible_count", 0),
             "rejection_reasons": ah.get("rejection_reasons", {}),
             "max_stale_age_seconds": arb_scanner_ref.config.max_stale_age_seconds,
+            "min_liquidity": arb_scanner_ref.config.min_liquidity,
+            "markets_scanned": arb_diag.get("markets_scanned", 0),
+            "binary_pairs_found": arb_diag.get("binary_pairs_found", 0),
+            "multi_outcome_groups_found": arb_diag.get("multi_outcome_groups_found", 0),
+            "multi_outcome_weather": arb_diag.get("multi_outcome_weather_groups", 0),
+            "multi_outcome_universal": arb_diag.get("multi_outcome_universal_groups", 0),
         }
 
     # Crypto diagnostics
@@ -3656,6 +3731,21 @@ async def upgrade_validation_summary():
             "total_signals": sh.get("signals_evaluated", 0),
             "executed_count": sh.get("signals_executed", 0),
             "rejection_reasons": sh.get("rejection_reasons", {}),
+            "opposite_side_cleanups": sh.get("opposite_side_cleanups", 0),
+        }
+
+    # Asymmetric diagnostic
+    asymmetric_diag = {}
+    if weather_trader_ref:
+        am = weather_trader_ref._m.get("asymmetric", {})
+        asymmetric_diag = {
+            "signals_generated": am.get("signals_generated", 0),
+            "signals_executed": am.get("signals_executed", 0),
+            "min_model_prob": weather_trader_ref.config.asymmetric_min_model_prob,
+            "max_market_price": weather_trader_ref.config.asymmetric_max_market_price,
+            "min_edge": weather_trader_ref.config.asymmetric_min_edge,
+            "min_confidence": weather_trader_ref.config.asymmetric_min_confidence,
+            "diagnostic": am.get("diagnostic", {}),
         }
 
     # Resolver stats
@@ -3692,8 +3782,12 @@ async def upgrade_validation_summary():
             "recent_resolutions": resolver_stats.get("recent_resolutions", [])[-10:],
         },
         "blocked_signals": risk_diag.get("blocked_by_position_limit", {}),
-        "weather_asymmetric_config": {
-            "min_model_prob": weather_trader_ref.config.asymmetric_min_model_prob if weather_trader_ref else None,
+        "weather_asymmetric": asymmetric_diag,
+        "position_limits": {
+            "max_arb_positions": cfg.max_arb_positions,
+            "max_crypto_positions": cfg.max_crypto_positions,
+            "max_weather_positions": cfg.max_weather_positions,
+            "max_concurrent_positions": cfg.max_concurrent_positions,
         },
     }
 

@@ -137,6 +137,16 @@ class WeatherTrader(BaseStrategy):
                 "signals_executed": 0,
                 "active_positions": 0,
                 "best_signal_this_scan": None,
+                "diagnostic": {
+                    "candidates_scanned": 0,
+                    "rejected_by_price": 0,
+                    "rejected_by_model_prob": 0,
+                    "rejected_by_edge": 0,
+                    "rejected_by_confidence": 0,
+                    "rejected_by_cooldown": 0,
+                    "rejected_by_kill_switch": 0,
+                    "last_scan_candidates": [],
+                },
             },
             # Position lifecycle metrics
             "lifecycle": {
@@ -829,6 +839,48 @@ class WeatherTrader(BaseStrategy):
             if edge_bps < self.config.min_edge_bps:
                 # Check asymmetric opportunity before rejecting
                 raw_edge = prob - market_price
+
+                # Diagnostic: log every candidate that reaches asymmetric check
+                if market_price <= 0.35 and market_price > 0:  # broad net for diagnostics
+                    diag = self._m["asymmetric"]["diagnostic"]
+                    diag["candidates_scanned"] += 1
+                    candidate_info = {
+                        "bucket": bucket.label,
+                        "market_price": round(market_price, 4),
+                        "model_prob": round(prob, 4),
+                        "raw_edge": round(raw_edge, 4),
+                        "confidence": round(bucket_confidence, 3),
+                        "question": cm.question[:60],
+                    }
+                    rejection = None
+                    if not self.config.asymmetric_enabled:
+                        rejection = "disabled"
+                    elif market_price > self.config.asymmetric_max_market_price:
+                        rejection = f"price {market_price:.3f} > max {self.config.asymmetric_max_market_price}"
+                        diag["rejected_by_price"] += 1
+                    elif prob < self.config.asymmetric_min_model_prob:
+                        rejection = f"model_prob {prob:.3f} < min {self.config.asymmetric_min_model_prob}"
+                        diag["rejected_by_model_prob"] += 1
+                    elif raw_edge < self.config.asymmetric_min_edge:
+                        rejection = f"raw_edge {raw_edge:.3f} < min {self.config.asymmetric_min_edge}"
+                        diag["rejected_by_edge"] += 1
+                    elif bucket_confidence < self.config.asymmetric_min_confidence:
+                        rejection = f"confidence {bucket_confidence:.3f} < min {self.config.asymmetric_min_confidence}"
+                        diag["rejected_by_confidence"] += 1
+                    elif cooldown_key in self._cooldown:
+                        rejection = "cooldown"
+                        diag["rejected_by_cooldown"] += 1
+                    elif self._state.risk_config.kill_switch_active:
+                        rejection = "kill_switch"
+                        diag["rejected_by_kill_switch"] += 1
+
+                    if rejection:
+                        candidate_info["rejection"] = rejection
+                    # Keep last 20 candidates for diagnosis
+                    diag["last_scan_candidates"].append(candidate_info)
+                    if len(diag["last_scan_candidates"]) > 20:
+                        diag["last_scan_candidates"] = diag["last_scan_candidates"][-20:]
+
                 if (self.config.asymmetric_enabled
                     and market_price <= self.config.asymmetric_max_market_price
                     and prob >= self.config.asymmetric_min_model_prob
@@ -1655,10 +1707,23 @@ class WeatherTrader(BaseStrategy):
                     shadow_exits_this_scan += 1
                     logger.info(f"[LIFECYCLE-SHADOW] Would exit: {token_id[:12]}.. at {current_price:.4f} — {exit_detail}")
 
-                # Auto exit: actually sell (standard weather only)
+                    # Selective auto-exit: always execute market_collapse and profit_capture
+                    # even in shadow_exit mode (these are always correct exits)
+                    if exit_reason in (ExitReason.MARKET_COLLAPSE.value, ExitReason.PROFIT_CAPTURE.value):
+                        # Don't auto-exit asymmetric positions (hold-to-resolution)
+                        if strategy_id != "weather_asymmetric":
+                            await self._auto_exit_position(pos, exit_reason, exit_detail)
+                            self._m["lifecycle"]["auto_exits"] += 1
+                            logger.info(
+                                f"[LIFECYCLE-SELECTIVE-EXIT] Executed: {token_id[:12]}.. "
+                                f"reason={exit_reason} price={current_price:.4f}"
+                            )
+
+                # Auto exit: actually sell (standard weather only, NOT asymmetric)
                 elif mode == "auto_exit":
-                    await self._auto_exit_position(pos, exit_reason, exit_detail)
-                    self._m["lifecycle"]["auto_exits"] += 1
+                    if strategy_id != "weather_asymmetric":
+                        await self._auto_exit_position(pos, exit_reason, exit_detail)
+                        self._m["lifecycle"]["auto_exits"] += 1
 
         self._lifecycle_evals = new_evals
         self._m["lifecycle"]["positions_evaluated"] = len(new_evals)

@@ -1,0 +1,191 @@
+{
+  "summary": "Iteration 63: CRITICAL EXPANSION validation COMPLETE. All 33 backend tests passed. Verified: (1) Position limits: max_arb_positions=40, max_concurrent_positions=85. (2) Arb min_liquidity=200, max_stale_age=300s. (3) Arb scanning ALL markets: markets_scanned=1099, binary_pairs=500. (4) Weather lifecycle_mode=shadow_exit with market_collapse_threshold=0.05. (5) Weather asymmetric diagnostic with candidates_scanned, rejected_by_model_prob, etc. (signals_generated=0 confirms non-viable). (6) PnL attribution has NO 'resolver' strategy. (7) Zombie resolver tracks zombies_force_resolved. (8) /api/controls has exposure_by_strategy and exposure_caps.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "upgrade_validation_endpoint": [
+      "GET /api/admin/upgrade-validation returns 200 - PASS",
+      "position_limits: max_arb=40, max_concurrent=85 - PASS",
+      "arb min_liquidity=200 - PASS",
+      "arb scanning ALL markets (binary_pairs=500 found) - PASS",
+      "arb markets_scanned=1099 (> 1000) - PASS",
+      "arb multi_outcome_universal field present - PASS",
+      "weather_asymmetric diagnostic fields: candidates_scanned, rejected_by_model_prob, rejected_by_price, rejected_by_edge, rejected_by_confidence - PASS",
+      "weather_asymmetric.min_model_prob=0.20 - PASS",
+      "asymmetric signals_generated=0 (confirmed non-viable) - PASS",
+      "pnl_by_strategy has NO 'resolver' key - PASS",
+      "resolver_stats.zombies_force_resolved field present - PASS",
+      "blocked_signals field present - PASS"
+    ],
+    "controls_endpoint": [
+      "GET /api/controls returns 200 - PASS",
+      "exposure_by_strategy has weather, crypto, arb - PASS",
+      "exposure_caps: crypto=120, weather=120, arb=120, arb_reserved=120, total=360 - PASS"
+    ],
+    "weather_lifecycle_endpoint": [
+      "GET /api/positions/weather/lifecycle returns 200 - PASS",
+      "mode=shadow_exit - PASS",
+      "config.market_collapse_threshold=0.05 - PASS"
+    ],
+    "strategy_configs_endpoint": [
+      "GET /api/config/strategies returns 200 - PASS",
+      "arb_scanner.max_stale_age_seconds=300 - PASS",
+      "arb_scanner.min_liquidity=200 - PASS",
+      "weather_trader.asymmetric_min_model_prob=0.20 - PASS",
+      "weather_trader.lifecycle_mode=shadow_exit - PASS"
+    ],
+    "health_endpoint": [
+      "GET /api/health returns 200 - PASS",
+      "engine=running - PASS"
+    ],
+    "diagnostics_endpoint": [
+      "GET /api/diagnostics returns 200 - PASS",
+      "resolver stats present - PASS"
+    ],
+    "weather_exit_candidates_endpoint": [
+      "GET /api/positions/weather/exit-candidates returns 200 - PASS",
+      "mode=shadow_exit - PASS",
+      "config.market_collapse_threshold=0.05 - PASS"
+    ],
+    "arb_diagnostics_endpoint": [
+      "GET /api/strategies/arb/diagnostics returns 200 - PASS",
+      "markets_scanned field present (1099) - PASS",
+      "binary_pairs_found field present (500) - PASS",
+      "config.min_liquidity=200 - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "position_limits_expanded": {
+      "status": "PASS",
+      "description": "max_arb_positions increased to 40, max_concurrent_positions increased to 85",
+      "evidence": {
+        "max_arb_positions": 40,
+        "max_concurrent_positions": 85
+      }
+    },
+    "arb_min_liquidity_lowered": {
+      "status": "PASS",
+      "description": "Arb min_liquidity lowered from 500 to 200",
+      "evidence": "arb_scanner.min_liquidity = 200.0"
+    },
+    "arb_scanning_all_markets": {
+      "status": "PASS",
+      "description": "Arb scanner now scans ALL Polymarket categories, not just weather",
+      "evidence": {
+        "markets_scanned": 1099,
+        "binary_pairs_found": 500,
+        "multi_outcome_weather": 3,
+        "multi_outcome_universal": 0
+      }
+    },
+    "weather_lifecycle_shadow_exit": {
+      "status": "PASS",
+      "description": "Weather lifecycle mode set to shadow_exit with market_collapse_threshold=0.05",
+      "evidence": {
+        "lifecycle_mode": "shadow_exit",
+        "market_collapse_threshold": 0.05
+      }
+    },
+    "weather_asymmetric_diagnostic": {
+      "status": "PASS",
+      "description": "Asymmetric diagnostic includes candidates_scanned, rejected_by_model_prob, rejected_by_price, rejected_by_edge, rejected_by_confidence",
+      "evidence": {
+        "min_model_prob": 0.2,
+        "signals_generated": 0,
+        "diagnostic_fields": ["candidates_scanned", "rejected_by_price", "rejected_by_model_prob", "rejected_by_edge", "rejected_by_confidence", "rejected_by_cooldown", "rejected_by_kill_switch", "last_scan_candidates"]
+      }
+    },
+    "pnl_attribution_fixed": {
+      "status": "PASS",
+      "description": "PnL attributed to original strategy, NOT 'resolver'",
+      "evidence": "pnl_by_strategy keys: ['crypto_sniper', 'arb_scanner', 'test', 'weather_trader', 'unknown'] - no 'resolver'"
+    },
+    "sell_orders_pass_risk": {
+      "status": "PASS",
+      "description": "SELL orders have fast-path in risk.py that always passes",
+      "evidence": "blocked_signals field present, SELL fast-path implemented in check_order()"
+    },
+    "zombie_resolver": {
+      "status": "PASS",
+      "description": "Zombie resolver tracks zombies_force_resolved and infers expiry from question",
+      "evidence": {
+        "zombies_force_resolved": 0,
+        "infer_expiry_from_question": "method exists in market_resolver_service.py"
+      }
+    },
+    "controls_exposure_tracking": {
+      "status": "PASS",
+      "description": "/api/controls includes exposure_by_strategy and exposure_caps",
+      "evidence": {
+        "exposure_by_strategy": {"weather": 0.58, "crypto": 29.7, "arb": 4.29},
+        "exposure_caps": {"crypto": 120.0, "weather": 120.0, "arb": 120.0, "arb_reserved": 120.0, "total": 360.0}
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration63_expansion.py",
+    "/app/test_reports/pytest/pytest_results_iteration63.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "RiskConfig in models.py correctly has max_arb_positions=40, max_concurrent_positions=85",
+    "ArbConfig in arb_models.py has min_liquidity=200, max_stale_age_seconds=300",
+    "arb_scanner.py _find_multi_outcome_groups() now uses universal grouping for ALL market types",
+    "risk.py check_order() has SELL fast-path that returns approved immediately",
+    "market_resolver_service.py has _infer_expiry_from_question() for zombie resolution without end_date",
+    "weather_trader.py has comprehensive asymmetric diagnostic tracking in _m['asymmetric']['diagnostic']",
+    "server.py startup migration applies expanded position limits and fixes PnL attribution"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration63_expansion.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (33/33 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 63 verified the CRITICAL EXPANSION features. Key findings: (1) Position limits expanded: max_arb=40, max_concurrent=85. (2) Arb min_liquidity lowered to 200. (3) Arb scanning ALL markets: 1099 markets scanned, 500 binary pairs found. (4) Weather lifecycle in shadow_exit mode with market_collapse_threshold=0.05. (5) Asymmetric diagnostic fully populated but signals_generated=0 (confirms non-viable due to model_prob filter). (6) PnL attribution fixed - no 'resolver' strategy. (7) /api/controls has exposure_by_strategy and exposure_caps. (8) Zombie resolver has _infer_expiry_from_question() for markets without end_date. Current position counts: weather=21, crypto=16, arb=24, total=61.",
+
+  "current_position_counts": {
+    "weather": 21,
+    "crypto": 16,
+    "arb": 24,
+    "total": 61
+  },
+
+  "current_exposure": {
+    "weather": 0.58,
+    "crypto": 29.7,
+    "arb": 4.29,
+    "total": 34.57
+  },
+
+  "arb_scanner_stats": {
+    "markets_scanned": 1099,
+    "binary_pairs_found": 500,
+    "multi_outcome_weather": 3,
+    "multi_outcome_universal": 0
+  }
+}
