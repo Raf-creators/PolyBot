@@ -1,0 +1,168 @@
+{
+  "summary": "Iteration 65: HYBRID STALENESS-ADJUSTED EXECUTION validation COMPLETE. All 25 backend tests passed. Verified: (1) ArbConfig has all new dynamic threshold params: staleness_edge_base_bps=15, staleness_edge_per_minute_bps=5, hard_max_stale_seconds=1800, liquidity_deep_threshold=2000, liquidity_mid_threshold=500, liquidity_buffer_thin_bps=15. (2) min_net_edge_bps lowered from 30 to 15 (absolute floor). (3) GET /api/strategies/arb/diagnostics returns dynamic_threshold_samples with calculated thresholds at various staleness/liquidity combos. (4) Hard stale reject working: data >1800s rejected with 'hard_stale_reject' reason. (5) Hard liquidity reject: min_liquidity=200. (6) Rejection log entries include all required fields: type, condition_id, question, total_cost, gross_edge_bps, fees_bps, slippage_bps, net_edge_bps, stale_age_s, liquidity, dynamic_min_edge_bps, reason. (7) Raw edges entries include stale_age_s and liquidity fields. (8) All existing arb endpoints still working.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "arb_config_dynamic_threshold_params": [
+      "staleness_edge_base_bps = 15.0 - PASS",
+      "staleness_edge_per_minute_bps = 5.0 - PASS",
+      "hard_max_stale_seconds = 1800.0 - PASS",
+      "liquidity_deep_threshold = 2000.0 - PASS",
+      "liquidity_mid_threshold = 500.0 - PASS",
+      "liquidity_buffer_thin_bps = 15.0 - PASS",
+      "min_net_edge_bps = 15.0 (lowered from 30) - PASS"
+    ],
+    "dynamic_threshold_samples": [
+      "GET /api/strategies/arb/diagnostics returns dynamic_threshold_samples - PASS",
+      "Sample structure has stale_age_s, liquidity, required_min_edge_bps, hard_reject - PASS",
+      "30s/3000liq = 17.5bps (staleness=17.5, liq=0) - PASS",
+      "600s/300liq = 80bps (staleness=65, liq=15) - PASS",
+      "1200s/800liq = 122.5bps (staleness=115, liq=7.5) - PASS",
+      "Hard stale reject verified for >1800s - PASS"
+    ],
+    "hard_reject_rules": [
+      "Hard liquidity reject: min_liquidity=200 - PASS"
+    ],
+    "rejection_log_entries": [
+      "rejection_log present in diagnostics - PASS",
+      "Rejection entries have all required fields - PASS"
+    ],
+    "raw_edges_entries": [
+      "raw_edges present in diagnostics - PASS",
+      "raw_edges include stale_age_s - PASS",
+      "raw_edges include liquidity - PASS"
+    ],
+    "existing_endpoints": [
+      "GET /api/strategies/arb/opportunities returns tradable/rejected - PASS",
+      "GET /api/strategies/arb/executions returns active/completed - PASS",
+      "GET /api/strategies/arb/health returns performance metrics - PASS",
+      "GET /api/health returns 200 - PASS",
+      "GET /api/admin/upgrade-validation returns 200 with arb_health - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "dynamic_threshold_formula": {
+      "status": "PASS",
+      "description": "Dynamic min edge = staleness_bps + liquidity_bps, floored at min_net_edge_bps",
+      "evidence": {
+        "staleness_bps_formula": "base(15) + (age_seconds/60) * per_minute(5)",
+        "liquidity_bps": "0 for >2000, 7.5 for 500-2000, 15 for <500",
+        "floor": "min_net_edge_bps (15)"
+      }
+    },
+    "hard_reject_stale": {
+      "status": "PASS",
+      "description": "Data >1800s is hard rejected with 'hard_stale_reject' reason",
+      "evidence": {
+        "sample_rejection": "hard_stale_reject (4137s > 1800s max)",
+        "config_value": "hard_max_stale_seconds=1800"
+      }
+    },
+    "hard_reject_liquidity": {
+      "status": "PASS",
+      "description": "Liquidity <200 triggers hard reject",
+      "evidence": {
+        "config_value": "min_liquidity=200"
+      }
+    },
+    "rejection_log_completeness": {
+      "status": "PASS",
+      "description": "Rejection log entries include all required fields for debugging",
+      "evidence": {
+        "sample_entry": {
+          "type": "multi_outcome",
+          "condition_id": "weather|new york",
+          "gross_edge_bps": 9330.0,
+          "net_edge_bps": 9307.19,
+          "stale_age_s": 4136.6,
+          "liquidity": 910.99,
+          "dynamic_min_edge_bps": null,
+          "reason": "hard_stale_reject (4137s > 1800s max)"
+        }
+      }
+    },
+    "raw_edges_data_freshness": {
+      "status": "PASS",
+      "description": "Raw edges include stale_age_s and liquidity for transparency",
+      "evidence": {
+        "sample_raw_edge": {
+          "stale_age_s": 4136.6,
+          "liquidity": 910.99,
+          "gross_edge_bps": 9330.0
+        }
+      }
+    }
+  },
+
+  "dynamic_threshold_calculations": {
+    "description": "Verified dynamic threshold calculations match expected formula",
+    "samples": [
+      {"stale_age_s": 30, "liquidity": 300, "expected": 32.5, "actual": 32.5, "match": true},
+      {"stale_age_s": 30, "liquidity": 800, "expected": 25.0, "actual": 25.0, "match": true},
+      {"stale_age_s": 30, "liquidity": 3000, "expected": 17.5, "actual": 17.5, "match": true},
+      {"stale_age_s": 600, "liquidity": 300, "expected": 80.0, "actual": 80.0, "match": true},
+      {"stale_age_s": 1200, "liquidity": 800, "expected": 122.5, "actual": 122.5, "match": true}
+    ]
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration65_hybrid_dynamic_threshold.py",
+    "/app/test_reports/pytest/pytest_results_iteration65.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "arb_scanner.py line 347-378: _compute_dynamic_min_edge_bps correctly implements hybrid threshold with hard reject logic",
+    "arb_scanner.py line 389-537: _evaluate_pair uses dynamic threshold, logs rejections with all required fields including stale_age_s, liquidity, dynamic_min_edge_bps",
+    "arb_scanner.py line 539-666: _evaluate_multi_outcome also uses dynamic threshold with same rejection logging",
+    "arb_scanner.py line 942-961: get_diagnostics returns dynamic_threshold_samples at representative data points",
+    "arb_models.py: ArbConfig class has all new dynamic threshold parameters with correct defaults",
+    "server.py line 367-372: Startup migration ensures min_net_edge_bps <= 15 and hard_max_stale_seconds >= 1800"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration65_hybrid_dynamic_threshold.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (25/25 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live MongoDB data",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 65 validated the HYBRID STALENESS-ADJUSTED EXECUTION system. The arb engine now uses dynamic thresholds based on data freshness (staleness) and liquidity depth. Key formula: dynamic_min_edge = staleness_bps(15 + age_s/60*5) + liquidity_bps(0/7.5/15) with floor at min_net_edge_bps(15). Hard reject rules: stale >1800s, liquidity <200. Currently seeing rejections due to stale weather market data (>4000s). 1 multi-outcome arb has already executed successfully (London weather). All rejection log entries include full diagnostic fields for debugging.",
+
+  "current_arb_stats": {
+    "markets_scanned": 1121,
+    "binary_pairs_found": 500,
+    "multi_outcome_groups_found": 5,
+    "raw_edges_found": 5,
+    "rejections_logged": 4,
+    "reason_for_rejections": "Stale data (>1800s) in multi-outcome weather markets"
+  },
+
+  "arb_health_snapshot": {
+    "trades_per_hour": 100.0,
+    "avg_realized_edge_bps": 371.0,
+    "multi_executed": 1,
+    "completed": 1,
+    "capital_utilization_pct": 15.8
+  }
+}

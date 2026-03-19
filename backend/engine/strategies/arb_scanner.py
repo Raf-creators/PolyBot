@@ -102,7 +102,10 @@ class ArbScanner(BaseStrategy):
         logger.info(
             f"ArbScanner started "
             f"(interval={self.config.scan_interval}s, "
-            f"min_edge={self.config.min_net_edge_bps}bps, "
+            f"edge_floor={self.config.min_net_edge_bps}bps, "
+            f"staleness_base={self.config.staleness_edge_base_bps}bps+"
+            f"{self.config.staleness_edge_per_minute_bps}bps/min, "
+            f"hard_stale={self.config.hard_max_stale_seconds}s, "
             f"max_concurrent={self.config.max_concurrent_arbs})"
         )
 
@@ -341,6 +344,39 @@ class ArbScanner(BaseStrategy):
                 exp = pos.size * (pos.current_price or pos.avg_cost or 0)
                 self._market_exposure[cid] = self._market_exposure.get(cid, 0) + exp
 
+    def _compute_dynamic_min_edge_bps(self, stale_age_s: float, liquidity: float) -> tuple:
+        """Compute required min net edge based on staleness and liquidity.
+
+        Returns (effective_min_bps, hard_reject_reason_or_None).
+        If hard_reject_reason is not None, the opportunity is an absolute reject.
+        """
+        cfg = self.config
+
+        # Hard reject: data too stale regardless of edge
+        if stale_age_s > cfg.hard_max_stale_seconds:
+            return -1, f"hard_stale_reject ({stale_age_s:.0f}s > {cfg.hard_max_stale_seconds:.0f}s max)"
+
+        # Hard reject: liquidity below absolute floor
+        if liquidity < cfg.min_liquidity:
+            return -1, f"hard_liquidity_reject ({liquidity:.0f} < {cfg.min_liquidity:.0f} min)"
+
+        # Staleness component: linear ramp — fresher = lower bar
+        staleness_bps = cfg.staleness_edge_base_bps + (stale_age_s / 60.0) * cfg.staleness_edge_per_minute_bps
+
+        # Liquidity component: tiered buffer — thinner = bigger buffer
+        if liquidity >= cfg.liquidity_deep_threshold:
+            liq_bps = 0.0
+        elif liquidity >= cfg.liquidity_mid_threshold:
+            liq_bps = cfg.liquidity_buffer_thin_bps * 0.5
+        else:
+            liq_bps = cfg.liquidity_buffer_thin_bps
+
+        dynamic_min = staleness_bps + liq_bps
+
+        # Never below the absolute floor
+        effective_min = max(dynamic_min, cfg.min_net_edge_bps)
+        return round(effective_min, 2), None
+
     def _compute_edge_scaled_size(self, net_edge_bps: float, liquidity: float) -> float:
         """Compute position size scaled by edge magnitude and constrained by liquidity."""
         cfg = self.config
@@ -373,6 +409,12 @@ class ArbScanner(BaseStrategy):
         gross_edge = 1.0 - total_cost
         gross_edge_bps = round(gross_edge * 10000, 2)
 
+        # Data freshness + liquidity (computed early for diagnostics)
+        yes_age = compute_data_age(yes_snap.updated_at)
+        no_age = compute_data_age(no_snap.updated_at)
+        max_age = max(yes_age, no_age)
+        liquidity = min(yes_snap.liquidity, no_snap.liquidity)
+
         # Log ALL raw edges for diagnostics
         if abs(gross_edge_bps) > 5:
             raw_edges.append({
@@ -384,6 +426,8 @@ class ArbScanner(BaseStrategy):
                 "total_cost": round(total_cost, 4),
                 "gross_edge_bps": gross_edge_bps,
                 "expected_profit_per_share": round(gross_edge, 4),
+                "stale_age_s": round(max_age, 1),
+                "liquidity": round(liquidity, 2),
             })
 
         # STRICT: reject if total_cost >= 1.0
@@ -392,13 +436,7 @@ class ArbScanner(BaseStrategy):
 
         self._m["raw_edges_found"] += 1
 
-        # Data freshness
-        yes_age = compute_data_age(yes_snap.updated_at)
-        no_age = compute_data_age(no_snap.updated_at)
-        max_age = max(yes_age, no_age)
-
-        # Liquidity
-        liquidity = min(yes_snap.liquidity, no_snap.liquidity)
+        # Volume
         volume = min(yes_snap.volume_24h, no_snap.volume_24h)
 
         # Confidence
@@ -422,22 +460,24 @@ class ArbScanner(BaseStrategy):
 
         net_edge_bps = round(gross_edge_bps - fees_bps - slippage_bps - penalty_bps, 2)
 
-        # Tradability filters
+        # Tradability filters — hybrid staleness + liquidity dynamic threshold
         is_tradable = True
         rejection_reason = None
 
-        if net_edge_bps < self.config.min_net_edge_bps:
+        # 1. Dynamic min-edge (staleness + liquidity adjusted)
+        effective_min_edge, hard_reject = self._compute_dynamic_min_edge_bps(max_age, liquidity)
+        if hard_reject:
             is_tradable = False
-            rejection_reason = f"net_edge {net_edge_bps:.1f}bps < min {self.config.min_net_edge_bps}bps"
-        elif liquidity < self.config.min_liquidity:
+            rejection_reason = hard_reject
+        elif net_edge_bps < effective_min_edge:
             is_tradable = False
-            rejection_reason = f"liquidity {liquidity:.0f} < min {self.config.min_liquidity}"
+            rejection_reason = (
+                f"net_edge {net_edge_bps:.1f}bps < dynamic_min {effective_min_edge:.1f}bps "
+                f"(age={max_age:.0f}s, liq={liquidity:.0f})"
+            )
         elif confidence < self.config.min_confidence:
             is_tradable = False
             rejection_reason = f"confidence {confidence:.3f} < min {self.config.min_confidence}"
-        elif max_age > self.config.max_stale_age_seconds:
-            is_tradable = False
-            rejection_reason = f"stale data {max_age:.0f}s > max {self.config.max_stale_age_seconds}s"
         elif self._state.risk_config.kill_switch_active:
             is_tradable = False
             rejection_reason = "kill_switch active"
@@ -461,7 +501,9 @@ class ArbScanner(BaseStrategy):
                 "fees_bps": fees_bps,
                 "slippage_bps": slippage_bps,
                 "net_edge_bps": net_edge_bps,
-                "liquidity": liquidity,
+                "stale_age_s": round(max_age, 1),
+                "liquidity": round(liquidity, 2),
+                "dynamic_min_edge_bps": effective_min_edge if effective_min_edge > 0 else None,
                 "reason": rejection_reason,
             })
 
@@ -529,6 +571,8 @@ class ArbScanner(BaseStrategy):
             "outcome_count": len(valid_outcomes),
             "total_cost": round(total_cost, 4),
             "gross_edge_bps": gross_edge_bps,
+            "stale_age_s": round(max_age, 1),
+            "liquidity": round(min_liquidity, 2),
         })
 
         # STRICT: reject if total_cost >= 1.0
@@ -544,18 +588,20 @@ class ArbScanner(BaseStrategy):
         )
         net_edge_bps = round(gross_edge_bps - trading_fees_bps - slippage_bps, 2)
 
+        # Tradability filters — hybrid staleness + liquidity dynamic threshold
         is_tradable = True
         rejection_reason = None
 
-        if net_edge_bps < self.config.min_net_edge_bps:
+        effective_min_edge, hard_reject = self._compute_dynamic_min_edge_bps(max_age, min_liquidity)
+        if hard_reject:
             is_tradable = False
-            rejection_reason = f"net_edge {net_edge_bps:.1f}bps < min {self.config.min_net_edge_bps}bps"
-        elif min_liquidity < self.config.min_liquidity:
+            rejection_reason = hard_reject
+        elif net_edge_bps < effective_min_edge:
             is_tradable = False
-            rejection_reason = f"liquidity {min_liquidity:.0f} < min {self.config.min_liquidity}"
-        elif max_age > self.config.max_stale_age_seconds:
-            is_tradable = False
-            rejection_reason = f"stale data {max_age:.0f}s"
+            rejection_reason = (
+                f"net_edge {net_edge_bps:.1f}bps < dynamic_min {effective_min_edge:.1f}bps "
+                f"(age={max_age:.0f}s, liq={min_liquidity:.0f})"
+            )
         elif self._state.risk_config.kill_switch_active:
             is_tradable = False
             rejection_reason = "kill_switch active"
@@ -578,8 +624,12 @@ class ArbScanner(BaseStrategy):
                 "outcomes": len(valid_outcomes),
                 "total_cost": round(total_cost, 4),
                 "gross_edge_bps": gross_edge_bps,
+                "fees_bps": trading_fees_bps,
+                "slippage_bps": slippage_bps,
                 "net_edge_bps": net_edge_bps,
-                "liquidity": min_liquidity,
+                "stale_age_s": round(max_age, 1),
+                "liquidity": round(min_liquidity, 2),
+                "dynamic_min_edge_bps": effective_min_edge if effective_min_edge > 0 else None,
                 "reason": rejection_reason,
             })
 
@@ -890,12 +940,24 @@ class ArbScanner(BaseStrategy):
         return [e.model_dump() for e in self._completed_executions[-limit:]]
 
     def get_diagnostics(self) -> dict:
+        # Show dynamic threshold at representative data points
+        threshold_samples = []
+        for age_s in [30, 120, 300, 600, 900, 1200, 1800]:
+            for liq in [300, 800, 3000]:
+                min_edge, reject = self._compute_dynamic_min_edge_bps(age_s, liq)
+                threshold_samples.append({
+                    "stale_age_s": age_s,
+                    "liquidity": liq,
+                    "required_min_edge_bps": min_edge if not reject else None,
+                    "hard_reject": reject,
+                })
         return {
             **self._diag,
             "metrics": self._m,
             "config": self.config.model_dump(),
             "active_executions": len(self._active_executions),
             "total_completed": len(self._completed_executions),
+            "dynamic_threshold_samples": threshold_samples,
         }
 
     def get_performance(self) -> dict:

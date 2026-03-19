@@ -364,8 +364,12 @@ async def lifespan(app: FastAPI):
         if arb_scanner_ref and arb_scanner_ref.config.max_arb_size < 15.0:
             arb_scanner_ref.config.max_arb_size = 15.0
             upgrade_applied = True
-        if arb_scanner_ref and arb_scanner_ref.config.min_net_edge_bps > 30.0:
-            arb_scanner_ref.config.min_net_edge_bps = 30.0
+        if arb_scanner_ref and arb_scanner_ref.config.min_net_edge_bps > 15.0:
+            arb_scanner_ref.config.min_net_edge_bps = 15.0
+            upgrade_applied = True
+        # Ensure dynamic threshold params are set (upgrade from flat thresholds)
+        if arb_scanner_ref and arb_scanner_ref.config.hard_max_stale_seconds < 1800.0:
+            arb_scanner_ref.config.hard_max_stale_seconds = 1800.0
             upgrade_applied = True
 
         # 3. Weather: lifecycle to shadow_exit, lower asymmetric filter

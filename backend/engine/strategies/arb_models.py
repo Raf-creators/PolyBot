@@ -17,10 +17,10 @@ class ArbPairStatus(str, Enum):
 
 class ArbConfig(BaseModel):
     scan_interval: float = 10.0
-    min_net_edge_bps: float = 30.0
+    min_net_edge_bps: float = 15.0            # absolute floor — never trade below this
     min_liquidity: float = 200.0
     min_confidence: float = 0.25
-    max_stale_age_seconds: float = 300.0
+    max_stale_age_seconds: float = 300.0      # legacy — kept for risk engine compat
     max_arb_size: float = 15.0
     max_concurrent_arbs: int = 15
     default_size: float = 5.0
@@ -38,6 +38,14 @@ class ArbConfig(BaseModel):
     # Safety: kill-switch on repeated failures
     max_consecutive_failures: int = 5
     failure_cooldown_seconds: float = 300.0
+    # Dynamic threshold: staleness-adjusted edge floor
+    staleness_edge_base_bps: float = 15.0     # min edge for fresh data (<60s)
+    staleness_edge_per_minute_bps: float = 5.0  # addl bps per minute of staleness
+    hard_max_stale_seconds: float = 1800.0    # absolute hard reject (30 min)
+    # Dynamic threshold: liquidity-adjusted edge buffer
+    liquidity_deep_threshold: float = 2000.0  # above this = no liq buffer
+    liquidity_mid_threshold: float = 500.0    # above this = half buffer
+    liquidity_buffer_thin_bps: float = 15.0   # full buffer for thin liquidity (<500)
 
 
 class ArbOpportunity(BaseModel):
