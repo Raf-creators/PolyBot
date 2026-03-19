@@ -6,105 +6,94 @@ Build an autonomous trading engine that identifies and exploits pricing ineffici
 ## Core Architecture
 - **Backend**: FastAPI + MongoDB + Motor (async)
 - **Frontend**: React + Shadcn/UI
-- **Strategies**: `weather_trader`, `weather_asymmetric`, `crypto_sniper`, `arb_scanner`
+- **Strategies**: `weather_trader`, `crypto_sniper`, `arb_scanner` (asymmetric disabled)
 - **Services**: market_resolver, auto_resolver, persistence, analytics, telegram_notifier
 
 ## Key Config Model
-- `RiskConfig`: Global + per-strategy exposure caps ($120 each), arb reserved capital ($120)
-- `WeatherTradingConfig`: Lifecycle management (shadow_exit), exit rules, model parameters
-- `ArbScannerConfig`: Universal market scanning, dynamic staleness-adjusted thresholds
-- `SniperConfig`: Signal classification, opposite-side prevention
+- `RiskConfig`: Global $360 cap, crypto $180, weather $120, arb $120 reserved
+- `WeatherTradingConfig`: Lifecycle management (shadow_exit + selective auto_exit), min_edge_bps_long=500
+- `ArbScannerConfig`: Dynamic staleness-adjusted thresholds, hard_max_stale=2400s
+- `SniperConfig`: max_position_size=40, max_tte=43200 (12h), opposite_side filter removed
 
 ## What's Been Implemented
 
-### Hybrid Staleness-Adjusted Execution (March 2026)
-1. Dynamic min-edge threshold based on data staleness: fresher data = lower bar
-   - Formula: `staleness_bps = base(15) + (age_s / 60) * per_minute(5)`
-2. Dynamic liquidity buffer: thinner liquidity = higher edge requirement
-   - Tiers: deep(>$2000)=+0bps, mid($500-2000)=+7.5bps, thin(<$500)=+15bps
-3. Hard reject for very stale quotes (>1800s) regardless of edge
-4. Hard reject for thin liquidity (<$200) regardless of edge
-5. Absolute floor: min_net_edge_bps=15 (never trade below this)
-6. Enhanced rejection logging: raw_edge, net_edge, stale_age_s, liquidity, dynamic_min_edge_bps, reason
-7. Raw edges diagnostics include stale_age_s and liquidity
-8. Dynamic threshold sample table in diagnostics endpoint
-9. First successful multi-outcome arb execution (London weather, 345bps realized)
-10. Startup migration enforces new dynamic threshold params
+### Profitability Upgrade Rollout (March 19, 2026)
+**Crypto Throughput Maximization:**
+1. Removed `opposite_side_held` filter for crypto_sniper (was blocking 11.7% of signals)
+2. Raised crypto_max_exposure: $120 -> $180
+3. Raised max_position_size: 25 -> 40 shares
+4. Expanded max_tte_seconds: 8h -> 12h
 
-### Critical Arbitrage Execution Upgrade (March 2026)
-1. Rewrote arb_scanner.py with binary vs. multi-outcome prioritized pipelines
-2. True arbitrage condition: sum_of_asks < 1.0 after fees
-3. Simultaneous multi-leg execution
-4. Expanded to ALL Polymarket categories (1,800+ markets, 500 binary pairs)
-5. Edge-based position sizing
-6. Safety kill-switch on consecutive failures
-7. Performance tracking endpoints
+**Weather Capital Recycling:**
+5. Enabled auto_exit for `negative_edge` + `time_inefficiency` (in shadow_exit mode)
+6. Lowered min_edge_bps_long: 700 -> 500bps
 
-### Critical System Upgrade Phase 1 (March 2026)
-1. Global capital: max_total_exposure=360, per-strategy caps=120 each
-2. Reserved capital for arb: arb_reserved_capital=120, exclusive pool
-3. Per-strategy risk checks in risk.py (hierarchical capital management)
-4. SELL order fast-path (exits never blocked by risk)
-5. Crypto opposite-side prevention + cleanup
-6. Market collapse exit rule (threshold=0.05)
-7. Shadow exit mode with selective auto-exit for market_collapse + profit_capture
-8. PnL attribution fix (startup migration re-attributes "resolver" trades)
+**Arbitrage Cleanup:**
+7. Force-resolved 28 tiny arb positions (<$0.50) to free slots
+8. Relaxed hard_max_stale: 1800s -> 2400s, staleness_per_min: 5 -> 6 bps/min
 
-### Critical Expansion Phase 2 (March 2026)
-1. Position limits expanded: max_arb=40, max_concurrent=85
-2. Zombie resolver: infers expiry from market question text
-3. Universal arb scanner: ALL Polymarket categories
-4. Telegram periodic digest (every 3h)
-5. Validation endpoint: /api/admin/upgrade-validation
+**Dead Weight Removal:**
+9. Disabled asymmetric strategy (asymmetric_enabled=False)
 
-### Earlier Work
-- Position Lifecycle Management system
-- UI Dashboard, Simulator, Debug Snapshot v2.0
-- Edge & Resolution data pipeline fix
+**Telegram Before/After Tracking:**
+10. Baseline capture at deploy (pre-upgrade rates from audit)
+11. Deployment notification with all changes listed
+12. Periodic 2h comparison updates (crypto PnL/h, trades/h, exec rate, cap util)
+13. Final 6h impact report with verdict (improved/declined)
+14. New endpoint: `GET /api/admin/upgrade-tracking`
+
+### Previous: Hybrid Staleness-Adjusted Execution (March 2026)
+- Dynamic min-edge threshold: `base(15bps) + (age_s/60) * per_min(6bps) + liquidity_buffer`
+- Liquidity tiers: deep(>$2000)+0, mid($500-2000)+7.5, thin(<$500)+15 bps
+- Hard reject >2400s or liquidity <$200
+- First arb executed: 345bps realized edge
+
+### Previous: Critical Arb Engine Rewrite (March 2026)
+- Binary vs multi-outcome prioritized pipelines
+- True arbitrage condition: sum_of_asks < 1.0 after fees
+- All Polymarket categories (2000+ markets, 500+ binary pairs)
+
+### Previous: System Upgrade Phase 1+2 (March 2026)
+- Per-strategy capital allocation with reserved pools
+- SELL order fast-path, crypto opposite-side cleanup
+- Shadow exit system with selective auto-exit
+- Zombie resolver, PnL attribution fix
+- Telegram periodic digest
 
 ## Confirmed Findings
-- **Binary markets are efficiently priced**: YES_ask + NO_ask >= 1.0 across all 500 binary pairs. No binary arb exists.
-- **Multi-outcome weather markets have thin arbs**: Edges of 30-300+ bps exist but are often stale.
-- **Asymmetric strategy is NON-VIABLE**: Model assigns 0-3% probability to all low-priced weather contracts.
-- **Dynamic thresholds validated**: First arb executed with 345bps realized edge (target 187bps).
+- Binary markets are efficiently priced (no binary arb exists)
+- Multi-outcome weather arbs exist but are sparse and stale
+- Asymmetric strategy is non-viable (model gives 0-3% prob to all candidates)
+- Crypto is 99.6% of all profit — maximizing throughput is the key lever
 
 ## Prioritized Backlog
 
-### P0 — None (all P0 items resolved)
+### P0 — None (all critical items resolved)
 
 ### P1 — Next Up
 - **Event-driven Telegram alerts**: Per-trade alerts for large wins/losses and arb executions
-- **Enable full AUTO_EXIT**: Switch time_inefficiency + negative_edge to auto_exit
-- **Disable asymmetric strategy**: Mark as non-viable, free up compute
-- **"Apply These Thresholds" Workflow**: Push simulator thresholds to live config
+- **Monitor upgrade impact**: Review 6h final report to validate changes
 
 ### P2
+- "Apply These Thresholds" workflow (simulator -> live config)
 - Resolution Timeline visualization
 - UI toggle for auto-tune sigma
-- Expand Telegram alerts (per-trade notifications)
 
 ### P3
 - Copy Trading Skeleton
 - Manual Order Entry
 
 ## Key API Endpoints
-- `GET /api/admin/upgrade-validation` — Full system validation summary
-- `GET /api/strategies/arb/diagnostics` — Raw edges, rejections, dynamic threshold samples
-- `GET /api/strategies/arb/performance` — Capital efficiency metrics
-- `GET /api/strategies/arb/opportunities` — Tradable/rejected opportunities
-- `GET /api/strategies/arb/executions` — Active/completed executions
-- `GET /api/controls` — Risk controls with per-strategy exposure data
-- `GET /api/positions/weather/lifecycle` — Lifecycle status & config
-- `PATCH /api/config` — Update configuration
-
-## 3rd Party Integrations
-- Polymarket Gamma API
-- Polymarket CLOB WebSocket
-- Open-Meteo API
-- Telegram
+- `GET /api/admin/upgrade-tracking` — Live before/after comparison
+- `GET /api/admin/upgrade-validation` — Full system validation
+- `GET /api/strategies/arb/diagnostics` — Raw edges, rejections, dynamic thresholds
+- `GET /api/strategies/arb/performance` — Capital efficiency
+- `GET /api/controls` — Risk controls
+- `GET /api/positions/weather/lifecycle` — Lifecycle & exits
 
 ## Test Reports
-- iteration_65.json: Hybrid Dynamic Threshold — 25/25 passed (100%)
-- iteration_64.json: Critical Arb Upgrade — 30/30 passed (100%)
+- iteration_66.json: Profitability Upgrade — 25/25 passed (100%)
+- iteration_65.json: Dynamic Threshold — 25/25 passed (100%)
+- iteration_64.json: Arb Engine Rewrite — 30/30 passed (100%)
 - iteration_63.json: Critical Expansion — 33/33 passed (100%)
-- iteration_62.json: Critical System Upgrade — 28/28 passed (100%)
+- iteration_62.json: System Upgrade — 28/28 passed (100%)
