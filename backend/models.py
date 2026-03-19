@@ -147,7 +147,7 @@ class RiskConfig(BaseModel):
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0
     allow_aggressive_live: bool = False
-    min_market_freshness_seconds: int = 120     # reject markets older than this
+    min_market_freshness_seconds: int = 300     # reject markets older than this
     max_spread_bps: float = 500.0               # reject if bid-ask spread > 5%
     max_size_to_liquidity_ratio: float = 0.25   # reject if order > 25% of book depth
     # Per-strategy position sizing

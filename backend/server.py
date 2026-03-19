@@ -347,6 +347,9 @@ async def lifespan(app: FastAPI):
         if state.risk_config.max_concurrent_positions < 85:
             state.risk_config.max_concurrent_positions = 85
             upgrade_applied = True
+        if state.risk_config.min_market_freshness_seconds < 300:
+            state.risk_config.min_market_freshness_seconds = 300
+            upgrade_applied = True
 
         # 2. Arb: increase staleness tolerance & lower liquidity threshold
         if arb_scanner_ref and arb_scanner_ref.config.max_stale_age_seconds < 300.0:
@@ -354,6 +357,15 @@ async def lifespan(app: FastAPI):
             upgrade_applied = True
         if arb_scanner_ref and arb_scanner_ref.config.min_liquidity > 200.0:
             arb_scanner_ref.config.min_liquidity = 200.0
+            upgrade_applied = True
+        if arb_scanner_ref and arb_scanner_ref.config.max_concurrent_arbs < 15:
+            arb_scanner_ref.config.max_concurrent_arbs = 15
+            upgrade_applied = True
+        if arb_scanner_ref and arb_scanner_ref.config.max_arb_size < 15.0:
+            arb_scanner_ref.config.max_arb_size = 15.0
+            upgrade_applied = True
+        if arb_scanner_ref and arb_scanner_ref.config.min_net_edge_bps > 30.0:
+            arb_scanner_ref.config.min_net_edge_bps = 30.0
             upgrade_applied = True
 
         # 3. Weather: lifecycle to shadow_exit, lower asymmetric filter
@@ -3707,20 +3719,23 @@ async def upgrade_validation_summary():
     if arb_scanner_ref:
         ah = arb_scanner_ref.get_health()
         arb_diag = arb_scanner_ref._diag if hasattr(arb_scanner_ref, '_diag') else {}
+        arb_perf = arb_scanner_ref.get_performance()
         arb_data = {
             "total_scans": ah.get("total_scans", 0),
-            "executed_count": ah.get("executions_submitted", 0),
-            "completed_count": ah.get("executions_completed", 0),
+            "executed_count": ah.get("executed_count", 0),
+            "completed_count": ah.get("completed_count", 0),
             "active_count": len(arb_scanner_ref.get_active_executions()),
             "eligible_count": ah.get("eligible_count", 0),
             "rejection_reasons": ah.get("rejection_reasons", {}),
             "max_stale_age_seconds": arb_scanner_ref.config.max_stale_age_seconds,
             "min_liquidity": arb_scanner_ref.config.min_liquidity,
+            "max_concurrent_arbs": arb_scanner_ref.config.max_concurrent_arbs,
             "markets_scanned": arb_diag.get("markets_scanned", 0),
             "binary_pairs_found": arb_diag.get("binary_pairs_found", 0),
             "multi_outcome_groups_found": arb_diag.get("multi_outcome_groups_found", 0),
             "multi_outcome_weather": arb_diag.get("multi_outcome_weather_groups", 0),
             "multi_outcome_universal": arb_diag.get("multi_outcome_universal_groups", 0),
+            "performance": arb_perf,
         }
 
     # Crypto diagnostics

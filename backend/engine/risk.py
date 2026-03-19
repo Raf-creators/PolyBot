@@ -205,23 +205,23 @@ class RiskEngine:
                     self._slot_blocks["global"] += 1
                     return False, f"max concurrent positions ({total}) >= {cfg.max_concurrent_positions}"
 
-        # Market freshness check
+        # Market freshness check (skip for arb — scanner does its own staleness filtering)
         market = self._state.get_market(order.token_id)
-        if market and cfg.min_market_freshness_seconds > 0:
+        if bucket != "arb" and market and cfg.min_market_freshness_seconds > 0:
             from engine.strategies.arb_pricing import compute_data_age
             age = compute_data_age(market.updated_at)
             if age > cfg.min_market_freshness_seconds:
                 return False, f"stale market data ({age:.0f}s > {cfg.min_market_freshness_seconds}s)"
 
-        # Spread check
-        if market and cfg.max_spread_bps > 0:
+        # Spread check (skip for arb — arb buys both sides, individual spread irrelevant)
+        if bucket != "arb" and market and cfg.max_spread_bps > 0:
             if market.best_bid and market.best_ask:
                 spread_bps = ((market.best_ask - market.best_bid) / max(market.mid_price or 0.5, 0.01)) * 10000
                 if spread_bps > cfg.max_spread_bps:
                     return False, f"spread {spread_bps:.0f}bps > max {cfg.max_spread_bps}bps"
 
-        # Liquidity ratio check
-        if market and cfg.max_size_to_liquidity_ratio > 0 and market.liquidity > 0:
+        # Liquidity ratio check (skip for arb — arb has its own liquidity filters)
+        if bucket != "arb" and market and cfg.max_size_to_liquidity_ratio > 0 and market.liquidity > 0:
             ratio = order.size / market.liquidity
             if ratio > cfg.max_size_to_liquidity_ratio:
                 return False, f"size/liquidity ratio {ratio:.2f} > max {cfg.max_size_to_liquidity_ratio}"
