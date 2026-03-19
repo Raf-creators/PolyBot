@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useRef, useCallback } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, ReferenceLine,
+  Tooltip, ResponsiveContainer, ReferenceLine, Brush,
 } from 'recharts';
 
 function CustomTooltip({ active, payload }) {
@@ -55,12 +55,21 @@ function buildTickFormatter(points) {
 
 export function PnlChart({ data, testId }) {
   const { points, current_pnl, peak_pnl, trough_pnl, max_drawdown, total_trades, latest_close_at, server_time } = data;
+  const [viewRange, setViewRange] = useState('recent'); // 'recent' | 'all'
 
   const isPositive = current_pnl >= 0;
   const strokeColor = isPositive ? '#34d399' : '#f87171';
   const gradientId = 'pnl-gradient';
 
   const tickFormatter = useMemo(() => buildTickFormatter(points), [points]);
+
+  // Default to showing the recent ~30% of data for easier inspection
+  const brushDefault = useMemo(() => {
+    if (!points.length) return { start: 0, end: 0 };
+    if (viewRange === 'all') return { start: 0, end: points.length - 1 };
+    const recentStart = Math.max(0, Math.floor(points.length * 0.7));
+    return { start: recentStart, end: points.length - 1 };
+  }, [points, viewRange]);
 
   const yDomain = useMemo(() => {
     if (!points.length) return [-1, 1];
@@ -101,6 +110,31 @@ export function PnlChart({ data, testId }) {
           )}
         </div>
         <div className="flex items-center gap-4 text-xs font-mono">
+          {/* View range toggle */}
+          <div className="flex items-center gap-1 mr-2">
+            <button
+              data-testid="pnl-chart-recent"
+              onClick={() => setViewRange('recent')}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                viewRange === 'recent'
+                  ? 'bg-zinc-700 text-zinc-200'
+                  : 'text-zinc-500 hover:text-zinc-400'
+              }`}
+            >
+              Recent
+            </button>
+            <button
+              data-testid="pnl-chart-all"
+              onClick={() => setViewRange('all')}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                viewRange === 'all'
+                  ? 'bg-zinc-700 text-zinc-200'
+                  : 'text-zinc-500 hover:text-zinc-400'
+              }`}
+            >
+              All
+            </button>
+          </div>
           <span className="text-zinc-600">Peak <span className="text-emerald-400">{peak_pnl >= 0 ? '+' : ''}${peak_pnl.toFixed(2)}</span></span>
           <span className="text-zinc-600">Trough <span className="text-red-400">{trough_pnl >= 0 ? '+' : ''}${trough_pnl.toFixed(2)}</span></span>
           <span className="text-zinc-600">DD <span className="text-amber-400">${max_drawdown.toFixed(2)}</span></span>
@@ -110,8 +144,8 @@ export function PnlChart({ data, testId }) {
         </div>
       </div>
       <div className="p-3">
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={points} margin={{ top: 4, right: 8, bottom: 4, left: 4 }}>
+        <ResponsiveContainer width="100%" height={260}>
+          <AreaChart data={points} margin={{ top: 4, right: 8, bottom: 24, left: 4 }}>
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={strokeColor} stopOpacity={0.25} />
@@ -125,7 +159,7 @@ export function PnlChart({ data, testId }) {
               tick={{ fill: '#52525b', fontSize: 10 }}
               axisLine={{ stroke: '#27272a' }}
               tickLine={false}
-              minTickGap={50}
+              minTickGap={40}
             />
             <YAxis
               domain={yDomain}
@@ -147,6 +181,30 @@ export function PnlChart({ data, testId }) {
               activeDot={{ r: 3, fill: strokeColor, stroke: '#18181b', strokeWidth: 2 }}
               isAnimationActive={false}
             />
+            {points.length > 20 && (
+              <Brush
+                dataKey="timestamp"
+                height={20}
+                stroke="#3f3f46"
+                fill="#18181b"
+                tickFormatter={tickFormatter}
+                startIndex={brushDefault.start}
+                endIndex={brushDefault.end}
+                travellerWidth={8}
+              >
+                <AreaChart data={points}>
+                  <Area
+                    type="monotone"
+                    dataKey="cumulative_pnl"
+                    stroke={strokeColor}
+                    strokeWidth={0.5}
+                    fill={`url(#${gradientId})`}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </Brush>
+            )}
           </AreaChart>
         </ResponsiveContainer>
       </div>

@@ -4,7 +4,7 @@ import { useApi } from '../hooks/useApi';
 import { StatCard } from '../components/StatCard';
 import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
-import { formatBps, formatPrice, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
+import { formatBps, formatPrice, formatPnl, formatNumber, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
 import { ARB_STATUS_COLORS } from '../utils/constants';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 
@@ -13,7 +13,8 @@ export default function Arbitrage() {
   const arbExecs = useDashboardStore((s) => s.arbExecutions);
   const arbHealth = useDashboardStore((s) => s.arbHealth);
   const arbDiag = useDashboardStore((s) => s.arbDiagnostics);
-  const { fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics } = useApi();
+  const strategyPositions = useDashboardStore((s) => s.strategyPositions);
+  const { fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics, fetchStrategyPositions } = useApi();
   const [tab, setTab] = useState('opportunities');
 
   useEffect(() => {
@@ -21,14 +22,18 @@ export default function Arbitrage() {
     fetchArbExecutions();
     fetchArbHealth();
     fetchArbDiagnostics();
+    fetchStrategyPositions();
     const interval = setInterval(() => {
       fetchArbOpportunities();
       fetchArbExecutions();
       fetchArbHealth();
       fetchArbDiagnostics();
+      fetchStrategyPositions();
     }, 8000);
     return () => clearInterval(interval);
-  }, [fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics]);
+  }, [fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics, fetchStrategyPositions]);
+
+  const arbSummary = strategyPositions?.summaries?.arb || {};
 
   const oppColumns = [
     { key: 'question', label: 'Market', render: (v) => <span className="text-zinc-300">{truncate(v, 40)}</span> },
@@ -85,6 +90,34 @@ export default function Arbitrage() {
         <span className="text-xs text-zinc-600 font-mono">
           {arbHealth.running ? 'SCANNING' : 'IDLE'} | Scans: {diagMetrics.total_scans || arbHealth.total_scans || 0}
         </span>
+      </div>
+
+      {/* PnL Summary Bar — matches Sniper and Weather pages */}
+      <div data-testid="arb-pnl-bar" className="flex items-center gap-6 px-4 py-2.5 bg-zinc-900/60 border border-zinc-800 rounded-lg text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Realized</span>
+          <span className={`font-mono font-medium ${(arbSummary.realized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(arbSummary.realized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Unrealized</span>
+          <span className={`font-mono font-medium ${(arbSummary.unrealized_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(arbSummary.unrealized_pnl || 0)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500">Total</span>
+          <span className={`font-mono font-semibold ${(arbSummary.total_pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {formatPnl(arbSummary.total_pnl || 0)}
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-4 text-zinc-500">
+          <span>Trades: <span className="text-zinc-300 font-mono">{arbSummary.trade_count || 0}</span></span>
+          <span>W/L: <span className="text-zinc-300 font-mono">{arbSummary.wins || 0}/{arbSummary.losses || 0}</span></span>
+          {arbSummary.win_rate > 0 && <span>WR: <span className="text-zinc-300 font-mono">{arbSummary.win_rate}%</span></span>}
+          <span>Capital: <span className="text-zinc-300 font-mono">${formatNumber(arbSummary.capital_allocated || 0, 2)}</span></span>
+        </div>
       </div>
 
       {/* Key Metrics */}

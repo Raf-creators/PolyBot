@@ -27,6 +27,8 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 - max_tte_seconds: 28800 (8h, REVERTED from 12h)
 - opposite_side_held filter: RE-ACTIVATED
 - min_edge_bps: 200
+- Entry prices naturally cluster near 0.50 (structural to binary up/down markets)
+- Scans ALL available future time windows, not just nearest
 
 ### Weather Trader
 - min_edge_bps: 350 (reduced from 500)
@@ -37,47 +39,47 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 - asymmetric_enabled: False
 
 ### Telegram Monitoring
-- Bihourly full performance report (crypto, arb, weather, system, baseline comparison)
-- Hourly win/streak report (biggest win, streaks, loss warnings)
-- Trade-by-trade notifications (existing)
-- Upgrade tracking (2h intervals, final at 6h)
+- Bihourly full performance report
+- Hourly win/streak report
+- Trade-by-trade notifications
+- Upgrade tracking
 
 ### Stale Arb Cleanup Cron
 - Runs every 4 hours
 - Closes arb positions older than 48h with negative/zero unrealized PnL
-- Records close trades in MongoDB
-- Sends Telegram notification on cleanup
 
 ## What Has Been Implemented
 1. Complete multi-strategy trading engine (crypto, weather, arb)
-2. Rolling PnL window system (1h, 3h, 6h from actual trade timestamps)
-3. Comprehensive Telegram notification system (bihourly + hourly + trade alerts)
+2. Rolling PnL window system (1h, 3h, 6h)
+3. Comprehensive Telegram notification system
 4. Risk engine with per-strategy exposure caps and position limits
 5. Market resolver service with auto-resolution
-6. Weather calibration system with 17 historical stations
+6. Weather calibration system
 7. Forensic rollback configuration (Mar 19 2026)
-8. Stale arb position cleanup cron (Mar 19 2026)
+8. Stale arb position cleanup cron
+9. Arbitrage page PnL summary header (Mar 19 2026)
+10. Overview PnL chart with brush zoom/pan + Recent/All toggle (Mar 19 2026)
 
 ## Testing Status
 - iteration_68.json: Forensic Rollback — 18/18 passed (100%)
-- Stale arb cleanup verified: service running, trade data accessible
+- Frontend: Arb PnL header and PnL chart UX verified via screenshots
+- Legacy size-39 positions confirmed as pre-rollback, will resolve naturally
 
 ## Backlog
 
-### P1 — Next Up
-- Monitor forensic rollback performance (2h, 6h checkpoints via Telegram)
-- Confirm crypto PnL/h recovery toward $20-56/h range
+### P1 — Active Monitoring
+- Monitor 2h and 6h Telegram reports for crypto PnL/h recovery
+- Confirm all legacy size-39 positions resolve naturally
 
-### P2 — Planned (DO NOT IMPLEMENT YET — isolate rollback impact first)
-- Add real-time weather observations API for near-resolution markets
-- Add Coinbase WebSocket as second crypto feed (redundancy + VWAP)
+### P2 — Planned (DO NOT IMPLEMENT YET)
+- Add real-time weather observations API
+- Add Coinbase WebSocket as second crypto feed
 - Add second forecast source for weather cross-validation
-- Re-evaluate asymmetric weather mode after base performance stabilizes
-- Regime detection system for auto position sizing
+- Re-evaluate asymmetric weather mode
+- Regime detection system
 
 ### P3 — Future
 - Add XRP/SOL price feeds for alt-coin markets
 - Trailing stop-loss for large crypto positions
 - Resolution Timeline visualization
 - Copy Trading / Manual Order Entry skeleton
-- Dedicated analytics module for forensic audits
