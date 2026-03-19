@@ -58,18 +58,20 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 7. Forensic rollback configuration (Mar 19 2026)
 8. Stale arb position cleanup cron
 9. Arbitrage page PnL summary header (Mar 19 2026)
-10. Overview PnL chart with brush zoom/pan + Recent/All toggle (Mar 19 2026)
+10. Overview PnL chart with time range selector (1H/6H/1D/All) + state persistence fix (Mar 19 2026)
 
 ## Testing Status
 - iteration_68.json: Forensic Rollback — 18/18 passed (100%)
 - Frontend: Arb PnL header and PnL chart UX verified via screenshots
+- PnL chart view-mode persistence bug: VERIFIED FIXED (Mar 19 2026) — automated test confirmed 1H stays selected through 2+ data refresh cycles
 - Legacy size-39 positions confirmed as pre-rollback, will resolve naturally
+- Crypto sniper live config verified against proven profitable historical setup — full match confirmed
 
 ## Backlog
 
 ### P1 — Active Monitoring
 - Monitor 2h and 6h Telegram reports for crypto PnL/h recovery
-- Confirm all legacy size-39 positions resolve naturally
+- Confirm all legacy oversized positions (size 39, 27) resolve naturally
 
 ### P2 — Planned (DO NOT IMPLEMENT YET)
 - Add real-time weather observations API
