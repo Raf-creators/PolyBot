@@ -132,17 +132,17 @@ class TradeRecord(BaseModel):
 class RiskConfig(BaseModel):
     max_daily_loss: float = 100.0
     max_loss_per_strategy: float = 50.0
-    max_position_size: float = 40.0
+    max_position_size: float = 25.0              # REVERTED from 40 — all oversized positions were losers
     max_market_exposure: float = 360.0          # total exposure cap across all strategies
     # Per-strategy exposure caps (capital $, not position count)
-    crypto_max_exposure: float = 180.0
+    crypto_max_exposure: float = 250.0          # primary profit driver, increased from 180
     weather_max_exposure: float = 120.0
-    arb_max_exposure: float = 120.0
-    arb_reserved_capital: float = 120.0         # exclusive capital pool for arb, bypasses global competition
+    arb_max_exposure: float = 25.0              # REDUCED from 120 — arb is a capital trap (-4.6% ROI)
+    arb_reserved_capital: float = 25.0          # REDUCED from 120 — free capital for crypto
     max_concurrent_positions: int = 85          # global safety cap
     max_weather_positions: int = 25             # weather reserved slots
     max_crypto_positions: int = 20              # crypto sniper reserved slots
-    max_arb_positions: int = 40                 # arb scanner reserved slots
+    max_arb_positions: int = 10                 # REDUCED from 40 — prevent stale position hoarding
     max_order_size: float = 10.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0

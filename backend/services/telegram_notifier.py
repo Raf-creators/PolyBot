@@ -61,6 +61,8 @@ class TelegramNotifier:
         self._strategy_refs: dict = {}
         self._upgrade_baseline: dict = {}
         self._upgrade_tracking_task = None
+        self._hourly_streak_task = None
+        self._bihourlly_report_task = None
 
     @property
     def configured(self) -> bool:
@@ -102,16 +104,22 @@ class TelegramNotifier:
         # Start periodic digest (every 3 hours)
         self._digest_task = asyncio.create_task(self._periodic_digest_loop())
 
+        # Start new monitoring loops (from forensic rollback)
+        self._bihourlly_report_task = asyncio.create_task(self._bihourly_performance_loop())
+        self._hourly_streak_task = asyncio.create_task(self._hourly_streak_loop())
+
         status = "enabled" if self.configured else "disabled (no credentials)"
         logger.info(f"Telegram notifier started [{status}]")
 
     async def stop(self):
-        if self._digest_task:
-            self._digest_task.cancel()
-            try:
-                await self._digest_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        for task_attr in ['_digest_task', '_upgrade_tracking_task', '_bihourlly_report_task', '_hourly_streak_task']:
+            task = getattr(self, task_attr, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
         if self._bus:
             from models import EventType
             self._bus.off(EventType.ORDER_UPDATE, self._on_order_update)
@@ -150,7 +158,8 @@ class TelegramNotifier:
                 self._total_sent += 1
                 return True
             else:
-                logger.warning(f"Telegram API {resp.status_code}")
+                body = resp.text[:200] if hasattr(resp, 'text') else ''
+                logger.warning(f"Telegram API {resp.status_code}: {body}")
                 self._total_failed += 1
                 return False
         except Exception as e:
@@ -401,13 +410,13 @@ class TelegramNotifier:
             "total_exposure": round(total_exposure, 2),
             "total_positions": sum(pos_counts.values()),
             "capital_utilization_pct": round(total_exposure / max(state.risk_config.max_market_exposure, 1) * 100, 1),
-            # Pre-upgrade rates from the live snapshot (user-provided context)
-            # These are the "before" rates that the system was achieving
-            "pre_upgrade_pnl_per_h": 161.0,       # $1161.69 / 7.2h from audit
-            "pre_upgrade_crypto_pnl_per_h": 160.0, # $1161.69 / 7.2h (99.6% from crypto)
-            "pre_upgrade_trades_per_h": 1721.0,     # 12425 / 7.2h
-            "pre_upgrade_exec_rate": 0.94,          # from snapshot
-            "pre_upgrade_cap_util_pct": 41.6,       # from snapshot
+            # Pre-upgrade rates from FORENSIC ANALYSIS (best period M2→D):
+            # M2→D window: 8.77h, $493.57 earned, 2233 trades
+            "pre_upgrade_pnl_per_h": 56.28,         # M2→D: $493.57 / 8.77h
+            "pre_upgrade_crypto_pnl_per_h": 56.28,  # 99.6% from crypto
+            "pre_upgrade_trades_per_h": 255.0,       # M2→D: 2233 / 8.77h
+            "pre_upgrade_exec_rate": 4.8,             # from D snapshot
+            "pre_upgrade_cap_util_pct": 41.6,         # from D snapshot
         }
         logger.info(f"[UPGRADE-TRACK] Baseline captured (abs PnL=${total_realized:.2f}, {sum(trade_count_map.values())} trades)")
         return self._upgrade_baseline
@@ -589,4 +598,291 @@ class TelegramNotifier:
         """Start the upgrade tracking background loop."""
         self._upgrade_tracking_task = asyncio.create_task(self._upgrade_tracking_loop())
         logger.info("[UPGRADE-TRACK] Periodic tracking started (updates every 2h, final at 6h)")
+
+    # ---- BIHOURLY FULL PERFORMANCE REPORT (every 2h) ----
+
+    async def _bihourly_performance_loop(self):
+        """Send a comprehensive performance update every 2 hours."""
+        await asyncio.sleep(600)  # wait 10 min after startup for initial data
+        while True:
+            try:
+                await self._send_bihourly_report()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[TELEGRAM] Bihourly report error: {e}")
+            await asyncio.sleep(2 * 3600)  # 2 hours
+
+    async def _send_bihourly_report(self):
+        """Build and send the full 2-hour performance report."""
+        if not self.enabled or not self._state:
+            return
+
+        from engine.risk import classify_strategy
+        from services.rolling_pnl import compute_rolling_pnl
+
+        state = self._state
+        cfg = state.risk_config
+        rolling = compute_rolling_pnl(state.trades)
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+
+        # Position counts, exposure, unrealized by strategy
+        pos_counts = {"crypto": 0, "weather": 0, "arb": 0}
+        exposure = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+        unrealized = {"crypto": 0.0, "weather": 0.0, "arb": 0.0}
+        for pos in state.positions.values():
+            bucket = classify_strategy(pos)
+            pos_counts[bucket] = pos_counts.get(bucket, 0) + 1
+            exp = pos.size * (pos.current_price or pos.avg_cost or 0)
+            exposure[bucket] = exposure.get(bucket, 0) + exp
+            unrealized[bucket] = unrealized.get(bucket, 0) + (pos.current_price - pos.avg_cost) * pos.size
+
+        total_exposure = sum(exposure.values())
+        total_realized = sum(t.pnl for t in state.trades if t.pnl)
+        total_unrealized = sum(unrealized.values())
+
+        # Crypto scan health
+        crypto_ref = self._strategy_refs.get("crypto")
+        crypto_health = {}
+        if crypto_ref:
+            crypto_health = crypto_ref._m
+        exec_count = crypto_health.get("signals_executed", 0)
+        rej_count = crypto_health.get("signals_rejected", 0)
+        total_signals = exec_count + rej_count
+        crypto_exec_rate = exec_count / max(total_signals, 1) * 100
+
+        # Crypto rejection breakdown (top 4)
+        rej_reasons = crypto_health.get("rejection_reasons", {})
+        top_rejections = sorted(rej_reasons.items(), key=lambda x: x[1], reverse=True)[:4]
+
+        # Weather scan health
+        weather_ref = self._strategy_refs.get("weather")
+        weather_health = {}
+        if weather_ref:
+            weather_health = weather_ref._m
+        w_sig_exec = weather_health.get("signals_executed", 0)
+        w_sig_gen = weather_health.get("signals_generated", 0)
+        w_exec_rate = w_sig_exec / max(w_sig_gen, 1) * 100
+        w_exit_cands = weather_health.get("lifecycle", {}).get("exit_candidates", 0)
+
+        # Arb scan health
+        arb_ref = self._strategy_refs.get("arb")
+        arb_health = {}
+        if arb_ref:
+            arb_health = arb_ref.get_health()
+        arb_new_signals = arb_health.get("signals_generated", 0)
+
+        # Crypto position sizes
+        crypto_sizes = []
+        for pos in state.positions.values():
+            if classify_strategy(pos) == "crypto":
+                crypto_sizes.append(pos.size)
+        avg_crypto_size = sum(crypto_sizes) / len(crypto_sizes) if crypto_sizes else 0
+        max_crypto_size = max(crypto_sizes) if crypto_sizes else 0
+
+        # Rolling PnL extraction
+        def rpnl(bucket, window):
+            return rolling.get(bucket, {}).get(window, {}).get("pnl_per_h", 0)
+        def rtrades(bucket, window):
+            return rolling.get(bucket, {}).get(window, {}).get("trades_per_h", 0)
+
+        lines = [
+            f"<b>FULL PERFORMANCE REPORT</b> {ts}",
+            "",
+            "<b>CRYPTO:</b>",
+            f"  PnL/h: 1h=${rpnl('crypto','1h'):.2f} | 3h=${rpnl('crypto','3h'):.2f} | 6h=${rpnl('crypto','6h'):.2f}",
+            f"  Trades/h: {rtrades('crypto','1h'):.0f}",
+            f"  Exec rate: {crypto_exec_rate:.1f}%",
+            f"  Avg pos size: {avg_crypto_size:.1f} | Max: {max_crypto_size:.0f}",
+            f"  Exposure: ${exposure.get('crypto',0):.0f} / ${cfg.crypto_max_exposure:.0f}",
+            f"  Unrealized: ${unrealized.get('crypto',0):+.2f}",
+            "  Top rejections:",
+        ]
+        for reason, count in top_rejections:
+            lines.append(f"    {reason}: {count}")
+
+        lines += [
+            "",
+            "<b>ARB:</b>",
+            f"  Capital: ${exposure.get('arb',0):.0f} | Slots: {pos_counts.get('arb',0)}/{cfg.max_arb_positions}",
+            f"  New signals: {arb_new_signals}",
+            f"  Realized: ${sum(t.pnl for t in state.trades if t.pnl and ('arb' in (t.strategy_id or ''))):+.2f}",
+            f"  Unrealized: ${unrealized.get('arb',0):+.2f}",
+            "",
+            "<b>WEATHER:</b>",
+            f"  Capital: ${exposure.get('weather',0):.2f} | Pos: {pos_counts.get('weather',0)}",
+            f"  Signals exec: {w_sig_exec} ({w_exec_rate:.1f}%)",
+            f"  Realized: ${sum(t.pnl for t in state.trades if t.pnl and ('weather' in (t.strategy_id or ''))):+.2f}",
+            f"  Unrealized: ${unrealized.get('weather',0):+.2f}",
+            f"  Avg pos size: {sum(pos.size for pos in state.positions.values() if classify_strategy(pos)=='weather') / max(pos_counts.get('weather',1),1):.1f}",
+            f"  Exit candidates: {w_exit_cands}",
+            "",
+            "<b>SYSTEM:</b>",
+            f"  Allocation: Crypto ${exposure.get('crypto',0):.0f} | Arb ${exposure.get('arb',0):.0f} | Weather ${exposure.get('weather',0):.0f}",
+            f"  Total PnL/h: 1h=${rpnl('total','1h'):.2f} | 3h=${rpnl('total','3h'):.2f} | 6h=${rpnl('total','6h'):.2f}",
+            f"  Total: R=${total_realized:+.2f} / U=${total_unrealized:+.2f}",
+            f"  Idle: {100 - total_exposure / max(cfg.max_market_exposure,1) * 100:.0f}%",
+        ]
+
+        # Comparison vs forensic baseline
+        bl = getattr(self, "_upgrade_baseline", None)
+        if bl:
+            pre_pnl_h = bl.get("pre_upgrade_pnl_per_h", 56.28)
+            pre_trades_h = bl.get("pre_upgrade_trades_per_h", 255)
+            pre_exec_rate = bl.get("pre_upgrade_exec_rate", 4.8)
+
+            lines += [
+                "",
+                "<b>vs PRE-CHANGE BASELINE (M2→D):</b>",
+                f"  Crypto PnL/h: ${rpnl('crypto','3h'):.2f} vs ${pre_pnl_h:.2f} (target)",
+                f"  Trades/h: {rtrades('crypto','1h'):.0f} vs {pre_trades_h:.0f}",
+                f"  Exec rate: {crypto_exec_rate:.1f}% vs {pre_exec_rate:.1f}%",
+                f"  Weather exec: {w_sig_exec} vs baseline N/A",
+            ]
+
+        self._fire("\n".join(lines))
+        logger.info("[TELEGRAM] Bihourly performance report sent")
+
+    # ---- HOURLY WIN/STREAK REPORT ----
+
+    async def _hourly_streak_loop(self):
+        """Send a concise hourly win/streak update."""
+        await asyncio.sleep(900)  # wait 15 min after startup
+        while True:
+            try:
+                await self._send_hourly_streak()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[TELEGRAM] Hourly streak error: {e}")
+            await asyncio.sleep(3600)  # 1 hour
+
+    async def _send_hourly_streak(self):
+        """Build and send the hourly win/streak report using closed-trade data only."""
+        if not self.enabled or not self._state:
+            return
+
+        state = self._state
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        now = datetime.now(timezone.utc)
+
+        # Get trades from the last hour
+        one_hour_ago = now.timestamp() - 3600
+        recent_trades = []
+        for t in reversed(state.trades):
+            trade_ts = None
+            if hasattr(t, 'closed_at') and t.closed_at:
+                try:
+                    trade_ts = datetime.fromisoformat(str(t.closed_at).replace('Z', '+00:00')).timestamp()
+                except (ValueError, TypeError):
+                    pass
+            if trade_ts is None and hasattr(t, 'timestamp') and t.timestamp:
+                try:
+                    trade_ts = datetime.fromisoformat(str(t.timestamp).replace('Z', '+00:00')).timestamp()
+                except (ValueError, TypeError):
+                    pass
+            if trade_ts is None:
+                continue
+            if trade_ts < one_hour_ago:
+                break
+            if t.pnl is not None:
+                recent_trades.append(t)
+
+        if not recent_trades:
+            return  # No trades in last hour, skip
+
+        # 1. Biggest profit win
+        wins = [t for t in recent_trades if t.pnl > 0]
+        biggest_win = max(wins, key=lambda t: t.pnl) if wins else None
+
+        # 2. Biggest loss
+        losses = [t for t in recent_trades if t.pnl < 0]
+        biggest_loss = min(losses, key=lambda t: t.pnl) if losses else None
+
+        # 3. Streaks: compute from recent trades (chronological order)
+        sorted_trades = list(reversed(recent_trades))
+        best_win_streak = 0
+        best_win_streak_pnl = 0.0
+        current_streak = 0
+        current_streak_pnl = 0.0
+
+        for t in sorted_trades:
+            if t.pnl > 0:
+                current_streak += 1
+                current_streak_pnl += t.pnl
+                if current_streak > best_win_streak:
+                    best_win_streak = current_streak
+                    best_win_streak_pnl = current_streak_pnl
+            else:
+                current_streak = 0
+                current_streak_pnl = 0.0
+
+        # 4. Current active streak (from most recent trades)
+        active_streak = 0
+        active_streak_pnl = 0.0
+        for t in reversed(sorted_trades):
+            if t.pnl > 0:
+                active_streak += 1
+                active_streak_pnl += t.pnl
+            else:
+                break
+
+        # Current losing streak
+        losing_streak = 0
+        losing_streak_pnl = 0.0
+        for t in reversed(sorted_trades):
+            if t.pnl < 0:
+                losing_streak += 1
+                losing_streak_pnl += t.pnl
+            else:
+                break
+
+        # Build message
+        label_map = {"crypto_sniper": "CRYPTO", "weather_trader": "WEATHER", "arb_scanner": "ARB", "resolver": "RESOLVER"}
+
+        lines = [
+            f"<b>HOURLY WIN/STREAK UPDATE</b> {ts}",
+            f"Trades in last hour: {len(recent_trades)} ({len(wins)}W / {len(losses)}L)",
+            "",
+        ]
+
+        if biggest_win:
+            sid = label_map.get(biggest_win.strategy_id or "", "UNKNOWN")
+            market = (biggest_win.market_question or "?")[:60]
+            lines += [
+                "<b>BIGGEST WIN:</b>",
+                f"  [{sid}] ${biggest_win.pnl:+.2f}",
+                f"  {market}",
+                f"  Size: {biggest_win.size}",
+                "",
+            ]
+
+        if best_win_streak > 1:
+            lines += [
+                f"<b>BEST WIN STREAK:</b> {best_win_streak} wins, ${best_win_streak_pnl:+.2f}",
+                "",
+            ]
+
+        if active_streak > 1:
+            lines += [
+                f"<b>ACTIVE WIN STREAK:</b> {active_streak} wins, ${active_streak_pnl:+.2f}",
+                "",
+            ]
+
+        # Warning flags
+        if biggest_loss and biggest_loss.pnl < -1.0:
+            sid = label_map.get(biggest_loss.strategy_id or "", "UNKNOWN")
+            market = (biggest_loss.market_question or "?")[:60]
+            lines += [
+                "<b>BIGGEST LOSS:</b>",
+                f"  [{sid}] ${biggest_loss.pnl:+.2f}",
+                f"  {market}",
+                "",
+            ]
+
+        if losing_streak >= 3:
+            lines.append(f"<b>LOSING STREAK:</b> {losing_streak} trades, ${losing_streak_pnl:+.2f}")
+
+        self._fire("\n".join(lines))
+        logger.info("[TELEGRAM] Hourly streak report sent")
 

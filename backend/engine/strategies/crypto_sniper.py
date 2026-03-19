@@ -820,10 +820,23 @@ class CryptoSniper(BaseStrategy):
             return
 
         # Prevent opening both sides of the same market simultaneously
-        # DISABLED for crypto_sniper — audit showed this blocks 11.7% of profitable signals
-        # Opposite-side positions are managed by the cleanup routine instead
-        # cm = self._classified_cache.get(signal.condition_id)
-        # if cm: ...opposite_side_held check removed...
+        # RE-ACTIVATED: Forensic analysis showed best period (M2→D, $56.28/h) had this active.
+        # With it removed (D→E), PnL/trade collapsed from $0.221 to $0.003.
+        cm = self._classified_cache.get(signal.condition_id)
+        if cm:
+            opposite_token = cm.no_token_id if signal.side == "buy_yes" else cm.yes_token_id
+            if opposite_token and opposite_token in self._state.positions:
+                signal.is_tradable = False
+                signal.rejection_reason = "opposite_side_held"
+                self._m["signals_rejected"] += 1
+                self._m["rejection_reasons"]["opposite_side_held"] = self._m["rejection_reasons"].get("opposite_side_held", 0) + 1
+                if self._tracker:
+                    self._tracker.record_signal(self.strategy_id, False, "opposite_side_held")
+                logger.info(
+                    f"[SNIPER] Blocked opposite-side trade: {signal.asset} {signal.side} "
+                    f"(already hold {opposite_token[:16]}..)"
+                )
+                return
 
         order = OrderRecord(
             token_id=signal.token_id,

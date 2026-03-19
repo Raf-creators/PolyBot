@@ -1,0 +1,150 @@
+{
+  "summary": "Iteration 68: Forensic Regression + Profit Maximization Audit COMPLETE. All 18 backend tests passed. Verified all config changes from forensic analysis: (1) max_position_size=25 (REVERTED from 40), (2) crypto_max_exposure=250 (up from 180), (3) arb_max_exposure=25 (REDUCED from 120), (4) arb_reserved_capital=25 (REDUCED from 120), (5) max_arb_positions=10 (REDUCED from 40), (6) crypto max_tte_seconds=28800 (8h, REVERTED from 43200), (7) opposite_side_held filter RE-ACTIVATED in crypto_sniper.py code, (8) Weather tuning: min_edge_bps=350, min_confidence=0.45, default_size=5, max_signal_size=12, (9) Telegram bihourly and hourly streak monitoring loops active in code.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "N/A",
+        "issue": "36 arb positions exist but max_arb_positions=10. This is expected - legacy positions from before config change. New arb positions blocked until count drops below 10."
+      }
+    ]
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "health_endpoint": [
+      "GET /api/health returns 200 with status=ok, engine=running, all strategies active - PASS"
+    ],
+    "risk_config_forensic_rollback": [
+      "max_position_size = 25.0 (REVERTED from 40) - PASS",
+      "crypto_max_exposure = 250.0 (increased from 180) - PASS",
+      "arb_max_exposure = 25.0 (REDUCED from 120) - PASS",
+      "arb_reserved_capital = 25.0 (REDUCED from 120) - PASS",
+      "max_arb_positions = 10 (REDUCED from 40) - PASS"
+    ],
+    "crypto_sniper_forensic_rollback": [
+      "max_tte_seconds = 28800 (8h, REVERTED from 43200) - PASS",
+      "opposite_side_held filter RE-ACTIVATED in code (lines 830-834) - PASS"
+    ],
+    "weather_tuning_upgrades": [
+      "min_edge_bps = 350 (reduced from 500) - PASS",
+      "min_confidence = 0.45 (reduced from 0.55) - PASS",
+      "default_size = 5 (increased from 3) - PASS",
+      "max_signal_size = 12 (increased from 8) - PASS"
+    ],
+    "telegram_monitoring": [
+      "Telegram configured=True, enabled=True - PASS",
+      "Telegram credentials present - PASS",
+      "Bihourly performance loop in code (lines 604-745) - PASS",
+      "Hourly streak loop in code (lines 748-888) - PASS"
+    ],
+    "state_snapshot": [
+      "GET /api/debug/state-snapshot returns valid data - PASS"
+    ],
+    "strategy_status": [
+      "All strategies enabled (arb_scanner, crypto_sniper, weather_trader) - PASS"
+    ],
+    "additional_config": [
+      "lifecycle_mode = shadow_exit - PASS",
+      "hard_max_stale_seconds = 2400 - PASS",
+      "staleness_edge_per_minute_bps = 6 - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "forensic_rollback_risk_config": {
+      "status": "PASS",
+      "description": "All risk config values match forensic analysis recommendations",
+      "evidence": {
+        "max_position_size": 25.0,
+        "crypto_max_exposure": 250.0,
+        "arb_max_exposure": 25.0,
+        "arb_reserved_capital": 25.0,
+        "max_arb_positions": 10
+      }
+    },
+    "crypto_sniper_rollback": {
+      "status": "PASS",
+      "description": "Crypto sniper reverted to proven configuration",
+      "evidence": {
+        "max_tte_seconds": 28800,
+        "opposite_side_held_filter": "RE-ACTIVATED (lines 830-834 in crypto_sniper.py)"
+      }
+    },
+    "weather_profit_maximization": {
+      "status": "PASS",
+      "description": "Weather trader tuned for higher throughput",
+      "evidence": {
+        "min_edge_bps": 350,
+        "min_confidence": 0.45,
+        "default_size": 5,
+        "max_signal_size": 12
+      }
+    },
+    "telegram_new_monitoring_loops": {
+      "status": "PASS",
+      "description": "New Telegram monitoring loops implemented",
+      "evidence": {
+        "_bihourly_performance_loop": "lines 604-745",
+        "_hourly_streak_loop": "lines 748-888",
+        "started_in_start()": "lines 108-109"
+      }
+    }
+  },
+
+  "current_system_state": {
+    "positions": {
+      "weather": 9,
+      "crypto": 12,
+      "arb": 36,
+      "total": 57
+    },
+    "limits": {
+      "max_weather": 25,
+      "max_crypto": 20,
+      "max_arb": 10,
+      "max_global": 85
+    },
+    "note": "36 arb positions exceed new limit of 10 - legacy positions will naturally close, new arb positions blocked"
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration68_forensic_rollback.py",
+    "/app/test_reports/pytest/pytest_results_iteration68.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "server.py lines 322-420: FORENSIC ROLLBACK migration correctly applies all config changes on startup",
+    "server.py lines 516-545: Tiny arb cleanup (<$0.50 positions) runs on startup",
+    "crypto_sniper.py lines 819-839: opposite_side_held filter RE-ACTIVATED with proper rejection logging",
+    "telegram_notifier.py lines 108-109: New bihourly and hourly streak loops started in start() method",
+    "telegram_notifier.py lines 604-745: _bihourly_performance_loop sends comprehensive report every 2h",
+    "telegram_notifier.py lines 748-888: _hourly_streak_loop sends win/streak update every hour",
+    "models.py lines 132-156: RiskConfig defaults match forensic recommendations"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration68_forensic_rollback.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (18/18 passed)"
+  },
+
+  "test_credentials": "DEBUG_SNAPSHOT_KEY=test-snapshot-key-preview",
+
+  "seed_data_creation": "None - tested with live system",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 68 validated all forensic rollback + profit maximization changes. Key verified changes: (1) Risk config: max_position_size=25, crypto_max_exposure=250, arb_max/reserved=25, max_arb_positions=10, (2) Crypto: max_tte=28800 (8h), opposite_side_held RE-ACTIVATED, (3) Weather: min_edge=350, min_conf=0.45, default_size=5, max_signal=12, (4) Telegram: bihourly and hourly streak loops active. Note: 36 legacy arb positions exist but new limit is 10 - this is expected, new arb positions are blocked until count drops. The opposite_side_held filter may not show rejections immediately as it requires volatility data to accumulate."
+}

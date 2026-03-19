@@ -319,31 +319,39 @@ async def lifespan(app: FastAPI):
             rolling_calibration_service.set_config(weather_trader_ref.config)
         logger.info("Persisted configuration applied")
 
-        # ---- CRITICAL SYSTEM UPGRADE migration ----
-        # Force new capital allocation & strategy config values into the running state.
-        # These override persisted values that may carry stale defaults.
+        # ---- FORENSIC ROLLBACK + PROFIT MAXIMIZATION (Mar 19 audit) ----
+        # Based on comparative forensic analysis of 7 snapshots:
+        #   Best period (M2→D, max_size=25, opp_side ACTIVE): $56.28/h, $0.221/trade
+        #   Post-Phase2 (D→E, max_size=40, opp_side REMOVED): $1.81/h, $0.003/trade (31x regression)
+        # This migration restores the proven configuration and reallocates capital.
         upgrade_applied = False
 
-        # 1. Risk config: new exposure model
+        # 1. Risk config: crypto-first capital allocation
         if state.risk_config.max_market_exposure < 360.0:
             state.risk_config.max_market_exposure = 360.0
             upgrade_applied = True
-        if state.risk_config.crypto_max_exposure != 120.0:
-            state.risk_config.crypto_max_exposure = 120.0
+        # REVERT max_position_size: 40→25 (all positions >24 shares were losers)
+        if state.risk_config.max_position_size != 25.0:
+            state.risk_config.max_position_size = 25.0
+            upgrade_applied = True
+        # Increase crypto exposure: freed from arb capital
+        if state.risk_config.crypto_max_exposure != 250.0:
+            state.risk_config.crypto_max_exposure = 250.0
             upgrade_applied = True
         if state.risk_config.weather_max_exposure != 120.0:
             state.risk_config.weather_max_exposure = 120.0
             upgrade_applied = True
-        if state.risk_config.arb_max_exposure != 120.0:
-            state.risk_config.arb_max_exposure = 120.0
+        # HARD arb reduction: was $120, now $25 (arb is a capital trap, -4.6% ROI)
+        if state.risk_config.arb_max_exposure != 25.0:
+            state.risk_config.arb_max_exposure = 25.0
             upgrade_applied = True
-        if state.risk_config.arb_reserved_capital != 120.0:
-            state.risk_config.arb_reserved_capital = 120.0
+        if state.risk_config.arb_reserved_capital != 25.0:
+            state.risk_config.arb_reserved_capital = 25.0
             upgrade_applied = True
 
-        # 1b. Position limits: expanded for arb
-        if state.risk_config.max_arb_positions < 40:
-            state.risk_config.max_arb_positions = 40
+        # 1b. Position limits: restrict arb, keep global
+        if state.risk_config.max_arb_positions != 10:
+            state.risk_config.max_arb_positions = 10
             upgrade_applied = True
         if state.risk_config.max_concurrent_positions < 85:
             state.risk_config.max_concurrent_positions = 85
@@ -352,7 +360,7 @@ async def lifespan(app: FastAPI):
             state.risk_config.min_market_freshness_seconds = 300
             upgrade_applied = True
 
-        # 2. Arb: increase staleness tolerance & lower liquidity threshold
+        # 2. Arb: keep existing staleness/liquidity settings (no change needed)
         if arb_scanner_ref and arb_scanner_ref.config.max_stale_age_seconds < 300.0:
             arb_scanner_ref.config.max_stale_age_seconds = 300.0
             upgrade_applied = True
@@ -368,7 +376,6 @@ async def lifespan(app: FastAPI):
         if arb_scanner_ref and arb_scanner_ref.config.min_net_edge_bps > 15.0:
             arb_scanner_ref.config.min_net_edge_bps = 15.0
             upgrade_applied = True
-        # Ensure dynamic threshold params are set (upgrade from flat thresholds)
         if arb_scanner_ref and arb_scanner_ref.config.hard_max_stale_seconds < 2400.0:
             arb_scanner_ref.config.hard_max_stale_seconds = 2400.0
             upgrade_applied = True
@@ -376,7 +383,7 @@ async def lifespan(app: FastAPI):
             arb_scanner_ref.config.staleness_edge_per_minute_bps = 6.0
             upgrade_applied = True
 
-        # 3. Weather: lifecycle to shadow_exit, disable asymmetric, lower long-hold edge
+        # 3. Weather: keep lifecycle + disable asymmetric + TUNING UPGRADES
         if weather_trader_ref:
             if weather_trader_ref.config.lifecycle_mode != "shadow_exit":
                 weather_trader_ref.config.lifecycle_mode = "shadow_exit"
@@ -387,16 +394,23 @@ async def lifespan(app: FastAPI):
             if weather_trader_ref.config.min_edge_bps_long > 500.0:
                 weather_trader_ref.config.min_edge_bps_long = 500.0
                 upgrade_applied = True
+            # HIGH-CONFIDENCE weather tuning: PF=6.47 proves model has edge, loosen filters
+            if weather_trader_ref.config.min_edge_bps > 350.0:
+                weather_trader_ref.config.min_edge_bps = 350.0
+                upgrade_applied = True
+            if weather_trader_ref.config.min_confidence > 0.45:
+                weather_trader_ref.config.min_confidence = 0.45
+                upgrade_applied = True
+            if weather_trader_ref.config.default_size < 5.0:
+                weather_trader_ref.config.default_size = 5.0
+                upgrade_applied = True
+            if weather_trader_ref.config.max_signal_size < 12.0:
+                weather_trader_ref.config.max_signal_size = 12.0
+                upgrade_applied = True
 
-        # 4. Crypto: expand caps
-        if state.risk_config.max_position_size < 40.0:
-            state.risk_config.max_position_size = 40.0
-            upgrade_applied = True
-        if state.risk_config.crypto_max_exposure < 180.0:
-            state.risk_config.crypto_max_exposure = 180.0
-            upgrade_applied = True
-        if crypto_sniper_ref and crypto_sniper_ref.config.max_tte_seconds < 43200.0:
-            crypto_sniper_ref.config.max_tte_seconds = 43200.0
+        # 4. Crypto: REVERT max_tte to 8h (28800s) — 4h markets are net losers
+        if crypto_sniper_ref and crypto_sniper_ref.config.max_tte_seconds != 28800.0:
+            crypto_sniper_ref.config.max_tte_seconds = 28800.0
             upgrade_applied = True
 
         if upgrade_applied:
@@ -533,15 +547,19 @@ async def lifespan(app: FastAPI):
         # 3. Send upgrade deployed notification
         if telegram_notifier:
             changes = [
-                "Removed opposite_side_held filter for crypto",
-                "crypto_max_exposure: $120 -> $180",
-                "max_position_size: 25 -> 40 shares",
-                "max_tte_seconds: 8h -> 12h",
-                "Weather auto_exit: +negative_edge, +time_inefficiency",
-                "Weather min_edge_bps_long: 700 -> 500",
-                f"Arb: cleaned {tiny_arb_cleaned} tiny positions (<$0.50)",
-                "Arb: hard_max_stale: 1800s -> 2400s",
-                "Disabled asymmetric strategy",
+                "FORENSIC ROLLBACK + PROFIT MAXIMIZATION",
+                "max_position_size: 40 -> 25 (REVERTED)",
+                "Re-activated opposite_side_held filter",
+                "max_tte_seconds: 12h -> 8h (REVERTED)",
+                "crypto_max_exposure: $180 -> $250",
+                "arb_max_exposure: $120 -> $25",
+                "arb_reserved_capital: $120 -> $25",
+                "max_arb_positions: 40 -> 10",
+                "Weather min_edge_bps: 500 -> 350",
+                "Weather min_confidence: 0.55 -> 0.45",
+                "Weather default_size: 3 -> 5",
+                "Weather max_signal_size: 8 -> 12",
+                f"Arb: cleaned {tiny_arb_cleaned} tiny positions",
             ]
             telegram_notifier.send_upgrade_deployed(changes)
             telegram_notifier.start_upgrade_tracking()
