@@ -33,11 +33,15 @@ export default function QuantLab() {
   const [phPositions, setPhPositions] = useState([]);
   const [phClosed, setPhClosed] = useState([]);
 
-  // Whrrari state
+  // Whrrari state (3 modes)
   const [whReport, setWhReport] = useState(null);
   const [whEvals, setWhEvals] = useState([]);
-  const [whPositions, setWhPositions] = useState([]);
-  const [whClosed, setWhClosed] = useState([]);
+  const [whUnitPos, setWhUnitPos] = useState([]);
+  const [whUnitClosed, setWhUnitClosed] = useState([]);
+  const [whSandboxPos, setWhSandboxPos] = useState([]);
+  const [whSandboxClosed, setWhSandboxClosed] = useState([]);
+  const [whCryptoPos, setWhCryptoPos] = useState([]);
+  const [whCryptoClosed, setWhCryptoClosed] = useState([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -71,12 +75,16 @@ export default function QuantLab() {
         setPhReport(rpt.data); setPhEvals(evals.data);
         setPhPositions(pos.data); setPhClosed(cls.data);
       } else if (activeTab === 'whrrari') {
-        const [rpt, evals, pos, cls] = await Promise.all([
+        const [rpt, evals, uP, uC, sP, sC, cP, cC] = await Promise.all([
           api.get('/experiments/whrrari/report'), api.get('/experiments/whrrari/evaluations?limit=100'),
-          api.get('/experiments/whrrari/positions'), api.get('/experiments/whrrari/closed?limit=50'),
+          api.get('/experiments/whrrari/positions?mode=unit'), api.get('/experiments/whrrari/closed?mode=unit&limit=50'),
+          api.get('/experiments/whrrari/positions?mode=sandbox'), api.get('/experiments/whrrari/closed?mode=sandbox&limit=50'),
+          api.get('/experiments/whrrari/positions?mode=crypto'), api.get('/experiments/whrrari/closed?mode=crypto&limit=50'),
         ]);
         setWhReport(rpt.data); setWhEvals(evals.data);
-        setWhPositions(pos.data); setWhClosed(cls.data);
+        setWhUnitPos(uP.data); setWhUnitClosed(uC.data);
+        setWhSandboxPos(sP.data); setWhSandboxClosed(sC.data);
+        setWhCryptoPos(cP.data); setWhCryptoClosed(cC.data);
       }
     } catch { /* silent */ }
   }, [activeTab]);
@@ -187,22 +195,12 @@ export default function QuantLab() {
           />
         </TabsContent>
 
-        {/* Whrrari LMSR (Wave 1) */}
+        {/* Whrrari LMSR (Wave 1 — 3 sizing modes) */}
         <TabsContent value="whrrari">
-          <ExperimentTab
-            testId="whrrari"
-            title="Whrrari Fair-Value / LMSR"
-            description="LMSR-inspired fair-value model for multi-outcome markets. Flags hypothetical arbs when crowd price deviates from model."
-            badgeColor="amber"
-            report={whReport}
-            evaluations={whEvals}
-            positions={whPositions}
-            closed={whClosed}
-            evalCols={whrrariEvalCols}
-            posCols={whrrariPosCols}
-            closedCols={genericClosedCols}
-            hasDualMode={false}
-          />
+          <WhrrariTab report={whReport} evaluations={whEvals}
+            unitPositions={whUnitPos} unitClosed={whUnitClosed}
+            sandboxPositions={whSandboxPos} sandboxClosed={whSandboxClosed}
+            cryptoPositions={whCryptoPos} cryptoClosed={whCryptoClosed} />
         </TabsContent>
 
         {/* Marik (Wave 2 — Planned) */}
@@ -299,6 +297,136 @@ function ShadowSniperTab({ report, evaluations, unitPositions, lePositions, unit
           <DataTable columns={ssEvalCols} data={evaluations} emptyMessage="Waiting for scan cycle" testId="ss-evals-table" />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ---- Whrrari Tab (3 Sizing Modes) ----
+
+function WhrrariTab({ report, evaluations, unitPositions, unitClosed, sandboxPositions, sandboxClosed, cryptoPositions, cryptoClosed }) {
+  const metrics = report?.metrics || {};
+  const config = report?.config || {};
+  const sufficient = report?.sample_size_sufficient;
+  const unit = report?.unit_size || {};
+  const sandbox = report?.sandbox_notional || {};
+  const crypto = report?.crypto_mirrored || {};
+
+  return (
+    <div className="space-y-4" data-testid="whrrari-tab">
+      <ExperimentHeader title="Whrrari Fair-Value / LMSR" badgeColor="amber"
+        description="LMSR-inspired fair-value model for multi-outcome markets. 3 independent sizing modes tracked in parallel."
+        status={report?.status} lastEval={report?.last_scan_time} />
+
+      {sufficient === false && (
+        <div data-testid="whrrari-sample-warning" className="flex items-center gap-2 px-3 py-2 border border-amber-500/30 bg-amber-950/15 rounded-lg">
+          <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+          <span className="text-xs text-amber-300">Sample size too small for reliable metrics. Collecting data...</span>
+        </div>
+      )}
+
+      {/* 3 Mode Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <WhrrariModeCard testId="wh-mode-unit" title="Unit-Size" label="Normalized Research"
+          labelColor="border-amber-500/20 text-amber-400 bg-amber-950/10"
+          borderColor="border-amber-500/25 bg-amber-950/10"
+          dotColor="bg-amber-400"
+          note="Flat $3/signal · No accumulation · Signal quality comparison"
+          stats={unit} primary={false} />
+        <WhrrariModeCard testId="wh-mode-sandbox" title="Sandbox Notional" label="Primary Promotion Metric"
+          labelColor="border-emerald-500/20 text-emerald-400 bg-emerald-950/10"
+          borderColor="border-emerald-500/25 bg-emerald-950/10"
+          dotColor="bg-emerald-400"
+          note="Edge-tiered: $3 (300-599bps) · $8 (600-899bps) · $15 (900+bps)"
+          stats={sandbox} primary={true} />
+        <WhrrariModeCard testId="wh-mode-crypto" title="Crypto-Mirrored" label="Hypothetical Stress Test"
+          labelColor="border-red-500/20 text-red-400 bg-red-950/10"
+          borderColor="border-red-500/25 bg-red-950/10"
+          dotColor="bg-red-400"
+          note="$3/signal accumulating to $25 cap · NOT a realistic arb benchmark"
+          stats={crypto} primary={false} />
+      </div>
+
+      {/* Engine Metrics */}
+      {Object.keys(metrics).length > 0 && (
+        <SectionCard title="Engine Metrics" testId="whrrari-metrics">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
+            {Object.entries(metrics).filter(([k]) => k !== 'last_scan_time').map(([k, v]) => (
+              <CR key={k} l={k.replace(/_/g, ' ')} v={typeof v === 'number' ? v.toLocaleString() : String(v ?? '--')} />
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Config */}
+      {Object.keys(config).length > 0 && (
+        <SectionCard title="Config" testId="whrrari-config">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-xs">
+            {Object.entries(config).map(([k, v]) => (
+              <CR key={k} l={k.replace(/_/g, ' ')} v={String(v)} />
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Data tables — scoped by mode */}
+      <Tabs defaultValue="sandbox-open">
+        <TabsList className="bg-zinc-900 border border-zinc-800 mb-3 flex-wrap h-auto gap-1 p-1">
+          <TabsTrigger value="sandbox-open" data-testid="tab-wh-sandbox-open">Sandbox Open ({sandboxPositions.length})</TabsTrigger>
+          <TabsTrigger value="sandbox-closed" data-testid="tab-wh-sandbox-closed">Sandbox Closed ({sandboxClosed.length})</TabsTrigger>
+          <TabsTrigger value="unit-open" data-testid="tab-wh-unit-open">Unit Open ({unitPositions.length})</TabsTrigger>
+          <TabsTrigger value="unit-closed" data-testid="tab-wh-unit-closed">Unit Closed ({unitClosed.length})</TabsTrigger>
+          <TabsTrigger value="crypto-open" data-testid="tab-wh-crypto-open">Stress Open ({cryptoPositions.length})</TabsTrigger>
+          <TabsTrigger value="crypto-closed" data-testid="tab-wh-crypto-closed">Stress Closed ({cryptoClosed.length})</TabsTrigger>
+          <TabsTrigger value="evals" data-testid="tab-wh-evals">Evaluations ({evaluations.length})</TabsTrigger>
+        </TabsList>
+        <TabsContent value="sandbox-open">
+          <DataTable columns={whrrariSandboxPosCols} data={sandboxPositions} emptyMessage="No sandbox positions" testId="wh-sandbox-open-table" />
+        </TabsContent>
+        <TabsContent value="sandbox-closed">
+          <DataTable columns={whrrariSandboxClosedCols} data={sandboxClosed} emptyMessage="No sandbox resolved" testId="wh-sandbox-closed-table" />
+        </TabsContent>
+        <TabsContent value="unit-open">
+          <DataTable columns={whrrariPosCols} data={unitPositions} emptyMessage="No unit positions" testId="wh-unit-open-table" />
+        </TabsContent>
+        <TabsContent value="unit-closed">
+          <DataTable columns={genericClosedCols} data={unitClosed} emptyMessage="No unit resolved" testId="wh-unit-closed-table" />
+        </TabsContent>
+        <TabsContent value="crypto-open">
+          <DataTable columns={whrrariCryptoPosCols} data={cryptoPositions} emptyMessage="No crypto-mirrored positions" testId="wh-crypto-open-table" />
+        </TabsContent>
+        <TabsContent value="crypto-closed">
+          <DataTable columns={genericClosedCols} data={cryptoClosed} emptyMessage="No crypto-mirrored resolved" testId="wh-crypto-closed-table" />
+        </TabsContent>
+        <TabsContent value="evals">
+          <DataTable columns={whrrariEvalCols} data={evaluations} emptyMessage="Waiting for scan cycle" testId="wh-evals-table" />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function WhrrariModeCard({ testId, title, label, labelColor, borderColor, dotColor, note, stats, primary }) {
+  return (
+    <div data-testid={testId} className={`border rounded-lg p-4 space-y-3 ${borderColor} ${primary ? 'ring-1 ring-emerald-500/30' : ''}`}>
+      <div className="flex items-center justify-between flex-wrap gap-1">
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${dotColor}`} />
+          <span className="text-sm font-semibold text-zinc-100">{title}</span>
+        </div>
+        <span className={`text-[9px] font-mono border rounded px-1.5 py-0.5 ${labelColor}`}>{label}</span>
+      </div>
+      <div className="text-[11px] text-zinc-500">{note}</div>
+      <div className="grid grid-cols-3 gap-2 text-xs">
+        <MiniStat label="PnL" value={formatPnl(stats.pnl_total || 0)} pnl />
+        <MiniStat label="PnL/Trade" value={stats.pnl_per_trade != null ? formatPnl(stats.pnl_per_trade) : '--'} pnl />
+        <MiniStat label="Win Rate" value={stats.binary_win_rate != null ? formatPercent(stats.binary_win_rate * 100, 1) : '--'} />
+        <MiniStat label="Open" value={stats.open_positions ?? 0} />
+        <MiniStat label="Closed" value={stats.closed_trades ?? 0} />
+        <MiniStat label="Exposure" value={stats.open_exposure != null ? `$${stats.open_exposure.toFixed(2)}` : '--'} />
+        <MiniStat label="Rolling 1h" value={formatPnl(stats.rolling_pnl?.['1h'] || 0)} pnl />
+        <MiniStat label="Rolling 3h" value={formatPnl(stats.rolling_pnl?.['3h'] || 0)} pnl />
+        <MiniStat label="Rolling 6h" value={formatPnl(stats.rolling_pnl?.['6h'] || 0)} pnl />
+      </div>
     </div>
   );
 }
@@ -624,6 +752,7 @@ const whrrariEvalCols = [
   { key: 'outcome_count', label: 'Outcomes', align: 'right', render: v => <span className="font-mono text-zinc-300">{v}</span> },
   { key: 'price_sum', label: 'Price Sum', align: 'right', render: v => <span className={`font-mono ${Math.abs(1 - (v || 1)) > 0.02 ? 'text-amber-400' : 'text-zinc-400'}`}>{v?.toFixed(4)}</span> },
   { key: 'best_edge_bps', label: 'Best Edge', align: 'right', sortable: true, render: v => <span className={`font-mono ${(v || 0) >= 300 ? 'text-amber-400' : 'text-zinc-600'}`}>{formatBps(v)}</span> },
+  { key: 'sandbox_size', label: 'Sandbox $', align: 'right', render: v => <span className={`font-mono ${v > 0 ? 'text-emerald-400' : 'text-zinc-600'}`}>{v ? `$${v}` : '--'}</span> },
   { key: 'would_trade', label: 'Signal', render: v => <span className={v ? 'text-amber-300 font-medium' : 'text-zinc-600'}>{v ? 'TRADE' : 'skip'}</span> },
 ];
 
@@ -634,6 +763,42 @@ const whrrariPosCols = [
   { key: 'edge_bps_at_entry', label: 'Edge', align: 'right', render: v => <span className="font-mono text-amber-300">{formatBps(v)}</span> },
   { key: 'fair_prob_at_entry', label: 'Fair Prob', align: 'right', render: v => <span className="font-mono text-zinc-300">{v != null ? formatPercent(v * 100, 1) : '--'}</span> },
   { key: 'avg_entry', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+  { key: 'current_price', label: 'Mark', align: 'right', render: v => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '--'}</span> },
+  { key: 'unrealized_pnl', label: 'Unrl PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },
+];
+
+const whrrariSandboxPosCols = [
+  { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 35)}</span> },
+  { key: 'outcome_count', label: 'Out', align: 'right', render: v => <span className="font-mono text-zinc-300">{v}</span> },
+  { key: 'sandbox_band', label: 'Band', render: v => <span className="font-mono text-emerald-300">{v || '--'}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono text-emerald-300 font-medium">${v}</span> },
+  { key: 'edge_bps_at_entry', label: 'Edge', align: 'right', render: v => <span className="font-mono text-amber-300">{formatBps(v)}</span> },
+  { key: 'avg_entry', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+  { key: 'current_price', label: 'Mark', align: 'right', render: v => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '--'}</span> },
+  { key: 'unrealized_pnl', label: 'Unrl PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },
+];
+
+const whrrariSandboxClosedCols = [
+  { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 35)}</span> },
+  { key: 'sandbox_band', label: 'Band', render: v => <span className="font-mono text-emerald-300">{v || '--'}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono">{v}</span> },
+  { key: 'avg_entry', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+  { key: 'exit_price', label: 'Exit', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+  { key: 'pnl', label: 'PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-semibold ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  { key: 'won', label: 'Result', render: v => <span className={v ? 'text-emerald-400' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+  { key: 'resolution_type', label: 'Resolution', render: v => <ResType v={v} /> },
+  { key: 'closed_at', label: 'Closed', render: v => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
+];
+
+const whrrariCryptoPosCols = [
+  { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 35)}</span> },
+  { key: 'outcome_count', label: 'Out', align: 'right', render: v => <span className="font-mono text-zinc-300">{v}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono text-red-300 font-medium">{v}</span> },
+  { key: 'fills', label: 'Fills', align: 'right', render: v => <span className="font-mono text-zinc-400">{v}</span> },
+  { key: 'edge_bps_at_entry', label: 'Edge', align: 'right', render: v => <span className="font-mono text-amber-300">{formatBps(v)}</span> },
+  { key: 'avg_entry', label: 'Avg Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
   { key: 'current_price', label: 'Mark', align: 'right', render: v => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '--'}</span> },
   { key: 'unrealized_pnl', label: 'Unrl PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
   { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },

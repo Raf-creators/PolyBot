@@ -3587,17 +3587,17 @@ async def get_whrrari_evaluations(limit: int = 50):
 
 
 @api_router.get("/experiments/whrrari/positions")
-async def get_whrrari_positions():
+async def get_whrrari_positions(mode: str = "unit"):
     if not shadow_whrrari:
         return []
-    return shadow_whrrari.get_positions()
+    return shadow_whrrari.get_positions(mode=mode)
 
 
 @api_router.get("/experiments/whrrari/closed")
-async def get_whrrari_closed(limit: int = 50):
+async def get_whrrari_closed(mode: str = "unit", limit: int = 50):
     if not shadow_whrrari:
         return []
-    return shadow_whrrari.get_closed(limit=min(limit, 200))
+    return shadow_whrrari.get_closed(mode=mode, limit=min(limit, 200))
 
 
 # ---- Quant Lab: Master experiment list ----

@@ -1,0 +1,134 @@
+{
+  "summary": "Iteration 75: Whrrari LMSR 3 Sizing Modes Testing - ALL TESTS PASS. Backend: 16/16 tests pass. Frontend: All 3 mode cards (Unit-Size, Sandbox Notional, Crypto-Mirrored) displayed with correct labels and accents. All 7 data sub-tabs present. Config shows sandbox_bands and crypto_mirror_cap.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "test_report_returns_unit_size_stats - PASS: unit_size stats object with pnl_total, win_rate, binary_win_rate, closed_trades, open_positions, open_exposure, pnl_per_trade, rolling_pnl",
+      "test_report_returns_sandbox_notional_stats - PASS: sandbox_notional stats object present",
+      "test_report_returns_crypto_mirrored_stats - PASS: crypto_mirrored stats object present",
+      "test_report_config_shows_sandbox_bands - PASS: config.sandbox_bands = '$3 (300-599bps) / $8 (600-899bps) / $15 (900+bps)'",
+      "test_report_config_shows_crypto_mirror_cap - PASS: config.crypto_mirror_cap = '$3.0/signal → $25.0 max'",
+      "test_positions_mode_unit - PASS: GET /api/experiments/whrrari/positions?mode=unit returns list",
+      "test_positions_mode_sandbox - PASS: GET /api/experiments/whrrari/positions?mode=sandbox returns list",
+      "test_positions_mode_crypto - PASS: GET /api/experiments/whrrari/positions?mode=crypto returns list",
+      "test_closed_mode_unit - PASS: GET /api/experiments/whrrari/closed?mode=unit returns list",
+      "test_closed_mode_sandbox - PASS: GET /api/experiments/whrrari/closed?mode=sandbox returns list",
+      "test_closed_mode_crypto - PASS: GET /api/experiments/whrrari/closed?mode=crypto returns list",
+      "test_shadow_report_endpoint - PASS: GET /api/shadow/report still works (status=no_data - expected when no evaluations)",
+      "test_experiments_registry_endpoint - PASS: Whrrari in registry with status=active, shadow_sniper also present",
+      "test_evaluations_endpoint - PASS: GET /api/experiments/whrrari/evaluations returns list",
+      "test_health_endpoint - PASS: status=ok",
+      "test_status_endpoint - PASS: mode=paper"
+    ],
+    "frontend_ui_tests": [
+      "Quant Lab page loads with data-testid='quant-lab-page' - PASS",
+      "Whrrari LMSR tab clickable and loads content - PASS",
+      "Unit-Size mode card (data-testid='wh-mode-unit') with 'Normalized Research' label - PASS",
+      "Sandbox Notional mode card (data-testid='wh-mode-sandbox') with 'Primary Promotion Metric' label (GREEN accent) - PASS",
+      "Crypto-Mirrored mode card (data-testid='wh-mode-crypto') with 'Hypothetical Stress Test' label (RED accent) - PASS",
+      "Tab 'Sandbox Open' (data-testid='tab-wh-sandbox-open') - PASS",
+      "Tab 'Sandbox Closed' (data-testid='tab-wh-sandbox-closed') - PASS",
+      "Tab 'Unit Open' (data-testid='tab-wh-unit-open') - PASS",
+      "Tab 'Unit Closed' (data-testid='tab-wh-unit-closed') - PASS",
+      "Tab 'Stress Open' (data-testid='tab-wh-crypto-open') - PASS",
+      "Tab 'Stress Closed' (data-testid='tab-wh-crypto-closed') - PASS",
+      "Tab 'Evaluations' (data-testid='tab-wh-evals') - PASS",
+      "Config section shows sandbox_bands and crypto_mirror_cap - PASS",
+      "Engine Metrics section shows total_scans, groups_found, groups_evaluated, deviations_found - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "whrrari_3_sizing_modes": {
+      "status": "PASS",
+      "evidence": {
+        "unit_size": {
+          "description": "Flat $3/signal, normalized research comparison",
+          "api_endpoint": "/api/experiments/whrrari/positions?mode=unit",
+          "closed_endpoint": "/api/experiments/whrrari/closed?mode=unit",
+          "ui_card": "data-testid='wh-mode-unit' with 'Normalized Research' label"
+        },
+        "sandbox_notional": {
+          "description": "Edge-tiered bands: $3 (300-599bps), $8 (600-899bps), $15 (900+bps)",
+          "api_endpoint": "/api/experiments/whrrari/positions?mode=sandbox",
+          "closed_endpoint": "/api/experiments/whrrari/closed?mode=sandbox",
+          "ui_card": "data-testid='wh-mode-sandbox' with 'Primary Promotion Metric' label (GREEN accent)",
+          "sandbox_band_field": "Positions include sandbox_band field like '$3', '$8', '$15'"
+        },
+        "crypto_mirrored": {
+          "description": "$3/signal accumulating to $25 cap, hypothetical stress test only",
+          "api_endpoint": "/api/experiments/whrrari/positions?mode=crypto",
+          "closed_endpoint": "/api/experiments/whrrari/closed?mode=crypto",
+          "ui_card": "data-testid='wh-mode-crypto' with 'Hypothetical Stress Test' label (RED accent)"
+        }
+      }
+    },
+    "report_config": {
+      "status": "PASS",
+      "evidence": {
+        "sandbox_bands": "$3 (300-599bps) / $8 (600-899bps) / $15 (900+bps)",
+        "crypto_mirror_cap": "$3.0/signal → $25.0 max"
+      }
+    },
+    "7_data_subtabs": {
+      "status": "PASS",
+      "evidence": {
+        "tabs": ["Sandbox Open", "Sandbox Closed", "Unit Open", "Unit Closed", "Stress Open", "Stress Closed", "Evaluations"]
+      }
+    },
+    "existing_shadow_sniper": {
+      "status": "PASS",
+      "evidence": {
+        "shadow_report": "/api/shadow/report returns status (no_data when no evaluations)",
+        "registry": "shadow_sniper present in /api/experiments/registry"
+      }
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration75_whrrari_sizing_modes.py",
+    "/app/test_reports/pytest/pytest_results_iteration75.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "shadow_whrrari.py: Clean implementation with 3 _ModeTracker instances (_unit, _sandbox, _crypto)",
+    "SANDBOX_BANDS constant correctly defines edge-tiered sizing: [(900.0, 15.0), (600.0, 8.0), (300.0, 3.0)]",
+    "Crypto-mirrored accumulation logic correctly caps at CRYPTO_MAX_POSITION ($25)",
+    "get_report() returns all 3 mode stats (unit_size, sandbox_notional, crypto_mirrored)",
+    "get_positions(mode) and get_closed(mode) correctly route to appropriate _ModeTracker",
+    "QuantLab.jsx WhrrariTab component correctly renders 3 WhrrariModeCard instances with proper styling",
+    "Sandbox card has green accent (border-emerald-500/25, ring-1 ring-emerald-500/30)",
+    "Crypto card has red accent (border-red-500/25)"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration75_whrrari_sizing_modes.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (16/16 tests passed)",
+    "frontend": "100% (14/14 UI features verified)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live shadow engine data (1 scan, 1 group found, 0 hypothetical trades yet)",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 75 validated the Whrrari LMSR 3 sizing modes feature. Key findings: (1) Backend correctly returns unit_size, sandbox_notional, and crypto_mirrored stats in /api/experiments/whrrari/report, (2) Config shows sandbox_bands='$3 (300-599bps) / $8 (600-899bps) / $15 (900+bps)' and crypto_mirror_cap='$3.0/signal → $25.0 max', (3) Position/closed endpoints accept ?mode=unit|sandbox|crypto query param, (4) Frontend shows 3 mode cards with correct labels: Unit-Size='Normalized Research', Sandbox Notional='Primary Promotion Metric' (green accent), Crypto-Mirrored='Hypothetical Stress Test' (red accent), (5) All 7 data sub-tabs present: Sandbox Open/Closed, Unit Open/Closed, Stress Open/Closed, Evaluations, (6) Existing shadow sniper and experiments registry still work. Engine currently has 1 scan, 1 group found, 0 hypothetical trades - sample size warning displayed as expected."
+}
