@@ -2,7 +2,7 @@
 
 ## Original Problem Statement
 Multi-strategy automated trading system for Polymarket prediction markets. Operates three strategies:
-1. **Crypto Sniper** — Primary profit driver. Trades BTC/ETH up/down markets on 5min-4h windows using Binance real-time price feeds.
+1. **Crypto Sniper** — Primary profit driver. Trades BTC/ETH up/down markets using Binance real-time price feeds.
 2. **Weather Trader** — Trades temperature/weather outcome markets using Open-Meteo forecasts.
 3. **Arb Scanner** — Multi-outcome arbitrage across weather and other markets.
 
@@ -12,11 +12,11 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 - **External Data**: Binance WebSocket (BTC/ETH), Open-Meteo (weather), Polymarket Gamma API + CLOB WebSocket
 - **Notifications**: Telegram bot for trade alerts, performance reports
 
-## Current Configuration (Post Live Patch, Mar 20 2026)
+## Current Configuration (Post Live Patch + Audit, Mar 20 2026)
 
 ### Risk Config (Hard-pinned at startup)
 - max_position_size: 25
-- crypto_max_exposure: $250 (unchanged)
+- crypto_max_exposure: $250
 - arb_max_exposure: $8 (minimal sandbox)
 - arb_reserved_capital: $8
 - weather_reserved_capital: $15 (guaranteed allocation floor)
@@ -25,23 +25,19 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 - max_market_exposure: $360
 
 ### Shadow Sniper (NO LIVE EXECUTION)
+- Unit-size: $3/signal, no accumulation, NOT live-equivalent
 - EV-gap filter: min_ev_ratio = 0.04 (4%)
-- Pseudo-Stoikov reservation price: gamma=0.1, inventory_decay=0.8
-- Fully isolated — zero live fills
+- Pseudo-Stoikov: gamma=0.1, inventory_decay=0.8
+- Resolution: Waits for binary outcome (price near 0 or 1), NOT mark-to-market
+- FP/FN: Computed at resolution time based on shadow-vs-live disagreement
+- Agreement rate: Meaningful-only (excludes trivial both-skip evaluations)
 - API: /api/shadow/report, /evaluations, /positions, /closed
 
-## Frontend Pages
-1. **Overview** — PnL chart (1H/6H/1D/All), strategy summaries, trade ticker
-2. **Arbitrage** — PnL summary header, arb positions/executions
-3. **Sniper** — Live crypto positions, signals, health + compact shadow summary card
-4. **Weather** — Weather signals, positions, lifecycle management
-5. **Quant Lab** — Full shadow monitoring dashboard (NEW Mar 20)
-6. **Positions** — Cross-strategy position view
-7. **Analytics** — Strategy-level analytics
-8. **Global Analytics** — Cross-strategy analytics
-9. **Risk** — Risk config and exposure monitoring
-10. **Markets** — Market browser
-11. **Settings** — Engine configuration
+### PnL Accounting (Audited Mar 20 2026)
+- Overview PnL chart = ALL-strategy cumulative realized PnL (includes "unknown" trades)
+- Strategy pages = Per-strategy attributed PnL only
+- Difference = orphaned "unknown" trades (not attributable to any named strategy)
+- Shadow data is fully isolated — does NOT affect live Overview, PnL, or positions
 
 ## What Has Been Implemented
 1. Complete multi-strategy trading engine (crypto, weather, arb)
@@ -58,31 +54,38 @@ Multi-strategy automated trading system for Polymarket prediction markets. Opera
 12. Shadow Crypto Sniper with EV-gap + pseudo-Stoikov (Mar 20)
 13. Slot rotation auto-exit fix + log dedup (Mar 20)
 14. Hard-pinned startup config migration (Mar 20)
-15. **Quant Lab page** — Full shadow monitoring dashboard (Mar 20)
-16. **Sniper page shadow summary** — Compact card with agreement rate, counts, PnL (Mar 20)
+15. Quant Lab page — Full shadow monitoring dashboard (Mar 20)
+16. Sniper page shadow summary (Mar 20)
+17. Shadow accounting audit fixes (Mar 20):
+    - Binary resolution (waits for 0/1, not mid-market)
+    - FP/FN wired up correctly
+    - Meaningful agreement rate split
+    - Size/Notional columns added
+    - Unit-size labeling throughout UI
 
 ## Testing Status
-- iteration_68.json: Forensic Rollback — 18/18 passed (100%)
-- iteration_69.json: Shadow Sniper + Config Hard-Pin — 26/26 passed (100%)
-- iteration_70.json: Quant Lab UI + Shadow Summary — 100% passed (all 11 features)
+- iteration_68.json: Forensic Rollback — 18/18 (100%)
+- iteration_69.json: Shadow Sniper + Config Hard-Pin — 26/26 (100%)
+- iteration_70.json: Quant Lab UI + Shadow Summary — 11/11 (100%)
+- iteration_71.json: Shadow Correctness Audit — 19/19 (100%)
 
 ## Backlog
 
 ### P1 — Active Monitoring
-- Monitor shadow vs live via Quant Lab page
+- Monitor shadow vs live at /quant-lab as binary resolutions accumulate
 - Watch Telegram 2h/6h reports for crypto PnL recovery
-- Confirm legacy oversized positions resolve naturally
+- Observe FP/FN metrics as they populate
 
 ### P2 — Planned
-- If shadow data promising, promote EV-gap + Stoikov to live
+- If shadow binary win rate proves better, promote EV-gap + Stoikov to live
 - Increase crypto_max_exposure once crypto proves cap-bound
 - Add weather observations API
-- Add Coinbase WebSocket as second crypto feed
+- Add Coinbase WebSocket
 - Re-evaluate asymmetric weather mode
 
 ### P3 — Future
-- Add XRP/SOL price feeds
+- XRP/SOL support
 - Trailing stop-loss
-- Regime detection model
+- Regime detection
 - Resolution Timeline visualization
-- Copy Trading / Manual Order Entry skeleton
+- Copy Trading / Manual Order Entry
