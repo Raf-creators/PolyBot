@@ -1,85 +1,63 @@
 # Polymarket Edge OS — PRD
 
 ## Original Problem Statement
-Multi-strategy automated trading system for Polymarket prediction markets. Operates three strategies:
-1. **Crypto Sniper** — Primary profit driver. Trades BTC/ETH up/down markets using Binance real-time price feeds.
-2. **Weather Trader** — Trades temperature/weather outcome markets using Open-Meteo forecasts.
-3. **Arb Scanner** — Multi-outcome arbitrage (minimal sandbox).
+Multi-strategy automated trading system for Polymarket prediction markets.
+
+## Current Epoch: EPOCH 2
+- **Started**: 2026-03-20T15:24:47 UTC
+- **Starting Balance**: $1,000.00
+- **Previous Epoch**: 7,444 trades archived to `trades_archive_epoch1`
 
 ## Core Architecture
-- **Backend**: FastAPI + MongoDB, manages engine state, strategies, risk, positions
+- **Backend**: FastAPI + MongoDB, engine state, strategies, risk, positions
 - **Frontend**: React dashboard for monitoring and configuration
-- **External Data**: Binance WebSocket (BTC/ETH), Open-Meteo (weather), Polymarket Gamma API + CLOB WebSocket
-- **Notifications**: Telegram bot for trade alerts, performance reports
+- **External Data**: Binance WS, Open-Meteo, Polymarket Gamma + CLOB WS
+- **Notifications**: Telegram (2h full report, 1h win/streak, per-trade)
 
-## Current Configuration (Post Live Patch + Audit, Mar 20 2026)
+## Configuration (Unchanged)
+- max_position_size: 25, crypto_max_exposure: $250
+- arb_max_exposure: $8 (sandbox), weather_reserved_capital: $15
+- Crypto sniper: max_tte=8h, opposite_side_held=active, min_edge=200bps
+- Weather: min_edge=350bps, min_confidence=0.45, lifecycle=shadow_exit
+- Stale arb cleanup: 2h interval, 24h threshold
 
-### Risk Config (Hard-pinned at startup)
-- max_position_size: 25
-- crypto_max_exposure: $250
-- arb_max_exposure: $8 (minimal sandbox)
-- arb_reserved_capital: $8
-- weather_reserved_capital: $15 (guaranteed allocation floor)
-- max_arb_positions: 5
-
-### Shadow Sniper — Dual Mode (NO LIVE EXECUTION)
-Two parallel evaluation modes, both fully isolated:
-
-**Unit-Size Mode:**
-- $3/signal, one entry per market, no accumulation
-- Clean normalized research comparison
-- Useful for signal quality evaluation
-
-**Live-Equivalent Mode:**
-- $3/signal, accumulates up to max_position_size (25) per market
-- Same sizing/accumulation/cap path as live sniper
-- VWAP average entry across multiple fills
-- Useful for estimating real portfolio impact
-
-**Shared:**
-- EV-gap filter: min_ev_ratio = 0.04 (4%)
-- Pseudo-Stoikov: gamma=0.1, inventory_decay=0.8
-- Binary resolution (waits for price near 0/1)
-- FP/FN computed at resolution time
+## Shadow Sniper — Dual Mode (NO LIVE EXECUTION)
+- **Unit-Size**: $3/signal, no accumulation
+- **Live-Equivalent**: $3/signal, accumulates to max 25 shares
+- EV-gap (4%), pseudo-Stoikov (gamma=0.1), binary resolution
 - API: /api/shadow/report, /evaluations, /positions?mode=unit|le, /closed?mode=unit|le
 
-### PnL Accounting
-- Overview PnL chart = ALL-strategy cumulative realized PnL (includes "unknown" trades)
-- Strategy pages = Per-strategy attributed PnL only
-- Shadow data is fully isolated — does NOT affect live data
-
 ## What Has Been Implemented
-1-16. (See previous PRD entries)
-17. Shadow accounting audit: binary resolution, FP/FN wiring, meaningful agreement rate, size labels (Mar 20)
-18. **Dual-mode shadow system**: Unit-Size + Live-Equivalent parallel tracking (Mar 20)
-    - LE accumulation with VWAP avg_entry
-    - Cap enforcement (max_position_size=25)
-    - Tabbed position views (LE Open/Closed, Unit Open/Closed, Evaluations)
-    - LE Action column in evaluations (accum/cap_blocked)
-    - Dual PnL display on Sniper page shadow summary
+1-18. (See CHANGELOG for full history)
+19. **Paper Performance Reset / Epoch 2** (Mar 20 2026)
+    - Archived 7,444 trades, 6,032 orders, 1 position snapshot to `*_archive_epoch1`
+    - Cleared live collections, reset in-memory state
+    - Epoch marker in MongoDB (idempotent — runs once only)
+    - Fixed paperBalance computation: uses `pnlHistory.current_pnl` (survives restarts)
+    - Bot continues under same configuration with clean $1,000 baseline
 
 ## Testing Status
-- iteration_68.json: Forensic Rollback — 18/18 (100%)
-- iteration_69.json: Shadow + Config Hard-Pin — 26/26 (100%)
-- iteration_70.json: Quant Lab UI — 11/11 (100%)
-- iteration_71.json: Shadow Correctness Audit — 19/19 (100%)
-- iteration_72.json: Dual-Mode Shadow — 27/27 (100%)
+- iteration_68: Forensic Rollback — 18/18
+- iteration_69: Shadow + Config — 26/26
+- iteration_70: Quant Lab UI — 11/11
+- iteration_71: Shadow Audit — 19/19
+- iteration_72: Dual-Mode Shadow — 27/27
+- iteration_73: Epoch Reset — 25/25 (14 backend + 11 frontend)
 
 ## Backlog
 
-### P1 — Active Monitoring
-- Monitor dual-mode shadow at /quant-lab as binary resolutions accumulate
-- Compare Unit PnL vs LE PnL to assess portfolio-level impact
-- Watch FP/FN metrics as they populate
+### P1 — Active Monitoring (Epoch 2)
+- Monitor crypto PnL/h recovery under clean baseline
+- Compare dual-mode shadow (Unit vs LE) as positions binary-resolve
+- Watch FP/FN metrics populate
 
 ### P2 — Planned
-- If LE shadow binary win rate proves better, promote EV-gap + Stoikov to live
-- Increase crypto_max_exposure once crypto proves cap-bound
-- Add weather observations API
-- Add Coinbase WebSocket
-- Re-evaluate asymmetric weather mode
+- Promote EV-gap + Stoikov if shadow proves superior
+- Increase crypto_max_exposure once cap-bound proven
+- Weather observations API, Coinbase WebSocket
+- Re-evaluate asymmetric weather
 
 ### P3 — Future
-- XRP/SOL support, trailing stop-loss, regime detection
+- XRP/SOL, trailing stop-loss, regime detection
 - Resolution Timeline visualization
 - Copy Trading / Manual Order Entry
