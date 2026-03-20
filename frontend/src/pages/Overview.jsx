@@ -55,9 +55,11 @@ export default function Overview() {
 
   const paperBalance = useMemo(() => {
     if (demoMode && wallet.balance_usdc) return wallet.balance_usdc;
-    const totalCost = positions.reduce((sum, p) => sum + p.size * p.avg_cost, 0);
-    return 1000 - totalCost + stats.daily_pnl;
-  }, [positions, stats.daily_pnl, demoMode, wallet.balance_usdc]);
+    // Use cumulative realized PnL from pnl-history (correct across restarts).
+    // current_pnl = sum of ALL closed trade PnL in this epoch.
+    const realizedPnl = pnlHistory?.current_pnl ?? stats.daily_pnl ?? 0;
+    return 1000 + realizedPnl;
+  }, [pnlHistory, stats.daily_pnl, demoMode, wallet.balance_usdc]);
 
   const recentTrades = useMemo(() => trades.slice(-5).reverse(), [trades]);
 

@@ -214,6 +214,65 @@ async def lifespan(app: FastAPI):
     await engine.persistence.load_state_from_db(state)
     _trades_loaded_from_db = len(state.trades)
 
+    # ---- EPOCH RESET: Paper Performance Reset to $1000 ----
+    # Archives old data, clears live collections, starts clean epoch.
+    # This block runs ONCE (guarded by epoch marker in MongoDB).
+    epoch_marker = await db.epochs.find_one({"epoch_id": "epoch_2"}, {"_id": 0})
+    if not epoch_marker:
+        logger.info("[EPOCH-RESET] Starting clean epoch 2 — archiving pre-reset data...")
+
+        # Archive old data (non-destructive: copy to archive collections)
+        old_trades = await db.trades.count_documents({})
+        old_orders = await db.orders.count_documents({})
+        old_positions = await db.positions_snapshots.count_documents({})
+
+        if old_trades > 0:
+            pipeline = [{"$match": {}}, {"$out": "trades_archive_epoch1"}]
+            await db.trades.aggregate(pipeline).to_list(length=1)
+            logger.info(f"[EPOCH-RESET] Archived {old_trades} trades → trades_archive_epoch1")
+
+        if old_orders > 0:
+            pipeline = [{"$match": {}}, {"$out": "orders_archive_epoch1"}]
+            await db.orders.aggregate(pipeline).to_list(length=1)
+            logger.info(f"[EPOCH-RESET] Archived {old_orders} orders → orders_archive_epoch1")
+
+        if old_positions > 0:
+            pipeline = [{"$match": {}}, {"$out": "positions_archive_epoch1"}]
+            await db.positions_snapshots.aggregate(pipeline).to_list(length=1)
+            logger.info(f"[EPOCH-RESET] Archived {old_positions} position snapshots → positions_archive_epoch1")
+
+        # Clear live collections
+        await db.trades.delete_many({})
+        await db.orders.delete_many({})
+        await db.positions_snapshots.delete_many({})
+
+        # Reset in-memory state
+        state.trades.clear()
+        state.positions.clear()
+        state.orders.clear()
+        state.daily_pnl = 0.0
+        state.total_trades = 0
+        state.win_count = 0
+        state.loss_count = 0
+
+        # Reset persistence service index so it doesn't try to re-persist archived trades
+        engine.persistence._last_trade_idx = 0
+        engine.persistence._persisted_orders.clear()
+
+        # Record epoch marker
+        from datetime import datetime as _dt, timezone as _tz
+        await db.epochs.insert_one({
+            "epoch_id": "epoch_2",
+            "started_at": _dt.now(_tz.utc).isoformat(),
+            "starting_balance": 1000.0,
+            "archived_trades": old_trades,
+            "archived_orders": old_orders,
+            "archived_positions": old_positions,
+            "reason": "Paper performance reset — clean baseline for current bot regime evaluation",
+        })
+        _trades_loaded_from_db = 0
+        logger.info("[EPOCH-RESET] Epoch 2 started. Paper balance reset to $1000. All systems clean.")
+
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)
