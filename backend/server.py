@@ -59,6 +59,7 @@ from services.liquidity_service import LiquidityService
 from services.auto_resolver_service import AutoResolverService
 from services.market_resolver_service import MarketResolverService
 from services.stale_arb_cleanup import StaleArbCleanupService
+from engine.strategies.shadow_sniper import ShadowSniperEngine
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -79,6 +80,7 @@ rolling_calibration_service: Optional[RollingCalibrationService] = None
 auto_resolver_service: Optional[AutoResolverService] = None
 market_resolver_service: Optional[MarketResolverService] = None
 stale_arb_cleanup: Optional[StaleArbCleanupService] = None
+shadow_sniper: Optional[ShadowSniperEngine] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -189,7 +191,7 @@ async def _notify_trade_closed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, ws_broadcast_task
     global _server_start_time, _git_commit, _build_info, _trades_loaded_from_db
 
     # Diagnostics — capture at boot
@@ -316,6 +318,13 @@ async def lifespan(app: FastAPI):
     )
     await stale_arb_cleanup.start()
 
+    # Shadow Sniper: EV-gap + pseudo-Stoikov evaluation layer (NO live fills)
+    global shadow_sniper
+    shadow_sniper = ShadowSniperEngine()
+    await shadow_sniper.start(state, crypto_sniper_ref)
+    crypto_sniper_ref._shadow = shadow_sniper
+    logger.info("[STARTUP] Shadow sniper engine initialized (shadow-only, no live execution)")
+
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
     persisted = await config_service.load()
@@ -351,17 +360,21 @@ async def lifespan(app: FastAPI):
         if state.risk_config.weather_max_exposure != 120.0:
             state.risk_config.weather_max_exposure = 120.0
             upgrade_applied = True
-        # HARD arb reduction: was $120, now $25 (arb is a capital trap, -4.6% ROI)
-        if state.risk_config.arb_max_exposure != 25.0:
-            state.risk_config.arb_max_exposure = 25.0
+        # HARD arb reduction: minimal sandbox ($8) — arb is a capital trap (-4.6% ROI)
+        if state.risk_config.arb_max_exposure != 8.0:
+            state.risk_config.arb_max_exposure = 8.0
             upgrade_applied = True
-        if state.risk_config.arb_reserved_capital != 25.0:
-            state.risk_config.arb_reserved_capital = 25.0
+        if state.risk_config.arb_reserved_capital != 8.0:
+            state.risk_config.arb_reserved_capital = 8.0
+            upgrade_applied = True
+        # Weather allocation floor: guaranteed minimum bucket
+        if not hasattr(state.risk_config, 'weather_reserved_capital') or state.risk_config.weather_reserved_capital != 15.0:
+            state.risk_config.weather_reserved_capital = 15.0
             upgrade_applied = True
 
         # 1b. Position limits: restrict arb, keep global
-        if state.risk_config.max_arb_positions != 10:
-            state.risk_config.max_arb_positions = 10
+        if state.risk_config.max_arb_positions != 5:
+            state.risk_config.max_arb_positions = 5
             upgrade_applied = True
         if state.risk_config.max_concurrent_positions < 85:
             state.risk_config.max_concurrent_positions = 85
@@ -606,6 +619,8 @@ async def lifespan(app: FastAPI):
         await market_resolver_service.stop()
     if stale_arb_cleanup:
         await stale_arb_cleanup.stop()
+    if shadow_sniper:
+        await shadow_sniper.stop()
     mongo_client.close()
 
 
@@ -3325,6 +3340,40 @@ async def get_ui_snapshot():
     """UI-facing snapshot endpoint — no key required (internal use only).
     Read-only, triggers no trading logic."""
     return _build_state_snapshot()
+
+
+# ---- Shadow Sniper monitoring endpoints ----
+
+@api_router.get("/shadow/report")
+async def get_shadow_report():
+    """Side-by-side comparison of live vs shadow sniper performance."""
+    if not shadow_sniper:
+        return {"status": "disabled", "message": "Shadow sniper not initialized"}
+    return shadow_sniper.get_comparison_report()
+
+
+@api_router.get("/shadow/evaluations")
+async def get_shadow_evaluations(limit: int = 50):
+    """Recent shadow evaluations with live vs shadow decisions."""
+    if not shadow_sniper:
+        return []
+    return shadow_sniper.get_recent_evaluations(limit=min(limit, 200))
+
+
+@api_router.get("/shadow/positions")
+async def get_shadow_positions():
+    """Current open shadow (hypothetical) positions."""
+    if not shadow_sniper:
+        return []
+    return shadow_sniper.get_shadow_positions()
+
+
+@api_router.get("/shadow/closed")
+async def get_shadow_closed(limit: int = 50):
+    """Recently resolved shadow trades with PnL."""
+    if not shadow_sniper:
+        return []
+    return shadow_sniper.get_shadow_closed(limit=min(limit, 200))
 
 
 # ---- Test endpoint (paper order through full pipeline) ----

@@ -137,12 +137,13 @@ class RiskConfig(BaseModel):
     # Per-strategy exposure caps (capital $, not position count)
     crypto_max_exposure: float = 250.0          # primary profit driver, increased from 180
     weather_max_exposure: float = 120.0
-    arb_max_exposure: float = 25.0              # REDUCED from 120 — arb is a capital trap (-4.6% ROI)
-    arb_reserved_capital: float = 25.0          # REDUCED from 120 — free capital for crypto
+    arb_max_exposure: float = 8.0               # minimal sandbox — arb is a capital trap (-4.6% ROI)
+    arb_reserved_capital: float = 8.0           # minimal sandbox — free capital for crypto
+    weather_reserved_capital: float = 15.0      # guaranteed minimum weather allocation floor
     max_concurrent_positions: int = 85          # global safety cap
     max_weather_positions: int = 25             # weather reserved slots
     max_crypto_positions: int = 20              # crypto sniper reserved slots
-    max_arb_positions: int = 10                 # REDUCED from 40 — prevent stale position hoarding
+    max_arb_positions: int = 5                  # minimal sandbox — prevent stale position hoarding
     max_order_size: float = 10.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0

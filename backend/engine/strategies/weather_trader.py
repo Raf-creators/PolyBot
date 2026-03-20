@@ -96,6 +96,7 @@ class WeatherTrader(BaseStrategy):
         # Position lifecycle evaluations: token_id → PositionLifecycleEval
         self._lifecycle_evals: Dict[str, PositionLifecycleEval] = {}
         self._lifecycle_shadow_exits: List[dict] = []  # log of shadow exit decisions
+        self._lifecycle_slot_log_cooldown: Dict[str, float] = {}  # token_id → last_log_ts (dedup)
         # Snapshots of when positions were first flagged as exit candidates
         # token_id → {first_flagged_at, flagged_price, avg_cost, size, reason, market_question}
         self._exit_candidate_snapshots: Dict[str, dict] = {}
@@ -1708,12 +1709,13 @@ class WeatherTrader(BaseStrategy):
                     logger.info(f"[LIFECYCLE-SHADOW] Would exit: {token_id[:12]}.. at {current_price:.4f} — {exit_detail}")
 
                     # Selective auto-exit: always execute market_collapse, profit_capture,
-                    # negative_edge, and time_inefficiency even in shadow_exit mode
+                    # negative_edge, time_inefficiency, and slot_rotation even in shadow_exit mode
                     if exit_reason in (
                         ExitReason.MARKET_COLLAPSE.value,
                         ExitReason.PROFIT_CAPTURE.value,
                         ExitReason.NEGATIVE_EDGE.value,
                         ExitReason.TIME_INEFFICIENCY.value,
+                        ExitReason.SLOT_ROTATION.value,
                     ):
                         # Don't auto-exit asymmetric positions (hold-to-resolution)
                         if strategy_id != "weather_asymmetric":
@@ -1798,12 +1800,17 @@ class WeatherTrader(BaseStrategy):
                 slot_rotation_count += 1
                 candidates += 1
 
-                logger.info(
-                    f"[LIFECYCLE-SLOT] Rotation candidate: {tid[:12]}.. "
-                    f"rank={ev.book_rank}/{total} score={bscore:.3f} "
-                    f"edge={ev.current_edge_bps:.0f}bp profit={ev.profit_multiple:.2f}x "
-                    f"res={h_to_res:.0f}h mode={mode}"
-                )
+                # Dedup logging: only log once per 10 minutes per position
+                now_ts = time.time()
+                last_log = self._lifecycle_slot_log_cooldown.get(tid, 0)
+                if now_ts - last_log >= 600:
+                    self._lifecycle_slot_log_cooldown[tid] = now_ts
+                    logger.info(
+                        f"[LIFECYCLE-SLOT] Rotation candidate: {tid[:12]}.. "
+                        f"rank={ev.book_rank}/{total} score={bscore:.3f} "
+                        f"edge={ev.current_edge_bps:.0f}bp profit={ev.profit_multiple:.2f}x "
+                        f"res={h_to_res:.0f}h mode={mode}"
+                    )
 
                 # Snapshot + shadow exit tracking (reuse existing logic)
                 pos = self._state.positions.get(tid)

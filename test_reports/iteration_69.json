@@ -1,0 +1,151 @@
+{
+  "summary": "Iteration 69: Shadow Sniper + Config Hard-Pin + Arb Reduction COMPLETE. All 26 backend tests passed. Verified: (1) Risk config hard-pinned at startup: arb_max_exposure=8, arb_reserved_capital=8, max_arb_positions=5, max_position_size=25, crypto_max_exposure=250, weather_reserved_capital=15 (NEW), (2) Shadow sniper API endpoints all working: /api/shadow/report (comparison data with live/shadow sections), /api/shadow/evaluations (ev_ratio, stoikov_edge_bps, ev_pass, stoikov_pass fields), /api/shadow/positions (6 hypothetical positions), /api/shadow/closed (empty list initially), (3) Shadow sniper fully isolated from live production - 150 evaluations, 20 shadow-would-trade signals, 0 live fills, (4) SLOT_ROTATION added to selective auto-exit whitelist (line 1718), (5) Dedup logging for slot rotation (10-min cooldown per position, line 1806), (6) Stale arb cleanup: CLEANUP_INTERVAL_HOURS=2, STALE_THRESHOLD_HOURS=24.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_health": [
+      "GET /api/health returns 200 with status=ok - PASS",
+      "GET /api/ returns 200 with app info - PASS"
+    ],
+    "risk_config_hard_pin": [
+      "max_position_size = 25.0 - PASS",
+      "arb_max_exposure = 8.0 (minimal sandbox) - PASS",
+      "arb_reserved_capital = 8.0 (minimal sandbox) - PASS",
+      "max_arb_positions = 5 (minimal sandbox) - PASS",
+      "crypto_max_exposure = 250.0 (unchanged) - PASS",
+      "weather_reserved_capital = 15.0 (NEW allocation floor) - PASS"
+    ],
+    "shadow_sniper_report": [
+      "GET /api/shadow/report returns 200 - PASS",
+      "Report has status field (active) - PASS",
+      "Report has total_evaluations (150) - PASS",
+      "Report has comparison.live and comparison.shadow - PASS",
+      "Report has rolling_pnl - PASS",
+      "Report has config with min_ev_ratio, gamma, inventory_decay - PASS"
+    ],
+    "shadow_sniper_evaluations": [
+      "GET /api/shadow/evaluations returns 200 - PASS",
+      "Returns list of evaluation records - PASS",
+      "Records have: live_decision, shadow_would_trade, ev_ratio, stoikov_edge_bps, ev_pass, stoikov_pass - PASS"
+    ],
+    "shadow_sniper_positions": [
+      "GET /api/shadow/positions returns 200 - PASS",
+      "Returns list of hypothetical positions (6 positions) - PASS"
+    ],
+    "shadow_sniper_closed": [
+      "GET /api/shadow/closed returns 200 - PASS",
+      "Returns list (empty initially as expected) - PASS"
+    ],
+    "shadow_isolation": [
+      "Shadow sniper fully isolated - no live fills produced - PASS"
+    ],
+    "stale_arb_cleanup": [
+      "Backend starts with stale_arb_cleanup service (2h interval, 24h threshold) - PASS",
+      "Diagnostics endpoint accessible - PASS"
+    ],
+    "controls_endpoint": [
+      "GET /api/controls shows exposure_caps with arb=8, arb_reserved=8 - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "risk_config_hard_pin": {
+      "status": "PASS",
+      "description": "All risk config values hard-pinned at startup migration",
+      "evidence": {
+        "max_position_size": 25.0,
+        "arb_max_exposure": 8.0,
+        "arb_reserved_capital": 8.0,
+        "max_arb_positions": 5,
+        "crypto_max_exposure": 250.0,
+        "weather_reserved_capital": 15.0
+      }
+    },
+    "shadow_sniper_layer": {
+      "status": "PASS",
+      "description": "Shadow crypto sniper with EV-gap + pseudo-Stoikov, fully isolated",
+      "evidence": {
+        "total_evaluations": 150,
+        "shadow_would_trade": 20,
+        "live_traded": 0,
+        "open_shadow_positions": 6,
+        "config": {"min_ev_ratio": 0.04, "gamma": 0.1, "inventory_decay": 0.8}
+      }
+    },
+    "slot_rotation_fix": {
+      "status": "PASS",
+      "description": "SLOT_ROTATION added to selective auto-exit whitelist + dedup logging",
+      "evidence": {
+        "whitelist_line": "weather_trader.py:1718",
+        "dedup_cooldown": "600 seconds (10 min per position)",
+        "dedup_line": "weather_trader.py:1806"
+      }
+    },
+    "stale_arb_cleanup": {
+      "status": "PASS",
+      "description": "Stale arb cleanup service with 24h threshold and 2h interval",
+      "evidence": {
+        "cleanup_interval_hours": 2,
+        "stale_threshold_hours": 24,
+        "code_file": "services/stale_arb_cleanup.py"
+      }
+    }
+  },
+
+  "shadow_sniper_live_data": {
+    "report_snapshot": {
+      "status": "active",
+      "total_evaluations": 150,
+      "comparison": {
+        "live": {"trade_count": 0, "skip_count": 150, "avg_edge_bps": 0},
+        "shadow": {"trade_count": 20, "skip_count": 130, "avg_edge_bps": 1672.5, "open_positions": 6}
+      },
+      "agreement_rate": 0.8667
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration69_shadow_sniper.py",
+    "/app/test_reports/pytest/pytest_results_iteration69.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "server.py lines 321-326: Shadow sniper initialized at startup, wired to crypto_sniper._shadow",
+    "server.py lines 349-379: Risk config hard-pin migration applies all new values",
+    "server.py lines 3347-3375: Shadow API endpoints (/shadow/report, /evaluations, /positions, /closed)",
+    "shadow_sniper.py: EV-gap filter (min_ev_ratio=0.04) + Stoikov reservation price adjustment",
+    "weather_trader.py line 1718: SLOT_ROTATION added to selective auto-exit whitelist",
+    "weather_trader.py line 1806: Dedup logging with 600s cooldown per position",
+    "stale_arb_cleanup.py lines 17-18: CLEANUP_INTERVAL_HOURS=2, STALE_THRESHOLD_HOURS=24",
+    "models.py line 142: weather_reserved_capital=15.0 (new field for weather allocation floor)"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration69_shadow_sniper.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (26/26 passed)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live system",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 69 validated shadow sniper layer and config hard-pin changes. Key points: (1) Risk config now has arb_max_exposure=8, arb_reserved_capital=8, max_arb_positions=5 (REDUCED from 25/25/10 in iteration 68), weather_reserved_capital=15 (NEW), (2) Shadow sniper at /api/shadow/* evaluates same markets as live crypto sniper with EV-gap + Stoikov filters but produces NO live fills, (3) SLOT_ROTATION is now in selective auto-exit whitelist alongside MARKET_COLLAPSE, PROFIT_CAPTURE, NEGATIVE_EDGE, TIME_INEFFICIENCY, (4) Stale arb cleanup runs every 2h checking for positions >24h old with negative PnL."
+}

@@ -121,6 +121,7 @@ class RiskEngine:
                 "arb": cfg.arb_max_exposure if cfg else 0,
                 "total": cfg.max_market_exposure if cfg else 0,
                 "arb_reserved": cfg.arb_reserved_capital if cfg else 0,
+                "weather_reserved": getattr(cfg, 'weather_reserved_capital', 0) if cfg else 0,
             },
             "limits": {
                 "max_weather": cfg.max_weather_positions if cfg else 0,
@@ -250,17 +251,30 @@ class RiskEngine:
         # Arb uses reserved capital: arb exposure is checked against arb_reserved_capital above,
         # and does NOT compete with other strategies for the global pool.
         # Non-arb strategies share (max_market_exposure - arb_reserved_capital).
+        # Weather has a guaranteed minimum floor (weather_reserved_capital).
         total_exposure = sum(exposure.values())
 
         if bucket == "arb":
             # Arb only needs to pass its own cap (already checked above) — skip global check
             pass
-        else:
-            # Non-arb: check against global cap minus arb reserved
+        elif bucket == "weather":
+            # Weather: check against global cap minus arb reserved (weather has guaranteed floor)
             non_arb_exposure = total_exposure - exposure.get("arb", 0.0)
             non_arb_cap = cfg.max_market_exposure - cfg.arb_reserved_capital
             if non_arb_exposure + order_value > non_arb_cap:
-                return False, f"non-arb exposure {non_arb_exposure + order_value:.2f} > cap {non_arb_cap:.2f} (global {cfg.max_market_exposure} - arb_reserved {cfg.arb_reserved_capital})"
+                return False, f"non-arb exposure {non_arb_exposure + order_value:.2f} > cap {non_arb_cap:.2f}"
+        else:
+            # Non-arb, non-weather (crypto): check against global cap minus arb and weather reserved
+            non_arb_exposure = total_exposure - exposure.get("arb", 0.0)
+            non_arb_cap = cfg.max_market_exposure - cfg.arb_reserved_capital
+            weather_reserved = getattr(cfg, 'weather_reserved_capital', 0.0)
+            # If weather hasn't used its reserved floor, crypto can't take it
+            weather_current = exposure.get("weather", 0.0)
+            weather_floor_available = max(0.0, weather_reserved - weather_current)
+            effective_cap = non_arb_cap - weather_floor_available
+            non_weather_exposure = non_arb_exposure - weather_current
+            if non_weather_exposure + order_value > effective_cap:
+                return False, f"crypto exposure {non_weather_exposure + order_value:.2f} > cap {effective_cap:.2f} (weather floor ${weather_reserved})"
 
         return True, "approved"
 

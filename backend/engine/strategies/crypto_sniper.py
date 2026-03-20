@@ -382,6 +382,7 @@ class CryptoSniper(BaseStrategy):
         self._execution_engine = None
         self._scan_task: Optional[asyncio.Task] = None
         self._tracker = None  # StrategyTracker (injected at start)
+        self._shadow = None   # ShadowSniperEngine (injected from server.py)
 
         # Classification cache (refreshed every classification_refresh_interval)
         self._classified_cache: Dict[str, CryptoMarketClassification] = {}
@@ -603,6 +604,37 @@ class CryptoSniper(BaseStrategy):
             sig = self._evaluate_signal(cm, vol_cache, mom_cache, now)
             if sig:
                 results.append(sig)
+
+                # Shadow evaluation: feed ALL signals (tradable + rejected) for comparison
+                if self._shadow:
+                    try:
+                        yes_snap = self._state.get_market(cm.yes_token_id)
+                        no_snap = self._state.get_market(cm.no_token_id)
+                        if yes_snap and no_snap:
+                            yp = yes_snap.mid_price or 0
+                            np_ = no_snap.mid_price or 0
+                            fp = sig.fair_price if sig.fair_price > 0 else 0.5
+                            self._shadow.evaluate_signal(
+                                condition_id=cm.condition_id,
+                                asset=cm.asset,
+                                direction=cm.direction,
+                                spot=sig.spot_price,
+                                fair_prob=fp,
+                                yes_price=yp,
+                                no_price=np_,
+                                edge_bps_yes=compute_edge_bps(fp, yp) if yp > 0 else 0,
+                                edge_bps_no=compute_edge_bps(1.0 - fp, np_) if np_ > 0 else 0,
+                                tte_seconds=sig.time_to_expiry_seconds,
+                                volatility=sig.volatility if sig.volatility > 0 else (vol_cache.get(cm.asset) or 0),
+                                live_decision=f"trade_{sig.side.replace('buy_', '')}" if sig.is_tradable else "skip",
+                                live_rejection="" if sig.is_tradable else (sig.rejection_reason or ""),
+                                token_id_yes=cm.yes_token_id,
+                                token_id_no=cm.no_token_id,
+                                question=cm.question,
+                            )
+                    except Exception:
+                        pass  # shadow must never break live
+
             evaluated += 1
 
         self._m["markets_evaluated"] = evaluated

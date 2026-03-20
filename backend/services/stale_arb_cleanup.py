@@ -14,8 +14,8 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-CLEANUP_INTERVAL_HOURS = 4
-STALE_THRESHOLD_HOURS = 48
+CLEANUP_INTERVAL_HOURS = 2
+STALE_THRESHOLD_HOURS = 24
 
 
 class StaleArbCleanupService:
