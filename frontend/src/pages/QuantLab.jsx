@@ -27,11 +27,13 @@ export default function QuantLab() {
   const [mdPositions, setMdPositions] = useState([]);
   const [mdClosed, setMdClosed] = useState([]);
 
-  // Phantom state
+  // Phantom state (one-side + gabagool)
   const [phReport, setPhReport] = useState(null);
   const [phEvals, setPhEvals] = useState([]);
   const [phPositions, setPhPositions] = useState([]);
   const [phClosed, setPhClosed] = useState([]);
+  const [phGabaPos, setPhGabaPos] = useState([]);
+  const [phGabaClosed, setPhGabaClosed] = useState([]);
 
   // Whrrari state (3 modes)
   const [whReport, setWhReport] = useState(null);
@@ -68,12 +70,14 @@ export default function QuantLab() {
         setMdReport(rpt.data); setMdEvals(evals.data);
         setMdPositions(pos.data); setMdClosed(cls.data);
       } else if (activeTab === 'phantom') {
-        const [rpt, evals, pos, cls] = await Promise.all([
+        const [rpt, evals, pos, cls, gPos, gCls] = await Promise.all([
           api.get('/experiments/phantom/report'), api.get('/experiments/phantom/evaluations?limit=100'),
-          api.get('/experiments/phantom/positions'), api.get('/experiments/phantom/closed?limit=50'),
+          api.get('/experiments/phantom/positions?mode=unit'), api.get('/experiments/phantom/closed?mode=unit&limit=50'),
+          api.get('/experiments/phantom/positions?mode=gabagool'), api.get('/experiments/phantom/closed?mode=gabagool&limit=50'),
         ]);
         setPhReport(rpt.data); setPhEvals(evals.data);
         setPhPositions(pos.data); setPhClosed(cls.data);
+        setPhGabaPos(gPos.data); setPhGabaClosed(gCls.data);
       } else if (activeTab === 'whrrari') {
         const [rpt, evals, uP, uC, sP, sC, cP, cC] = await Promise.all([
           api.get('/experiments/whrrari/report'), api.get('/experiments/whrrari/evaluations?limit=100'),
@@ -177,22 +181,11 @@ export default function QuantLab() {
           />
         </TabsContent>
 
-        {/* Phantom Spread (Wave 1) */}
+        {/* Phantom Spread (Wave 1 — One-Side + Gabagool) */}
         <TabsContent value="phantom">
-          <ExperimentTab
-            testId="phantom"
-            title="Phantom Spread"
-            description="Detects YES+NO pricing dislocations in binary pairs. Logs hypothetical trades when spread exceeds threshold."
-            badgeColor="emerald"
-            report={phReport}
-            evaluations={phEvals}
-            positions={phPositions}
-            closed={phClosed}
-            evalCols={phantomEvalCols}
-            posCols={phantomPosCols}
-            closedCols={genericClosedCols}
-            hasDualMode={false}
-          />
+          <PhantomTab report={phReport} evaluations={phEvals}
+            positions={phPositions} closed={phClosed}
+            gabaPositions={phGabaPos} gabaClosed={phGabaClosed} />
         </TabsContent>
 
         {/* Whrrari LMSR (Wave 1 — 3 sizing modes) */}
@@ -295,6 +288,107 @@ function ShadowSniperTab({ report, evaluations, unitPositions, lePositions, unit
         </TabsContent>
         <TabsContent value="evals">
           <DataTable columns={ssEvalCols} data={evaluations} emptyMessage="Waiting for scan cycle" testId="ss-evals-table" />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ---- Phantom Tab (One-Side + Gabagool Both-Sides) ----
+
+function PhantomTab({ report, evaluations, positions, closed, gabaPositions, gabaClosed }) {
+  const metrics = report?.metrics || {};
+  const config = report?.config || {};
+  const unitStats = report?.unit_size || {};
+  const gabaStats = report?.gabagool || {};
+  const sufficient = report?.sample_size_sufficient;
+
+  return (
+    <div className="space-y-4" data-testid="phantom-tab">
+      <ExperimentHeader title="Phantom Spread + Gabagool" badgeColor="emerald"
+        description="Spread dislocation detection (one-side) + Gabagool both-sides structural arbitrage (buy YES+NO when sum < $0.96)."
+        status={report?.status} lastEval={report?.last_scan_time} />
+
+      {sufficient === false && (
+        <div data-testid="phantom-sample-warning" className="flex items-center gap-2 px-3 py-2 border border-amber-500/30 bg-amber-950/15 rounded-lg">
+          <AlertTriangle size={14} className="text-amber-400 shrink-0" />
+          <span className="text-xs text-amber-300">Sample size too small for reliable metrics. Collecting data...</span>
+        </div>
+      )}
+
+      {/* Two mode cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div data-testid="ph-mode-unit" className="border border-emerald-500/25 bg-emerald-950/10 rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span className="text-sm font-semibold text-zinc-100">One-Side Spread</span>
+            </div>
+            <span className="text-[9px] font-mono border border-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">Directional</span>
+          </div>
+          <div className="text-[11px] text-zinc-500">Buy cheaper side when YES+NO spread &gt; {config.min_spread_bps || 80}bps</div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <MiniStat label="PnL" value={formatPnl(unitStats.pnl_total || 0)} pnl />
+            <MiniStat label="Win Rate" value={unitStats.binary_win_rate != null ? formatPercent(unitStats.binary_win_rate * 100, 1) : '--'} />
+            <MiniStat label="Open" value={unitStats.open_positions ?? 0} />
+            <MiniStat label="Closed" value={unitStats.closed_trades ?? 0} />
+            <MiniStat label="PnL/Trade" value={unitStats.pnl_per_trade != null ? formatPnl(unitStats.pnl_per_trade) : '--'} pnl />
+            <MiniStat label="Exposure" value={unitStats.open_exposure != null ? `$${unitStats.open_exposure.toFixed(2)}` : '--'} />
+          </div>
+        </div>
+
+        <div data-testid="ph-mode-gabagool" className="border border-cyan-500/25 bg-cyan-950/10 rounded-lg p-4 space-y-3 ring-1 ring-cyan-500/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="text-sm font-semibold text-zinc-100">Gabagool Both-Sides</span>
+            </div>
+            <span className="text-[9px] font-mono border border-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded">Guaranteed Arb</span>
+          </div>
+          <div className="text-[11px] text-zinc-500">Buy YES + NO when sum &lt; ${config.gabagool_threshold || 0.96} — guaranteed profit at resolution</div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <MiniStat label="PnL" value={formatPnl(gabaStats.pnl_total || 0)} pnl />
+            <MiniStat label="Win Rate" value={gabaStats.binary_win_rate != null ? formatPercent(gabaStats.binary_win_rate * 100, 1) : '--'} />
+            <MiniStat label="Open Pairs" value={gabaStats.open_positions ?? 0} />
+            <MiniStat label="Closed" value={gabaStats.closed_trades ?? 0} />
+            <MiniStat label="PnL/Pair" value={gabaStats.pnl_per_trade != null ? formatPnl(gabaStats.pnl_per_trade) : '--'} pnl />
+            <MiniStat label="Exposure" value={gabaStats.open_exposure != null ? `$${gabaStats.open_exposure.toFixed(2)}` : '--'} />
+          </div>
+        </div>
+      </div>
+
+      {/* Engine Metrics */}
+      <SectionCard title="Engine Metrics" testId="phantom-metrics">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 text-xs">
+          {Object.entries(metrics).filter(([k]) => k !== 'last_scan_time').map(([k, v]) => (
+            <CR key={k} l={k.replace(/_/g, ' ')} v={typeof v === 'number' ? v.toLocaleString() : String(v ?? '--')} />
+          ))}
+        </div>
+      </SectionCard>
+
+      {/* Data tables */}
+      <Tabs defaultValue="gaba-open">
+        <TabsList className="bg-zinc-900 border border-zinc-800 mb-3 flex-wrap h-auto gap-1 p-1">
+          <TabsTrigger value="gaba-open" data-testid="tab-ph-gaba-open">Gabagool Open ({gabaPositions.length})</TabsTrigger>
+          <TabsTrigger value="gaba-closed" data-testid="tab-ph-gaba-closed">Gabagool Closed ({gabaClosed.length})</TabsTrigger>
+          <TabsTrigger value="unit-open" data-testid="tab-ph-unit-open">One-Side Open ({positions.length})</TabsTrigger>
+          <TabsTrigger value="unit-closed" data-testid="tab-ph-unit-closed">One-Side Closed ({closed.length})</TabsTrigger>
+          <TabsTrigger value="evals" data-testid="tab-ph-evals">Evaluations ({evaluations.length})</TabsTrigger>
+        </TabsList>
+        <TabsContent value="gaba-open">
+          <DataTable columns={gabagoolOpenCols} data={gabaPositions} emptyMessage="No Gabagool pairs open" testId="ph-gaba-open-table" />
+        </TabsContent>
+        <TabsContent value="gaba-closed">
+          <DataTable columns={gabagoolClosedCols} data={gabaClosed} emptyMessage="No Gabagool pairs resolved" testId="ph-gaba-closed-table" />
+        </TabsContent>
+        <TabsContent value="unit-open">
+          <DataTable columns={phantomPosCols} data={positions} emptyMessage="No one-side positions" testId="ph-unit-open-table" />
+        </TabsContent>
+        <TabsContent value="unit-closed">
+          <DataTable columns={genericClosedCols} data={closed} emptyMessage="No one-side resolved" testId="ph-unit-closed-table" />
+        </TabsContent>
+        <TabsContent value="evals">
+          <DataTable columns={phantomEvalCols} data={evaluations} emptyMessage="Waiting for scan cycle" testId="ph-evals-table" />
         </TabsContent>
       </Tabs>
     </div>
@@ -729,7 +823,8 @@ const phantomEvalCols = [
   { key: 'no_price', label: 'NO', align: 'right', render: v => <span className="font-mono text-red-400">{formatPrice(v)}</span> },
   { key: 'price_sum', label: 'Sum', align: 'right', render: v => <span className={`font-mono ${Math.abs(1 - (v || 1)) > 0.005 ? 'text-amber-400' : 'text-zinc-400'}`}>{v?.toFixed(4)}</span> },
   { key: 'spread_bps', label: 'Spread', align: 'right', sortable: true, render: v => <span className="font-mono text-emerald-300">{formatBps(v)}</span> },
-  { key: 'trade_type', label: 'Type', render: v => <span className="font-mono text-xs text-zinc-400">{v}</span> },
+  { key: 'gabagool_eligible', label: 'Gaba', render: v => <span className={v ? 'text-cyan-300 font-semibold' : 'text-zinc-600'}>{v ? 'YES' : '--'}</span> },
+  { key: 'gabagool_edge_pct', label: 'Gaba Edge', align: 'right', render: v => <span className={`font-mono ${(v || 0) > 0 ? 'text-cyan-300' : 'text-zinc-600'}`}>{v ? `${v}%` : '--'}</span> },
   { key: 'would_trade', label: 'Signal', render: v => <span className={v ? 'text-emerald-300 font-medium' : 'text-zinc-600'}>{v ? 'TRADE' : 'skip'}</span> },
 ];
 

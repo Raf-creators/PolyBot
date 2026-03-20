@@ -323,6 +323,47 @@ async def lifespan(app: FastAPI):
         _trades_loaded_from_db = 0
         logger.info("[EPOCH-RESET] Epoch 3 started. Paper balance reset to $1000. Positions preserved.")
 
+    # ---- EPOCH 4 RESET: Phase 1 + Phase 2 Clean Baseline ----
+    epoch4_marker = await db.epochs.find_one({"epoch_id": "epoch_4"}, {"_id": 0})
+    if not epoch4_marker:
+        logger.info("[EPOCH-RESET] Starting epoch 4 — archiving epoch 3 data for Phase 1+2 baseline...")
+
+        old_trades = await db.trades.count_documents({})
+        old_orders = await db.orders.count_documents({})
+
+        if old_trades > 0:
+            pipeline = [{"$match": {}}, {"$out": "trades_archive_epoch3"}]
+            await db.trades.aggregate(pipeline).to_list(length=1)
+            await db.trades.delete_many({})
+            logger.info(f"[EPOCH-RESET] Archived {old_trades} trades -> trades_archive_epoch3")
+
+        if old_orders > 0:
+            pipeline = [{"$match": {}}, {"$out": "orders_archive_epoch3"}]
+            await db.orders.aggregate(pipeline).to_list(length=1)
+            await db.orders.delete_many({})
+            logger.info(f"[EPOCH-RESET] Archived {old_orders} orders -> orders_archive_epoch3")
+
+        state.trades.clear()
+        state.orders.clear()
+        state.daily_pnl = 0.0
+        state.total_trades = 0
+        state.win_count = 0
+        state.loss_count = 0
+
+        engine.persistence._last_trade_idx = 0
+        engine.persistence._persisted_orders.clear()
+
+        await db.epochs.insert_one({
+            "epoch_id": "epoch_4",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "starting_balance": 1000.0,
+            "archived_trades": old_trades,
+            "archived_orders": old_orders,
+            "reason": "Phase 1 (dynamic sizing + window caps) + Phase 2 (shadow experiments) baseline",
+        })
+        _trades_loaded_from_db = 0
+        logger.info("[EPOCH-RESET] Epoch 4 started. Paper balance reset to $1000. Dynamic sizing + window caps active.")
+
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)
@@ -3557,17 +3598,17 @@ async def get_phantom_evaluations(limit: int = 50):
 
 
 @api_router.get("/experiments/phantom/positions")
-async def get_phantom_positions():
+async def get_phantom_positions(mode: str = "unit"):
     if not shadow_phantom:
         return []
-    return shadow_phantom.get_positions()
+    return shadow_phantom.get_positions(mode=mode)
 
 
 @api_router.get("/experiments/phantom/closed")
-async def get_phantom_closed(limit: int = 50):
+async def get_phantom_closed(mode: str = "unit", limit: int = 50):
     if not shadow_phantom:
         return []
-    return shadow_phantom.get_closed(limit=min(limit, 200))
+    return shadow_phantom.get_closed(mode=mode, limit=min(limit, 200))
 
 
 # ---- Quant Lab: Whrrari LMSR ----

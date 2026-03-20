@@ -428,6 +428,7 @@ class CryptoSniper(BaseStrategy):
             "completed_executions": 0,
             "last_execution_time": None,
             "position_capped": 0,
+            "dislocation_filtered": 0,
         }
 
     # ---- Lifecycle ----
@@ -688,8 +689,13 @@ class CryptoSniper(BaseStrategy):
     ) -> Optional[SniperSignal]:
         """Evaluate a single classified market. Returns SniperSignal or None."""
 
+        # Window-aware position cap: short windows get smaller max positions
+        window_caps = {"5m": 10, "15m": 18, "1h": 22}
+        effective_cap = window_caps.get(cm.window, self._state.risk_config.max_position_size if self._state else 25.0)
+        base_cap = self._state.risk_config.max_position_size if self._state else 25.0
+        cap = min(effective_cap, base_cap)
+
         # Anti-clustering: skip markets where we already hold a near-cap position
-        cap = self._state.risk_config.max_position_size if self._state else 25.0
         for token_id in (cm.yes_token_id, cm.no_token_id):
             existing = self._state.get_position(token_id) if self._state else None
             if existing and existing.size >= (cap - 1):
@@ -799,6 +805,13 @@ class CryptoSniper(BaseStrategy):
             return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
                                        f"edge {edge_bps:.0f}bps < min {self.config.min_edge_bps}bps")
 
+        # Minimum dislocation filter: skip coin-flip entries near 0.50
+        dislocation = abs(fair - market_price)
+        if dislocation < 0.03:
+            self._m["dislocation_filtered"] += 1
+            return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
+                                       f"dislocation {dislocation:.4f} < 0.03 (too close to coin-flip)")
+
         # Confidence
         vol_quality = len(self._price_history[cm.asset]) / self.config.vol_min_samples
         confidence = compute_signal_confidence(
@@ -826,7 +839,17 @@ class CryptoSniper(BaseStrategy):
                                        "max_concurrent_signals")
 
         # ---- Signal is tradable ----
-        size = min(self.config.default_size, self.config.max_signal_size)
+        # Dynamic sizing: scale with edge magnitude (Kelly-inspired)
+        if edge_bps >= 900:
+            size = 25.0
+        elif edge_bps >= 600:
+            size = 18.0
+        elif edge_bps >= 400:
+            size = 12.0
+        else:
+            size = 5.0
+        # Respect window cap and config ceiling
+        size = min(size, cap, self.config.max_signal_size)
 
         signal = SniperSignal(
             condition_id=cm.condition_id,
