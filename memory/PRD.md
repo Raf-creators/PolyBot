@@ -35,6 +35,11 @@ Multi-strategy automated trading system for Polymarket prediction markets.
     - Epoch marker in MongoDB (idempotent — runs once only)
     - Fixed paperBalance computation: uses `pnlHistory.current_pnl` (survives restarts)
     - Bot continues under same configuration with clean $1,000 baseline
+20. **Anti-Clustering Fix for Crypto Sniper** (Mar 20 2026)
+    - Added position-cap pre-check in `_evaluate_signal()`: skips markets where YES or NO token already at max_position_size - 1
+    - Prevents wasted scan cycles sending doomed orders to risk engine
+    - New `position_capped` metric exposed in `/api/strategies/sniper/health`
+    - Confirmed active: metric incrementing in production
 
 ## Testing Status
 - iteration_68: Forensic Rollback — 18/18
@@ -46,16 +51,23 @@ Multi-strategy automated trading system for Polymarket prediction markets.
 
 ## Backlog
 
+### P0 — Completed
+- Anti-clustering fix for crypto sniper (position_capped pre-check)
+
 ### P1 — Active Monitoring (Epoch 2)
-- Monitor crypto PnL/h recovery under clean baseline
+- Monitor crypto PnL/h recovery under clean baseline with anti-clustering active
 - Compare dual-mode shadow (Unit vs LE) as positions binary-resolve
 - Watch FP/FN metrics populate
+- Arb legacy positions draining naturally (no force-close needed)
+
+### P1 — Proposed (User Approval Needed)
+- Weather asymmetric as shadow-only / telemetry-only (hypothetical signal count + PnL, no live orders)
 
 ### P2 — Planned
 - Promote EV-gap + Stoikov if shadow proves superior
 - Increase crypto_max_exposure once cap-bound proven
 - Weather observations API, Coinbase WebSocket
-- Re-evaluate asymmetric weather
+- Re-evaluate asymmetric weather for live after shadow data collected
 
 ### P3 — Future
 - XRP/SOL, trailing stop-loss, regime detection

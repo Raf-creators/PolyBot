@@ -426,6 +426,7 @@ class CryptoSniper(BaseStrategy):
             "active_executions": 0,
             "completed_executions": 0,
             "last_execution_time": None,
+            "position_capped": 0,
         }
 
     # ---- Lifecycle ----
@@ -654,6 +655,14 @@ class CryptoSniper(BaseStrategy):
         now: float,
     ) -> Optional[SniperSignal]:
         """Evaluate a single classified market. Returns SniperSignal or None."""
+
+        # Anti-clustering: skip markets where we already hold a near-cap position
+        cap = self._state.risk_config.max_position_size if self._state else 25.0
+        for token_id in (cm.yes_token_id, cm.no_token_id):
+            existing = self._state.get_position(token_id) if self._state else None
+            if existing and existing.size >= (cap - 1):
+                self._m["position_capped"] += 1
+                return None  # silent skip — no need to log every scan cycle
 
         # Get spot price
         spot = self._state.spot_prices.get(cm.asset)
