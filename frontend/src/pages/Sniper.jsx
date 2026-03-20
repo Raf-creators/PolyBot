@@ -192,11 +192,12 @@ export default function Sniper() {
 
       {/* Shadow Experiment Summary */}
       {shadowReport?.status === 'active' && (() => {
-        const sc = shadowReport.comparison?.shadow || {};
-        const sizing = shadowReport.sizing || {};
+        const unit = shadowReport.unit_size || {};
+        const le = shadowReport.live_equivalent || {};
+        const comp = shadowReport.comparison || {};
         return (
           <div data-testid="shadow-summary-card" className="border border-dashed border-indigo-500/30 bg-indigo-950/10 rounded-lg px-4 py-3">
-            <div className="flex items-center gap-6 text-xs flex-wrap">
+            <div className="flex items-center gap-5 text-xs flex-wrap">
               <div className="flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
                 <span className="text-indigo-300 font-semibold tracking-wide uppercase text-[10px]">Shadow</span>
@@ -204,36 +205,24 @@ export default function Sniper() {
               <div className="flex items-center gap-1.5">
                 <span className="text-zinc-500">Agreement</span>
                 <span className="font-mono text-indigo-300">
-                  {shadowReport.comparison?.meaningful_agreement_rate != null ? formatPercent(shadowReport.comparison.meaningful_agreement_rate * 100, 1) : '—'}
+                  {comp.meaningful_agreement_rate != null ? formatPercent(comp.meaningful_agreement_rate * 100, 1) : '—'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Would-Trade</span>
-                <span className="font-mono text-indigo-300">{sc.trade_count ?? 0}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Open</span>
-                <span className="font-mono text-indigo-300">{sc.open_positions ?? 0}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Resolved</span>
-                <span className="font-mono text-indigo-300">{sc.closed_trades ?? 0}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Win (binary)</span>
-                <span className="font-mono text-indigo-300">
-                  {sc.binary_win_rate != null ? formatPercent(sc.binary_win_rate * 100, 1) : '—'}
+                <span className="text-amber-400/70 text-[10px]">Unit</span>
+                <span className={`font-mono font-medium ${(unit.pnl_total || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatPnl(unit.pnl_total || 0)}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Unit PnL</span>
-                <span className={`font-mono font-medium ${(sc.pnl_total || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {formatPnl(sc.pnl_total || 0)}
+                <span className="text-cyan-400/70 text-[10px]">LE</span>
+                <span className={`font-mono font-medium ${(le.pnl_total || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatPnl(le.pnl_total || 0)}
                 </span>
+                {le.open_positions > 0 && (
+                  <span className="text-zinc-600 font-mono">({le.open_positions} open, {le.open_total_size} shares)</span>
+                )}
               </div>
-              {sizing.per_signal_size && (
-                <span className="text-[9px] text-amber-500/50 font-mono">${sizing.per_signal_size}/sig</span>
-              )}
               <Link
                 to="/quant-lab"
                 data-testid="shadow-open-lab"

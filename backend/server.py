@@ -3346,7 +3346,7 @@ async def get_ui_snapshot():
 
 @api_router.get("/shadow/report")
 async def get_shadow_report():
-    """Side-by-side comparison of live vs shadow sniper performance."""
+    """Side-by-side comparison: unit-size vs live-equivalent shadow."""
     if not shadow_sniper:
         return {"status": "disabled", "message": "Shadow sniper not initialized"}
     return shadow_sniper.get_comparison_report()
@@ -3361,19 +3361,23 @@ async def get_shadow_evaluations(limit: int = 50):
 
 
 @api_router.get("/shadow/positions")
-async def get_shadow_positions():
-    """Current open shadow (hypothetical) positions."""
+async def get_shadow_positions(mode: str = "unit"):
+    """Shadow open positions. mode=unit or mode=le (live-equivalent)."""
     if not shadow_sniper:
         return []
-    return shadow_sniper.get_shadow_positions()
+    if mode == "le":
+        return shadow_sniper.get_le_positions()
+    return shadow_sniper.get_unit_positions()
 
 
 @api_router.get("/shadow/closed")
-async def get_shadow_closed(limit: int = 50):
-    """Recently resolved shadow trades with PnL."""
+async def get_shadow_closed(limit: int = 50, mode: str = "unit"):
+    """Shadow resolved trades. mode=unit or mode=le (live-equivalent)."""
     if not shadow_sniper:
         return []
-    return shadow_sniper.get_shadow_closed(limit=min(limit, 200))
+    if mode == "le":
+        return shadow_sniper.get_le_closed(limit=min(limit, 200))
+    return shadow_sniper.get_unit_closed(limit=min(limit, 200))
 
 
 # ---- Test endpoint (paper order through full pipeline) ----
