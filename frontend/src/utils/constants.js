@@ -7,6 +7,7 @@ export const NAV_ITEMS = [
   { path: '/arbitrage', label: 'Arbitrage', icon: 'ArrowLeftRight' },
   { path: '/sniper', label: 'Sniper', icon: 'Crosshair' },
   { path: '/weather', label: 'Weather', icon: 'CloudSun' },
+  { path: '/quant-lab', label: 'Quant Lab', icon: 'FlaskConical' },
   { path: '/positions', label: 'Positions', icon: 'Layers' },
   { path: '/analytics', label: 'Analytics', icon: 'TrendingUp' },
   { path: '/global-analytics', label: 'Global Analytics', icon: 'Globe' },

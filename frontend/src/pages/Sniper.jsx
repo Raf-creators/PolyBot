@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useDashboardStore } from '../state/dashboardStore';
 import { useApi } from '../hooks/useApi';
 import { StatCard } from '../components/StatCard';
@@ -6,6 +7,11 @@ import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatBps, formatPrice, formatPnl, formatNumber, formatPercent, formatTimestamp, formatTimeAgo, truncate } from '../utils/formatters';
+import { FlaskConical } from 'lucide-react';
+import axios from 'axios';
+import { API_BASE } from '../utils/constants';
+
+const shadowApi = axios.create({ baseURL: API_BASE });
 
 const SIGNAL_STATUS_COLORS = {
   generated: 'text-blue-400',
@@ -22,6 +28,7 @@ export default function Sniper() {
   const strategyPositions = useDashboardStore((s) => s.strategyPositions);
   const { fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchStrategyPositions } = useApi();
   const [tab, setTab] = useState('positions');
+  const [shadowReport, setShadowReport] = useState(null);
 
   useEffect(() => {
     fetchSniperSignals();
@@ -36,6 +43,20 @@ export default function Sniper() {
     }, 6000);
     return () => clearInterval(interval);
   }, [fetchSniperSignals, fetchSniperExecutions, fetchSniperHealth, fetchStrategyPositions]);
+
+  // Shadow data fetch (separate from main polling)
+  const fetchShadow = useCallback(async () => {
+    try {
+      const { data } = await shadowApi.get('/shadow/report');
+      setShadowReport(data);
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => {
+    fetchShadow();
+    const iv = setInterval(fetchShadow, 10000);
+    return () => clearInterval(iv);
+  }, [fetchShadow]);
 
   const config = health.config || {};
   const buffers = health.price_buffer_sizes || {};
@@ -168,6 +189,53 @@ export default function Sniper() {
           {sniperSummary.win_rate > 0 && <span>WR: <span className="text-zinc-300 font-mono">{sniperSummary.win_rate}%</span></span>}
         </div>
       </div>
+
+      {/* Shadow Experiment Summary */}
+      {shadowReport?.status === 'active' && (() => {
+        const sc = shadowReport.comparison?.shadow || {};
+        return (
+          <div data-testid="shadow-summary-card" className="border border-dashed border-indigo-500/30 bg-indigo-950/10 rounded-lg px-4 py-3">
+            <div className="flex items-center gap-6 text-xs flex-wrap">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                <span className="text-indigo-300 font-semibold tracking-wide uppercase text-[10px]">Shadow</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Agreement</span>
+                <span className="font-mono text-indigo-300">
+                  {shadowReport.comparison?.agreement_rate != null ? formatPercent(shadowReport.comparison.agreement_rate * 100, 1) : '—'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Would-Trade</span>
+                <span className="font-mono text-indigo-300">{sc.trade_count ?? 0}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Open</span>
+                <span className="font-mono text-indigo-300">{sc.open_positions ?? 0}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Closed</span>
+                <span className="font-mono text-indigo-300">{sc.closed_trades ?? 0}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Hyp. PnL</span>
+                <span className={`font-mono font-medium ${(sc.pnl_total || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatPnl(sc.pnl_total || 0)}
+                </span>
+              </div>
+              <Link
+                to="/quant-lab"
+                data-testid="shadow-open-lab"
+                className="ml-auto flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 transition-colors"
+              >
+                <FlaskConical size={12} />
+                <span className="font-medium">Quant Lab</span>
+              </Link>
+            </div>
+          </div>
+        );
+      })()}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-zinc-900 border border-zinc-800">

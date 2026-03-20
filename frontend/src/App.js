@@ -11,6 +11,7 @@ import GlobalAnalytics from "./pages/GlobalAnalytics";
 import Risk from "./pages/Risk";
 import Markets from "./pages/Markets";
 import Settings from "./pages/Settings";
+import QuantLab from "./pages/QuantLab";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
             <Route path="/arbitrage" element={<Arbitrage />} />
             <Route path="/sniper" element={<Sniper />} />
             <Route path="/weather" element={<Weather />} />
+            <Route path="/quant-lab" element={<QuantLab />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/global-analytics" element={<GlobalAnalytics />} />
