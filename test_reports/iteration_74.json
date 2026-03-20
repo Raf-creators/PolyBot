@@ -1,0 +1,155 @@
+{
+  "summary": "Iteration 74: Quant Lab Incubator Testing - ALL TESTS PASS. Wave 1 (MoonDev, Phantom, Whrrari) active experiments working. Wave 2 (Marik, Argona) planned placeholders displayed. 23/23 backend tests pass. Frontend shows all 6 tabs with correct data.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend_api_tests": [
+      "test_registry_returns_all_experiments - PASS: 6 experiments returned",
+      "test_registry_active_experiments - PASS: shadow_sniper, moondev, phantom, whrrari=active; marik, argona=planned",
+      "test_moondev_report - PASS: status=active, metrics present (total_signals_received, window_filtered_out, evaluated, would_trade)",
+      "test_moondev_evaluations - PASS: records with window field (5m/15m)",
+      "test_moondev_positions - PASS: positions with window field",
+      "test_moondev_closed - PASS: endpoint works",
+      "test_phantom_report - PASS: status=active, metrics present (total_scans, pairs_scanned, dislocations_found, hypothetical_trades)",
+      "test_phantom_evaluations - PASS: records with yes_price, no_price, price_sum, spread_bps fields",
+      "test_phantom_positions - PASS: endpoint works",
+      "test_phantom_closed - PASS: endpoint works",
+      "test_whrrari_report - PASS: status=active, metrics present (total_scans, groups_found, groups_evaluated, deviations_found)",
+      "test_whrrari_evaluations - PASS: records with outcome_count, price_sum, best_edge_bps fields",
+      "test_whrrari_positions - PASS: endpoint works",
+      "test_whrrari_closed - PASS: endpoint works",
+      "test_shadow_report - PASS: existing shadow sniper still works",
+      "test_shadow_evaluations - PASS: 46 evaluations",
+      "test_shadow_positions - PASS: 3 unit positions",
+      "test_shadow_closed - PASS: endpoint works",
+      "test_status_endpoint - PASS: mode=paper, system running",
+      "test_pnl_history_baseline - PASS: current_pnl available",
+      "test_health_endpoint - PASS: status=ok",
+      "test_marik_in_registry - PASS: status=planned",
+      "test_argona_in_registry - PASS: status=planned"
+    ],
+    "frontend_ui_tests": [
+      "Quant Lab page loads with data-testid='quant-lab-page' - PASS",
+      "Shadow-only banner displayed - PASS",
+      "All 6 experiment tabs visible - PASS",
+      "EV-Gap + Stoikov tab shows metrics, positions, evaluations - PASS",
+      "MoonDev tab shows metrics (138 signals, 72 evaluated, 12 would_trade), positions with window field - PASS",
+      "Phantom Spread tab shows metrics (3 scans, 524 pairs), sample-size warning - PASS",
+      "Whrrari LMSR tab shows metrics (2 scans, 1 group), sample-size warning - PASS",
+      "Marik Latency tab shows 'PLANNED / INACTIVE / NOT YET RUNNING' placeholder - PASS",
+      "Argona Macro tab shows 'PLANNED / INACTIVE / NOT YET RUNNING' placeholder - PASS"
+    ]
+  },
+  
+  "features_verified": {
+    "experiments_registry": {
+      "status": "PASS",
+      "evidence": {
+        "total_experiments": 6,
+        "active_experiments": ["shadow_sniper", "moondev", "phantom", "whrrari"],
+        "planned_experiments": ["marik", "argona"]
+      }
+    },
+    "moondev_short_window": {
+      "status": "PASS",
+      "evidence": {
+        "total_signals_received": 138,
+        "window_filtered_out": 66,
+        "evaluated": 72,
+        "would_trade": 12,
+        "open_positions": 2,
+        "windows_observed": ["5m", "15m"]
+      }
+    },
+    "phantom_spread": {
+      "status": "PASS",
+      "evidence": {
+        "total_scans": 3,
+        "pairs_scanned": 524,
+        "dislocations_found": 0,
+        "hypothetical_trades": 0,
+        "sample_size_warning": true
+      }
+    },
+    "whrrari_lmsr": {
+      "status": "PASS",
+      "evidence": {
+        "total_scans": 2,
+        "groups_found": 1,
+        "groups_evaluated": 2,
+        "deviations_found": 0,
+        "hypothetical_trades": 0,
+        "sample_size_warning": true
+      }
+    },
+    "existing_shadow_sniper": {
+      "status": "PASS",
+      "evidence": {
+        "status": "active",
+        "total_evaluations": 46,
+        "unit_positions": 3,
+        "le_positions": 3
+      }
+    },
+    "wave2_planned_placeholders": {
+      "status": "PASS",
+      "evidence": {
+        "marik_shows_planned": true,
+        "argona_shows_planned": true,
+        "prerequisites_listed": true
+      }
+    },
+    "epoch3_reset": {
+      "status": "PASS",
+      "evidence": {
+        "system_running": true,
+        "mode": "paper",
+        "health": "ok"
+      }
+    }
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_iteration74_quant_lab_experiments.py",
+    "/app/test_reports/pytest/pytest_results_iteration74.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [
+    "shadow_moondev.py: Clean implementation with ALLOWED_WINDOWS gate for 5m/15m only",
+    "shadow_phantom.py: Proper YES+NO pricing dislocation detection with spread_bps calculation",
+    "shadow_whrrari.py: LMSR-inspired fair-value model with softmax probability distribution",
+    "server.py: All experiment endpoints properly wired (/api/experiments/{id}/report|evaluations|positions|closed)",
+    "QuantLab.jsx: Tab-based UI with proper data-testid attributes for testing",
+    "All shadow engines are 100% in-memory (no MongoDB persistence for shadow positions) - as designed"
+  ],
+  
+  "updated_files": [
+    "/app/backend/tests/test_iteration74_quant_lab_experiments.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (23/23 tests passed)",
+    "frontend": "100% (9/9 UI features verified)"
+  },
+  
+  "test_credentials": "None required",
+  
+  "seed_data_creation": "None - tested with live shadow engine data",
+  
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Iteration 74 validated the Quant Lab incubator feature. Key findings: (1) All 6 experiments appear in registry with correct status (4 active, 2 planned), (2) MoonDev short-window shadow receives signals from crypto_sniper and filters to 5m/15m only (138 signals -> 72 evaluated -> 12 would_trade), (3) Phantom Spread scans binary pairs for YES+NO pricing dislocations (524 pairs scanned, 0 dislocations found yet), (4) Whrrari LMSR evaluates multi-outcome markets with fair-value model (1 group found, 0 deviations yet), (5) Wave 2 experiments (Marik, Argona) show planned placeholder UI with prerequisites, (6) Existing shadow sniper (EV-Gap + Stoikov) continues working with 46 evaluations and 3 positions, (7) All shadow engines are in-memory only - no MongoDB persistence for shadow positions."
+}

@@ -60,6 +60,9 @@ from services.auto_resolver_service import AutoResolverService
 from services.market_resolver_service import MarketResolverService
 from services.stale_arb_cleanup import StaleArbCleanupService
 from engine.strategies.shadow_sniper import ShadowSniperEngine
+from engine.strategies.shadow_moondev import MoonDevShadowEngine
+from engine.strategies.shadow_phantom import PhantomSpreadEngine
+from engine.strategies.shadow_whrrari import WhrrariShadowEngine
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -81,6 +84,9 @@ auto_resolver_service: Optional[AutoResolverService] = None
 market_resolver_service: Optional[MarketResolverService] = None
 stale_arb_cleanup: Optional[StaleArbCleanupService] = None
 shadow_sniper: Optional[ShadowSniperEngine] = None
+shadow_moondev: Optional[MoonDevShadowEngine] = None
+shadow_phantom: Optional[PhantomSpreadEngine] = None
+shadow_whrrari: Optional[WhrrariShadowEngine] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -191,7 +197,7 @@ async def _notify_trade_closed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, shadow_moondev, shadow_phantom, shadow_whrrari, ws_broadcast_task
     global _server_start_time, _git_commit, _build_info, _trades_loaded_from_db
 
     # Diagnostics — capture at boot
@@ -272,6 +278,50 @@ async def lifespan(app: FastAPI):
         })
         _trades_loaded_from_db = 0
         logger.info("[EPOCH-RESET] Epoch 2 started. Paper balance reset to $1000. All systems clean.")
+
+    # ---- EPOCH 3 RESET: Quant Lab Incubator Clean Baseline ----
+    # Archives epoch 2 trade/order data for metrics reset.
+    # Does NOT touch live positions or open orders — display/tracking reset only.
+    epoch3_marker = await db.epochs.find_one({"epoch_id": "epoch_3"}, {"_id": 0})
+    if not epoch3_marker:
+        logger.info("[EPOCH-RESET] Starting epoch 3 — archiving epoch 2 data for Quant Lab baseline...")
+
+        old_trades = await db.trades.count_documents({})
+        old_orders = await db.orders.count_documents({})
+
+        if old_trades > 0:
+            pipeline = [{"$match": {}}, {"$out": "trades_archive_epoch2"}]
+            await db.trades.aggregate(pipeline).to_list(length=1)
+            await db.trades.delete_many({})
+            logger.info(f"[EPOCH-RESET] Archived {old_trades} trades -> trades_archive_epoch2")
+
+        if old_orders > 0:
+            pipeline = [{"$match": {}}, {"$out": "orders_archive_epoch2"}]
+            await db.orders.aggregate(pipeline).to_list(length=1)
+            await db.orders.delete_many({})
+            logger.info(f"[EPOCH-RESET] Archived {old_orders} orders -> orders_archive_epoch2")
+
+        # Reset in-memory tracking counters (display only — positions untouched)
+        state.trades.clear()
+        state.orders.clear()
+        state.daily_pnl = 0.0
+        state.total_trades = 0
+        state.win_count = 0
+        state.loss_count = 0
+
+        engine.persistence._last_trade_idx = 0
+        engine.persistence._persisted_orders.clear()
+
+        await db.epochs.insert_one({
+            "epoch_id": "epoch_3",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "starting_balance": 1000.0,
+            "archived_trades": old_trades,
+            "archived_orders": old_orders,
+            "reason": "Quant Lab incubator launch — clean baseline for shadow experiment monitoring",
+        })
+        _trades_loaded_from_db = 0
+        logger.info("[EPOCH-RESET] Epoch 3 started. Paper balance reset to $1000. Positions preserved.")
 
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
@@ -383,6 +433,21 @@ async def lifespan(app: FastAPI):
     await shadow_sniper.start(state, crypto_sniper_ref)
     crypto_sniper_ref._shadow = shadow_sniper
     logger.info("[STARTUP] Shadow sniper engine initialized (shadow-only, no live execution)")
+
+    # Wave 1 Quant Lab experiments (ALL shadow-only, NO live fills)
+    global shadow_moondev, shadow_phantom, shadow_whrrari
+    shadow_moondev = MoonDevShadowEngine()
+    await shadow_moondev.start(state, crypto_sniper_ref)
+    crypto_sniper_ref._moondev = shadow_moondev
+    logger.info("[STARTUP] MoonDev short-window shadow initialized")
+
+    shadow_phantom = PhantomSpreadEngine()
+    await shadow_phantom.start(state)
+    logger.info("[STARTUP] Phantom Spread shadow initialized")
+
+    shadow_whrrari = WhrrariShadowEngine()
+    await shadow_whrrari.start(state)
+    logger.info("[STARTUP] Whrrari LMSR shadow initialized")
 
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
@@ -680,6 +745,12 @@ async def lifespan(app: FastAPI):
         await stale_arb_cleanup.stop()
     if shadow_sniper:
         await shadow_sniper.stop()
+    if shadow_moondev:
+        await shadow_moondev.stop()
+    if shadow_phantom:
+        await shadow_phantom.stop()
+    if shadow_whrrari:
+        await shadow_whrrari.stop()
     mongo_client.close()
 
 
@@ -3437,6 +3508,136 @@ async def get_shadow_closed(limit: int = 50, mode: str = "unit"):
     if mode == "le":
         return shadow_sniper.get_le_closed(limit=min(limit, 200))
     return shadow_sniper.get_unit_closed(limit=min(limit, 200))
+
+
+# ---- Quant Lab: MoonDev Short Window ----
+
+@api_router.get("/experiments/moondev/report")
+async def get_moondev_report():
+    if not shadow_moondev:
+        return {"status": "disabled"}
+    return shadow_moondev.get_report()
+
+
+@api_router.get("/experiments/moondev/evaluations")
+async def get_moondev_evaluations(limit: int = 50):
+    if not shadow_moondev:
+        return []
+    return shadow_moondev.get_evaluations(limit=min(limit, 200))
+
+
+@api_router.get("/experiments/moondev/positions")
+async def get_moondev_positions(mode: str = "unit"):
+    if not shadow_moondev:
+        return []
+    return shadow_moondev.get_positions(mode=mode)
+
+
+@api_router.get("/experiments/moondev/closed")
+async def get_moondev_closed(mode: str = "unit", limit: int = 50):
+    if not shadow_moondev:
+        return []
+    return shadow_moondev.get_closed(mode=mode, limit=min(limit, 200))
+
+
+# ---- Quant Lab: Phantom Spread ----
+
+@api_router.get("/experiments/phantom/report")
+async def get_phantom_report():
+    if not shadow_phantom:
+        return {"status": "disabled"}
+    return shadow_phantom.get_report()
+
+
+@api_router.get("/experiments/phantom/evaluations")
+async def get_phantom_evaluations(limit: int = 50):
+    if not shadow_phantom:
+        return []
+    return shadow_phantom.get_evaluations(limit=min(limit, 200))
+
+
+@api_router.get("/experiments/phantom/positions")
+async def get_phantom_positions():
+    if not shadow_phantom:
+        return []
+    return shadow_phantom.get_positions()
+
+
+@api_router.get("/experiments/phantom/closed")
+async def get_phantom_closed(limit: int = 50):
+    if not shadow_phantom:
+        return []
+    return shadow_phantom.get_closed(limit=min(limit, 200))
+
+
+# ---- Quant Lab: Whrrari LMSR ----
+
+@api_router.get("/experiments/whrrari/report")
+async def get_whrrari_report():
+    if not shadow_whrrari:
+        return {"status": "disabled"}
+    return shadow_whrrari.get_report()
+
+
+@api_router.get("/experiments/whrrari/evaluations")
+async def get_whrrari_evaluations(limit: int = 50):
+    if not shadow_whrrari:
+        return []
+    return shadow_whrrari.get_evaluations(limit=min(limit, 200))
+
+
+@api_router.get("/experiments/whrrari/positions")
+async def get_whrrari_positions():
+    if not shadow_whrrari:
+        return []
+    return shadow_whrrari.get_positions()
+
+
+@api_router.get("/experiments/whrrari/closed")
+async def get_whrrari_closed(limit: int = 50):
+    if not shadow_whrrari:
+        return []
+    return shadow_whrrari.get_closed(limit=min(limit, 200))
+
+
+# ---- Quant Lab: Master experiment list ----
+
+@api_router.get("/experiments/registry")
+async def get_experiment_registry():
+    """Returns all experiments with their status for the Quant Lab UI."""
+    experiments = []
+
+    # Wave 1: Active
+    if shadow_moondev:
+        r = shadow_moondev.get_report()
+        experiments.append({"id": "moondev", "name": "MoonDev Short Window",
+            "wave": 1, "status": "active", "report": r})
+    if shadow_phantom:
+        r = shadow_phantom.get_report()
+        experiments.append({"id": "phantom", "name": "Phantom Spread",
+            "wave": 1, "status": "active", "report": r})
+    if shadow_whrrari:
+        r = shadow_whrrari.get_report()
+        experiments.append({"id": "whrrari", "name": "Whrrari LMSR",
+            "wave": 1, "status": "active", "report": r})
+
+    # Wave 2: Scaffolded / Inactive
+    experiments.append({"id": "marik", "name": "Marik Latency Execution",
+        "wave": 2, "status": "planned",
+        "description": "Latency-sensitive execution timing analysis. Requires sub-second market data polling.",
+        "report": None})
+    experiments.append({"id": "argona", "name": "Argona Macro Event",
+        "wave": 2, "status": "planned",
+        "description": "Macro economic event-driven strategy. Requires external data feeds (not yet integrated).",
+        "report": None})
+
+    # Include existing shadow sniper
+    if shadow_sniper:
+        r = shadow_sniper.get_comparison_report()
+        experiments.insert(0, {"id": "shadow_sniper", "name": "EV-Gap + Stoikov Shadow",
+            "wave": 0, "status": "active", "report": r})
+
+    return {"experiments": experiments}
 
 
 # ---- Test endpoint (paper order through full pipeline) ----
