@@ -26,7 +26,7 @@ export default function QuantLab() {
       setEvaluations(evals.data);
       setPositions(pos.data);
       setClosed(cls.data);
-    } catch (e) { /* silent */ }
+    } catch { /* silent */ }
   }, []);
 
   useEffect(() => {
@@ -40,11 +40,12 @@ export default function QuantLab() {
   const shadow = comp.shadow || {};
   const rolling = report?.rolling_pnl || {};
   const cfg = report?.config || {};
+  const sizing = report?.sizing || {};
   const totalEvals = report?.total_evaluations || 0;
+  const meaningfulEvals = report?.meaningful_evaluations || 0;
 
-  // Compute PnL/trade
-  const livePnlPerTrade = live.trade_count > 0 ? '—' : '—'; // live PnL not tracked in shadow
   const shadowClosedCount = shadow.closed_trades || 0;
+  const binaryResolved = shadow.binary_resolved_count || 0;
   const shadowPnlPerTrade = shadowClosedCount > 0
     ? formatPnl(shadow.pnl_total / shadowClosedCount)
     : '—';
@@ -58,7 +59,7 @@ export default function QuantLab() {
           <h1 className="text-lg font-semibold text-zinc-100">Quant Lab</h1>
         </div>
         <span className="text-xs text-zinc-600 font-mono">
-          {totalEvals} evaluations | Last: {report?.last_eval_time ? formatTimeAgo(report.last_eval_time) : '—'}
+          {totalEvals} evals ({meaningfulEvals} meaningful) | Last: {report?.last_eval_time ? formatTimeAgo(report.last_eval_time) : '—'}
         </span>
       </div>
 
@@ -67,6 +68,11 @@ export default function QuantLab() {
         <div className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse shrink-0" />
         <span className="text-xs font-semibold text-indigo-300 tracking-wide uppercase">Shadow Only</span>
         <span className="text-xs text-zinc-500">No live execution — all positions and PnL are hypothetical</span>
+        {sizing.type && (
+          <span className="text-[10px] text-amber-500/70 font-mono border border-amber-500/20 rounded px-1.5 py-0.5">
+            Unit-size: ${sizing.per_signal_size}/signal · No accumulation
+          </span>
+        )}
         <div className="ml-auto text-xs text-zinc-600 font-mono">
           {report?.status === 'active' ? 'ACTIVE' : report?.status || '—'}
         </div>
@@ -74,18 +80,18 @@ export default function QuantLab() {
 
       {/* A) Live vs Shadow Summary */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
-        <MetricCard testId="metric-live-trades" label="Live Trades" value={live.trade_count ?? 0} sub="actual fills" />
-        <MetricCard testId="metric-shadow-trades" label="Shadow Trades" value={shadow.trade_count ?? 0} sub="would-trade signals" accent />
-        <MetricCard testId="metric-live-win-rate" label="Live Win Rate" value="—" sub="not tracked here" />
-        <MetricCard testId="metric-shadow-win-rate" label="Shadow Win Rate" value={shadow.win_rate != null ? formatPercent(shadow.win_rate * 100, 1) : '—'} sub={`${shadowClosedCount} resolved`} accent />
-        <MetricCard testId="metric-agreement" label="Agreement Rate"
-          value={comp.agreement_rate != null ? formatPercent(comp.agreement_rate * 100, 1) : '—'}
-          sub={`${totalEvals} evals`} />
+        <MetricCard testId="metric-live-trades" label="Live Signals" value={live.trade_count ?? 0} sub="actual trade signals" />
+        <MetricCard testId="metric-shadow-trades" label="Shadow Signals" value={shadow.trade_count ?? 0} sub="would-trade signals" accent />
+        <MetricCard testId="metric-shadow-win-rate" label="Shadow Win Rate (Binary)" value={shadow.binary_win_rate != null ? formatPercent(shadow.binary_win_rate * 100, 1) : '—'} sub={`${binaryResolved} binary-resolved`} accent />
+        <MetricCard testId="metric-meaningful-agreement" label="Agreement Rate"
+          value={comp.meaningful_agreement_rate != null ? formatPercent(comp.meaningful_agreement_rate * 100, 1) : '—'}
+          sub={`${meaningfulEvals} meaningful evals`} />
+        <MetricCard testId="metric-shadow-overall-win" label="Shadow Win Rate (All)" value={shadow.win_rate != null ? formatPercent(shadow.win_rate * 100, 1) : '—'} sub={`${shadowClosedCount} total closed`} accent />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        <MetricCard testId="metric-shadow-pnl" label="Shadow PnL" value={formatPnl(shadow.pnl_total || 0)} format="pnl" accent />
-        <MetricCard testId="metric-shadow-pnl-trade" label="Shadow PnL/Trade" value={shadowPnlPerTrade} format="pnl" accent />
+        <MetricCard testId="metric-shadow-pnl" label="Shadow PnL (unit-size)" value={formatPnl(shadow.pnl_total || 0)} format="pnl" accent />
+        <MetricCard testId="metric-shadow-pnl-trade" label="PnL/Trade (unit)" value={shadowPnlPerTrade} format="pnl" accent />
         <MetricCard testId="metric-rolling-1h" label="Rolling 1h" value={formatPnl(rolling['1h'] || 0)} format="pnl" accent />
         <MetricCard testId="metric-rolling-3h" label="Rolling 3h" value={formatPnl(rolling['3h'] || 0)} format="pnl" accent />
         <MetricCard testId="metric-rolling-6h" label="Rolling 6h" value={formatPnl(rolling['6h'] || 0)} format="pnl" accent />
@@ -94,19 +100,20 @@ export default function QuantLab() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard testId="metric-open-positions" label="Open Hypothetical" value={shadow.open_positions ?? positions.length} accent />
-        <MetricCard testId="metric-false-pos" label="False Positives" value={comp.false_positives ?? 0} sub="shadow yes, outcome loss" />
-        <MetricCard testId="metric-false-neg" label="False Negatives" value={comp.false_negatives ?? 0} sub="shadow no, live won" />
+        <MetricCard testId="metric-false-pos" label="False Positives" value={comp.false_positives ?? 0} sub="shadow traded, resolved to loss" />
+        <MetricCard testId="metric-false-neg" label="False Negatives" value={comp.false_negatives ?? 0} sub="shadow skipped, live would've won" />
         <MetricCard testId="metric-live-edge" label="Live Avg Edge" value={live.avg_edge_bps != null ? `${live.avg_edge_bps} bps` : '—'} />
       </div>
 
-      {/* B) Shadow Config */}
+      {/* B) Shadow Config + Sizing */}
       <SectionCard title="Shadow Config" testId="section-shadow-config"
         action={<span className="text-[10px] text-indigo-400/60 font-mono uppercase tracking-wider">Experiment Parameters</span>}>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-2 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-x-8 gap-y-2 text-xs">
           <ConfigRow label="EV-Gap Threshold" value={cfg.min_ev_ratio != null ? `${(cfg.min_ev_ratio * 100).toFixed(1)}%` : '—'} />
           <ConfigRow label="Pseudo-Stoikov" value="Enabled" active />
           <ConfigRow label="Gamma (Risk Aversion)" value={cfg.gamma ?? '—'} />
           <ConfigRow label="Inventory Decay" value={cfg.inventory_decay ?? '—'} />
+          <ConfigRow label="Sizing" value={`$${sizing.per_signal_size || '?'}/signal (unit, no accum.)`} />
         </div>
       </SectionCard>
 
@@ -114,7 +121,7 @@ export default function QuantLab() {
       <SectionCard
         title={`Open Hypothetical Positions (${positions.length})`}
         testId="section-shadow-open"
-        action={<span className="text-[10px] text-indigo-400/60 font-mono uppercase tracking-wider">Shadow Only</span>}
+        action={<UnitBadge />}
       >
         <DataTable
           columns={openPosColumns}
@@ -128,12 +135,12 @@ export default function QuantLab() {
       <SectionCard
         title={`Closed Hypothetical Trades (${closed.length})`}
         testId="section-shadow-closed"
-        action={<span className="text-[10px] text-indigo-400/60 font-mono uppercase tracking-wider">Shadow Only</span>}
+        action={<UnitBadge />}
       >
         <DataTable
           columns={closedPosColumns}
           data={closed}
-          emptyMessage="No resolved shadow trades yet — positions resolve after TTE expiry"
+          emptyMessage="No resolved shadow trades yet — waiting for binary outcomes"
           testId="shadow-closed-table"
         />
       </SectionCard>
@@ -156,6 +163,14 @@ export default function QuantLab() {
 }
 
 // ---- Sub-components ----
+
+function UnitBadge() {
+  return (
+    <span className="text-[10px] text-amber-500/70 font-mono border border-amber-500/20 rounded px-1.5 py-0.5">
+      Unit-size research PnL
+    </span>
+  );
+}
 
 function MetricCard({ label, value, sub, format, testId, accent }) {
   let colorClass = accent ? 'text-indigo-300' : 'text-zinc-100';
@@ -187,9 +202,11 @@ function ConfigRow({ label, value, active }) {
 // ---- Table columns ----
 
 const openPosColumns = [
-  { key: 'question', label: 'Market', render: (v) => <span className="text-zinc-300 max-w-[200px] truncate block">{truncate(v, 50)}</span> },
+  { key: 'question', label: 'Market', render: (v) => <span className="text-zinc-300 max-w-[180px] truncate block">{truncate(v, 45)}</span> },
   { key: 'asset', label: 'Asset', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
   { key: 'side', label: 'Side', render: (v) => <span className={v === 'buy_yes' ? 'text-emerald-400' : v === 'buy_no' ? 'text-red-400' : 'text-zinc-500'}>{v}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono text-zinc-300">{v}</span> },
+  { key: 'notional', label: 'Notional', align: 'right', render: (v) => <span className="font-mono text-zinc-400">${typeof v === 'number' ? v.toFixed(2) : '—'}</span> },
   { key: 'entry_price', label: 'Entry', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
   { key: 'current_price', label: 'Mark', align: 'right', render: (v) => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '—'}</span> },
   { key: 'unrealized_pnl', label: 'Unrl PnL', align: 'right', sortable: true, render: (v) => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
@@ -199,12 +216,18 @@ const openPosColumns = [
 ];
 
 const closedPosColumns = [
-  { key: 'question', label: 'Market', render: (v) => <span className="text-zinc-300 max-w-[200px] truncate block">{truncate(v, 50)}</span> },
+  { key: 'question', label: 'Market', render: (v) => <span className="text-zinc-300 max-w-[180px] truncate block">{truncate(v, 45)}</span> },
   { key: 'asset', label: 'Asset', render: (v) => <span className="text-zinc-200 font-medium">{v}</span> },
+  { key: 'side', label: 'Side', render: (v) => <span className={v === 'buy_yes' ? 'text-emerald-400' : v === 'buy_no' ? 'text-red-400' : 'text-zinc-500'}>{v}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: (v) => <span className="font-mono text-zinc-300">{v}</span> },
   { key: 'entry_price', label: 'Entry', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
   { key: 'exit_price', label: 'Exit', align: 'right', render: (v) => <span className="font-mono">{formatPrice(v)}</span> },
   { key: 'pnl', label: 'PnL', align: 'right', sortable: true, render: (v) => <span className={`font-mono font-semibold ${pnlColor(v)}`}>{formatPnl(v)}</span> },
   { key: 'won', label: 'Result', render: (v) => <span className={v ? 'text-emerald-400' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+  { key: 'resolution_type', label: 'Resolution', render: (v) => {
+    const colors = { resolved_yes: 'text-emerald-400', resolved_no: 'text-red-400', expired_mtm: 'text-amber-500', no_data: 'text-zinc-600' };
+    return <span className={`font-mono text-xs ${colors[v] || 'text-zinc-500'}`}>{v || '—'}</span>;
+  }},
   { key: 'closed_at', label: 'Closed', render: (v) => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
 ];
 

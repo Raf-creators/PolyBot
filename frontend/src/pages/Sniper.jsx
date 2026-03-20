@@ -193,6 +193,7 @@ export default function Sniper() {
       {/* Shadow Experiment Summary */}
       {shadowReport?.status === 'active' && (() => {
         const sc = shadowReport.comparison?.shadow || {};
+        const sizing = shadowReport.sizing || {};
         return (
           <div data-testid="shadow-summary-card" className="border border-dashed border-indigo-500/30 bg-indigo-950/10 rounded-lg px-4 py-3">
             <div className="flex items-center gap-6 text-xs flex-wrap">
@@ -203,7 +204,7 @@ export default function Sniper() {
               <div className="flex items-center gap-1.5">
                 <span className="text-zinc-500">Agreement</span>
                 <span className="font-mono text-indigo-300">
-                  {shadowReport.comparison?.agreement_rate != null ? formatPercent(shadowReport.comparison.agreement_rate * 100, 1) : '—'}
+                  {shadowReport.comparison?.meaningful_agreement_rate != null ? formatPercent(shadowReport.comparison.meaningful_agreement_rate * 100, 1) : '—'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
@@ -215,15 +216,24 @@ export default function Sniper() {
                 <span className="font-mono text-indigo-300">{sc.open_positions ?? 0}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Closed</span>
+                <span className="text-zinc-500">Resolved</span>
                 <span className="font-mono text-indigo-300">{sc.closed_trades ?? 0}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-zinc-500">Hyp. PnL</span>
+                <span className="text-zinc-500">Win (binary)</span>
+                <span className="font-mono text-indigo-300">
+                  {sc.binary_win_rate != null ? formatPercent(sc.binary_win_rate * 100, 1) : '—'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-zinc-500">Unit PnL</span>
                 <span className={`font-mono font-medium ${(sc.pnl_total || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                   {formatPnl(sc.pnl_total || 0)}
                 </span>
               </div>
+              {sizing.per_signal_size && (
+                <span className="text-[9px] text-amber-500/50 font-mono">${sizing.per_signal_size}/sig</span>
+              )}
               <Link
                 to="/quant-lab"
                 data-testid="shadow-open-lab"
