@@ -25,7 +25,7 @@ class PhantomSpreadEngine:
         self._running = False
 
         self._min_spread_bps = 80.0
-        self._gabagool_threshold = 0.96   # buy both when sum < this
+        self._gabagool_threshold = 0.985  # buy both when sum < this (matches live executor)
         self._max_stale_seconds = 60.0
         self._scan_interval = 15.0
         self._signal_size = 3.0

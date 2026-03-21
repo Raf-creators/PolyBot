@@ -27,11 +27,11 @@ class GabagoolExecutor:
         self._running = False
 
         # Config
-        self._threshold = 0.96        # buy both sides when sum < this
-        self._max_stale_seconds = 60.0
+        self._threshold = 0.985       # buy both sides when sum < this (break-even ~0.987 after fees)
+        self._max_stale_seconds = 180.0  # relaxed for less-liquid markets
         self._scan_interval = 10.0
         self._size_per_side = 10.0    # $ per side (total = 2x this)
-        self._cooldown_seconds = 300.0
+        self._cooldown_seconds = 120.0  # faster re-entry for guaranteed profit
         self._max_open_pairs = 20     # max simultaneous gabagool pairs
 
         # Tracking
@@ -47,6 +47,12 @@ class GabagoolExecutor:
             "pairs_found": 0,
             "trades_executed": 0,
             "pairs_resolved": 0,
+            "valid_pairs_last_scan": 0,
+            "stale_pairs_last_scan": 0,
+            "above_threshold_last_scan": 0,
+            "risk_rejected": 0,
+            "nearest_sum": 1.0,
+            "nearest_question": "",
         }
 
     def set_execution_context(self, risk_engine, execution_engine):
@@ -101,6 +107,11 @@ class GabagoolExecutor:
             elif "NO" in out or "DOWN" in out:
                 by_condition[cid]["no"] = snap
 
+        valid_pairs = 0
+        stale_pairs = 0
+        above_threshold = 0
+        self._m["nearest_sum"] = 1.0  # reset each scan
+
         for cid, pair in by_condition.items():
             if "yes" not in pair or "no" not in pair:
                 continue
@@ -110,14 +121,22 @@ class GabagoolExecutor:
             if not yp or not np_ or yp <= 0 or np_ <= 0:
                 continue
 
+            valid_pairs += 1
+
             # Staleness check
             y_age = compute_data_age(yes_snap.updated_at)
             n_age = compute_data_age(no_snap.updated_at)
             if max(y_age, n_age) > self._max_stale_seconds:
+                stale_pairs += 1
                 continue
 
             price_sum = yp + np_
             if price_sum >= self._threshold:
+                above_threshold += 1
+                # Track nearest to threshold
+                if price_sum < self._m["nearest_sum"]:
+                    self._m["nearest_sum"] = round(price_sum, 6)
+                    self._m["nearest_question"] = (yes_snap.question or "")[:60]
                 continue
 
             # Found a gabagool pair!
@@ -129,11 +148,6 @@ class GabagoolExecutor:
             if cid in self._cooldown:
                 continue
             if len(self._open_pairs) >= self._max_open_pairs:
-                continue
-
-            # Only trade crypto UpDown markets (not weather/political)
-            q = (yes_snap.question or "").lower()
-            if not any(kw in q for kw in ("btc", "bitcoin", "eth", "ethereum", "up or down")):
                 continue
 
             # Calculate guaranteed edge
@@ -209,7 +223,23 @@ class GabagoolExecutor:
                     reasons.append(f"YES: {yes_reason}")
                 if not no_ok:
                     reasons.append(f"NO: {no_reason}")
+                self._m["risk_rejected"] += 1
                 logger.info(f"[GABAGOOL] Risk rejected: {', '.join(reasons)}")
+
+        # Update debug metrics
+        self._m["valid_pairs_last_scan"] = valid_pairs
+        self._m["stale_pairs_last_scan"] = stale_pairs
+        self._m["above_threshold_last_scan"] = above_threshold
+
+        # Log every 10 scans for visibility
+        if self._m["total_scans"] % 10 == 0:
+            logger.info(
+                f"[GABAGOOL] Scan #{self._m['total_scans']}: "
+                f"valid_pairs={valid_pairs} stale={stale_pairs} "
+                f"above_threshold={above_threshold} "
+                f"found={self._m['pairs_found']} executed={self._m['trades_executed']} "
+                f"open={len(self._open_pairs)}"
+            )
 
     async def _resolution_loop(self):
         """Check if open gabagool pairs have resolved."""
