@@ -180,6 +180,9 @@ class RiskEngine:
         bucket = classify_strategy(order)
 
         # Per-strategy slot check (only for NEW positions)
+        # Gabagool (guaranteed arb) bypasses arb slot limits — legacy arb_scanner
+        # positions can block it otherwise since they share the "arb" bucket.
+        is_gabagool = getattr(order, 'strategy_id', '') == 'gabagool'
         if order.token_id not in self._state.positions:
             counts, _ = self._count_positions()
             total = sum(counts.values())
@@ -192,7 +195,7 @@ class RiskEngine:
             }
 
             bucket_limit = limit_map.get(bucket)
-            if bucket_limit is not None:
+            if bucket_limit is not None and not is_gabagool:
                 current = counts.get(bucket, 0)
                 if current >= bucket_limit:
                     self._slot_blocks[bucket] += 1
@@ -241,7 +244,7 @@ class RiskEngine:
             "arb": cfg.arb_max_exposure,
         }
         strategy_cap = exposure_cap_map.get(bucket)
-        if strategy_cap is not None:
+        if strategy_cap is not None and not is_gabagool:
             current_strategy_exposure = exposure.get(bucket, 0.0)
             if current_strategy_exposure + order_value > strategy_cap:
                 self._slot_blocks[f"{bucket}_exposure"] = self._slot_blocks.get(f"{bucket}_exposure", 0) + 1
