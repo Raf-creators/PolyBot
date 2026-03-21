@@ -759,8 +759,8 @@ class CryptoSniper(BaseStrategy):
                             question=cm.question,
                             is_tradable=True,
                         )
-                    except Exception as exc:
-                        logger.error(f"[SMART-EXIT-DISPATCH] Error: {exc}")
+                    except Exception:
+                        pass  # smart_exit shadow error — non-critical
 
                 # Altcoin Shadow: feed SOL/XRP signals only
                 if self._altcoin and cm.asset in ("SOL", "XRP"):
@@ -808,8 +808,8 @@ class CryptoSniper(BaseStrategy):
                             question=cm.question,
                             window=cm.window,
                         )
-                    except Exception as exc:
-                        logger.error(f"[ADAPTIVE-DISPATCH] Error: {exc}")
+                    except Exception:
+                        pass  # adaptive shadow error — non-critical
 
             evaluated += 1
 
