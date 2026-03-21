@@ -601,6 +601,11 @@ async def lifespan(app: FastAPI):
             crypto_sniper_ref.config.max_tte_seconds = 28800.0
             upgrade_applied = True
 
+        # 5. Crypto: Dynamic Kelly sizing — unlock full tiers ($5/$12/$18/$25)
+        if crypto_sniper_ref and crypto_sniper_ref.config.max_signal_size < 25.0:
+            crypto_sniper_ref.config.max_signal_size = 25.0
+            upgrade_applied = True
+
         if upgrade_applied:
             # Persist the upgraded config
             snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
@@ -1217,6 +1222,20 @@ async def send_telegram_test():
         "<b>[Polymarket Edge OS]</b>\nTelegram integration verified.\nAlerts are now active."
     )
     return {"success": result, "stats": telegram_notifier.stats}
+
+
+@api_router.post("/telegram/trigger-12h-analysis")
+async def trigger_12h_analysis():
+    """Manually trigger the 12-hour deep analysis report via Telegram."""
+    if not telegram_notifier:
+        raise HTTPException(500, "Telegram notifier not initialized")
+    if not telegram_notifier.configured:
+        return {"success": False, "error": "Telegram credentials not configured"}
+    try:
+        await telegram_notifier._send_12h_analysis()
+        return {"success": True, "message": "12h analysis sent to Telegram"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ---- Risk Controls ----

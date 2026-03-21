@@ -96,6 +96,7 @@ class TelegramNotifier:
         self._client = httpx.AsyncClient(timeout=10)
         self._digest_task = None
         self._strategy_refs = {}  # set from server.py: {"weather": ref, "arb": ref, "crypto": ref}
+        self._12h_analysis_task = None
 
         from models import EventType
         bus.on(EventType.ORDER_UPDATE, self._on_order_update)
@@ -108,11 +109,14 @@ class TelegramNotifier:
         self._bihourlly_report_task = asyncio.create_task(self._bihourly_performance_loop())
         self._hourly_streak_task = asyncio.create_task(self._hourly_streak_loop())
 
+        # Start 12-hour deep analysis loop
+        self._12h_analysis_task = asyncio.create_task(self._12h_analysis_loop())
+
         status = "enabled" if self.configured else "disabled (no credentials)"
         logger.info(f"Telegram notifier started [{status}]")
 
     async def stop(self):
-        for task_attr in ['_digest_task', '_upgrade_tracking_task', '_bihourlly_report_task', '_hourly_streak_task']:
+        for task_attr in ['_digest_task', '_upgrade_tracking_task', '_bihourlly_report_task', '_hourly_streak_task', '_12h_analysis_task']:
             task = getattr(self, task_attr, None)
             if task:
                 task.cancel()
@@ -885,4 +889,322 @@ class TelegramNotifier:
 
         self._fire("\n".join(lines))
         logger.info("[TELEGRAM] Hourly streak report sent")
+
+    # ---- 12-HOUR DEEP ANALYSIS ----
+
+    async def _12h_analysis_loop(self):
+        """Send comprehensive trade analysis every 12 hours with learnings and suggestions."""
+        await asyncio.sleep(1800)  # wait 30 min for meaningful data
+        while True:
+            try:
+                await self._send_12h_analysis()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[TELEGRAM] 12h analysis error: {e}")
+            await asyncio.sleep(12 * 3600)  # 12 hours
+
+    async def _send_12h_analysis(self):
+        """Build deep 12-hour analysis with learnings, patterns, and relay-ready suggestions."""
+        if not self.enabled or not self._state:
+            return
+
+        from engine.risk import classify_strategy
+
+        state = self._state
+        now = datetime.now(timezone.utc)
+        ts = now.strftime("%H:%M UTC %b %d")
+        cutoff = now.timestamp() - (12 * 3600)
+
+        # Gather trades from last 12 hours
+        all_trades = []
+        for t in reversed(state.trades):
+            trade_ts = self._extract_timestamp(t)
+            if trade_ts is None:
+                continue
+            if trade_ts < cutoff:
+                break
+            if t.pnl is not None:
+                all_trades.append(t)
+        all_trades.reverse()
+
+        if not all_trades:
+            self._fire(f"<b>12H ANALYSIS</b> {ts}\n\nNo closed trades in the last 12 hours.")
+            return
+
+        # ---- Classify trades ----
+        crypto_trades = [t for t in all_trades if 'sniper' in (t.strategy_id or '') or 'crypto' in (t.strategy_id or '')]
+        arb_trades = [t for t in all_trades if 'arb' in (t.strategy_id or '')]
+        weather_trades = [t for t in all_trades if 'weather' in (t.strategy_id or '')]
+
+        # ---- CRYPTO DEEP DIVE ----
+        crypto_wins = [t for t in crypto_trades if t.pnl > 0]
+        crypto_losses = [t for t in crypto_trades if t.pnl <= 0]
+        total_crypto_pnl = sum(t.pnl for t in crypto_trades)
+
+        # By asset (BTC vs ETH)
+        btc_trades = [t for t in crypto_trades if 'btc' in (t.market_question or '').lower() or 'bitcoin' in (t.market_question or '').lower()]
+        eth_trades = [t for t in crypto_trades if 'eth' in (t.market_question or '').lower() or 'ethereum' in (t.market_question or '').lower()]
+
+        btc_pnl = sum(t.pnl for t in btc_trades)
+        eth_pnl = sum(t.pnl for t in eth_trades)
+        btc_wr = len([t for t in btc_trades if t.pnl > 0]) / max(len(btc_trades), 1) * 100
+        eth_wr = len([t for t in eth_trades if t.pnl > 0]) / max(len(eth_trades), 1) * 100
+
+        # By size tier
+        size_buckets = {"$5 (low)": [], "$12 (med)": [], "$18 (high)": [], "$25 (max)": []}
+        for t in crypto_trades:
+            s = t.size
+            if s <= 6:
+                size_buckets["$5 (low)"].append(t)
+            elif s <= 14:
+                size_buckets["$12 (med)"].append(t)
+            elif s <= 20:
+                size_buckets["$18 (high)"].append(t)
+            else:
+                size_buckets["$25 (max)"].append(t)
+
+        # By window duration (extract from question text)
+        window_buckets = {"5m": [], "15m": [], "1h": [], "4h+": []}
+        for t in crypto_trades:
+            q = (t.market_question or "").lower()
+            w = self._detect_window_from_question(q)
+            window_buckets.setdefault(w, []).append(t)
+
+        # Biggest individual wins and losses
+        top_wins = sorted(crypto_wins, key=lambda t: t.pnl, reverse=True)[:3]
+        top_losses = sorted(crypto_losses, key=lambda t: t.pnl)[:3]
+
+        # ---- COMPUTE INSIGHTS ----
+        insights = []
+        suggestions = []
+
+        # 1. Asset comparison
+        if btc_trades and eth_trades:
+            btc_avg = btc_pnl / len(btc_trades) if btc_trades else 0
+            eth_avg = eth_pnl / len(eth_trades) if eth_trades else 0
+            if abs(btc_avg - eth_avg) > 0.5:
+                better = "BTC" if btc_avg > eth_avg else "ETH"
+                worse = "ETH" if better == "BTC" else "BTC"
+                insights.append(f"{better} outperforming {worse} ({better} avg ${btc_avg if better=='BTC' else eth_avg:+.2f}/trade vs {worse} ${eth_avg if better=='BTC' else btc_avg:+.2f})")
+                if (btc_avg if worse == "BTC" else eth_avg) < -0.5:
+                    suggestions.append(f"Consider reducing {worse} exposure or tightening {worse} min_edge_bps")
+
+        # 2. Window analysis
+        best_window = None
+        worst_window = None
+        best_wr = -1
+        worst_wr = 101
+        for wkey, wtrades in window_buckets.items():
+            if len(wtrades) < 3:
+                continue
+            wr = len([t for t in wtrades if t.pnl > 0]) / len(wtrades) * 100
+            wpnl = sum(t.pnl for t in wtrades)
+            if wr > best_wr:
+                best_wr = wr
+                best_window = (wkey, wr, wpnl, len(wtrades))
+            if wr < worst_wr:
+                worst_wr = wr
+                worst_window = (wkey, wr, wpnl, len(wtrades))
+
+        if best_window:
+            insights.append(f"Best window: {best_window[0]} ({best_window[1]:.0f}% WR, ${best_window[2]:+.2f}, {best_window[3]} trades)")
+        if worst_window and worst_window[0] != (best_window[0] if best_window else ""):
+            insights.append(f"Worst window: {worst_window[0]} ({worst_window[1]:.0f}% WR, ${worst_window[2]:+.2f}, {worst_window[3]} trades)")
+            if worst_window[1] < 35 and worst_window[3] > 5:
+                suggestions.append(f"Window {worst_window[0]} has {worst_window[1]:.0f}% WR over {worst_window[3]} trades — consider disabling or raising min_edge for this window")
+
+        # 3. Size tier analysis
+        for skey, strades in size_buckets.items():
+            if len(strades) < 3:
+                continue
+            spnl = sum(t.pnl for t in strades)
+            swr = len([t for t in strades if t.pnl > 0]) / len(strades) * 100
+            if spnl < -5 and swr < 40:
+                insights.append(f"Sizing tier {skey}: negative (${spnl:+.2f}, {swr:.0f}% WR, {len(strades)} trades)")
+                suggestions.append(f"Size tier {skey} is bleeding — the edge estimates at this level may be unreliable")
+
+        # 4. Overall win rate trend
+        if len(crypto_trades) >= 10:
+            first_half = crypto_trades[:len(crypto_trades)//2]
+            second_half = crypto_trades[len(crypto_trades)//2:]
+            wr1 = len([t for t in first_half if t.pnl > 0]) / len(first_half) * 100
+            wr2 = len([t for t in second_half if t.pnl > 0]) / len(second_half) * 100
+            if wr2 > wr1 + 10:
+                insights.append(f"Win rate IMPROVING: {wr1:.0f}% -> {wr2:.0f}% (first vs second half)")
+            elif wr1 > wr2 + 10:
+                insights.append(f"Win rate DECLINING: {wr1:.0f}% -> {wr2:.0f}% (first vs second half)")
+                suggestions.append("Win rate declining — market regime may have shifted, consider reducing position sizes temporarily")
+
+        # 5. Big loss patterns
+        if top_losses:
+            big_loss_windows = [self._detect_window_from_question((t.market_question or '').lower()) for t in top_losses]
+            big_loss_assets = ['BTC' if 'btc' in (t.market_question or '').lower() or 'bitcoin' in (t.market_question or '').lower() else 'ETH' for t in top_losses]
+            from collections import Counter
+            common_window = Counter(big_loss_windows).most_common(1)
+            common_asset = Counter(big_loss_assets).most_common(1)
+            if common_window and common_window[0][1] >= 2:
+                insights.append(f"Biggest losses cluster in {common_window[0][0]} windows")
+            if common_asset and common_asset[0][1] >= 2:
+                insights.append(f"Biggest losses cluster in {common_asset[0][0]}")
+
+        # 6. Capital efficiency
+        total_deployed = sum(abs(t.size * (t.price or 0)) for t in crypto_trades)
+        if total_deployed > 0:
+            roi_pct = total_crypto_pnl / total_deployed * 100
+            insights.append(f"Capital efficiency: {roi_pct:+.2f}% return on ${total_deployed:.0f} deployed")
+
+        # 7. Profit factor
+        gross_wins = sum(t.pnl for t in crypto_wins) if crypto_wins else 0
+        gross_losses = abs(sum(t.pnl for t in crypto_losses)) if crypto_losses else 0
+        pf = gross_wins / max(gross_losses, 0.01)
+        insights.append(f"Profit factor: {pf:.2f}x ({'>1 is profitable' if pf > 1 else 'LOSING — below 1.0'})")
+
+        if not suggestions:
+            if pf > 1.5:
+                suggestions.append("Strong performance — consider incrementally increasing position sizes or deploying more capital")
+            elif pf > 1.0:
+                suggestions.append("Marginal edge — maintain current sizing, collect more data before changes")
+            else:
+                suggestions.append("Negative edge detected — review model calibration, check if vol estimates are stale")
+
+        # ---- SHADOW COMPARISON ----
+        shadow_lines = []
+        crypto_ref = self._strategy_refs.get("crypto")
+        if crypto_ref:
+            dislocation = crypto_ref._m.get("dislocation_filtered", 0)
+            pos_capped = crypto_ref._m.get("position_capped", 0)
+            shadow_lines = [
+                f"  Dislocation filter: {dislocation} blocked",
+                f"  Position cap: {pos_capped} blocked",
+            ]
+
+        # ---- BUILD MESSAGE (split into 2 messages for Telegram 4096 limit) ----
+        crypto_wr = len(crypto_wins) / max(len(crypto_trades), 1) * 100
+        avg_win = sum(t.pnl for t in crypto_wins) / max(len(crypto_wins), 1) if crypto_wins else 0
+        avg_loss = sum(t.pnl for t in crypto_losses) / max(len(crypto_losses), 1) if crypto_losses else 0
+
+        msg1_lines = [
+            f"<b>12H DEEP ANALYSIS</b> {ts}",
+            "Period: last 12 hours | Epoch 4",
+            "",
+            "<b>=== CRYPTO SNIPER ===</b>",
+            f"Trades: {len(crypto_trades)} ({len(crypto_wins)}W / {len(crypto_losses)}L)",
+            f"Win Rate: {crypto_wr:.1f}%",
+            f"Total PnL: <b>${total_crypto_pnl:+.2f}</b>",
+            f"Avg Win: ${avg_win:+.2f} | Avg Loss: ${avg_loss:+.2f}",
+            f"Profit Factor: {pf:.2f}x",
+            "",
+            "<b>By Asset:</b>",
+            f"  BTC: {len(btc_trades)} trades, ${btc_pnl:+.2f}, {btc_wr:.0f}% WR",
+            f"  ETH: {len(eth_trades)} trades, ${eth_pnl:+.2f}, {eth_wr:.0f}% WR",
+            "",
+            "<b>By Window:</b>",
+        ]
+        for wkey in ["5m", "15m", "1h", "4h+"]:
+            wt = window_buckets.get(wkey, [])
+            if wt:
+                wpnl = sum(t.pnl for t in wt)
+                wwr = len([t for t in wt if t.pnl > 0]) / len(wt) * 100
+                msg1_lines.append(f"  {wkey}: {len(wt)} trades, ${wpnl:+.2f}, {wwr:.0f}% WR")
+
+        msg1_lines += ["", "<b>By Size Tier:</b>"]
+        for skey in ["$5 (low)", "$12 (med)", "$18 (high)", "$25 (max)"]:
+            st = size_buckets.get(skey, [])
+            if st:
+                spnl = sum(t.pnl for t in st)
+                swr = len([t for t in st if t.pnl > 0]) / len(st) * 100
+                msg1_lines.append(f"  {skey}: {len(st)} trades, ${spnl:+.2f}, {swr:.0f}% WR")
+
+        self._fire("\n".join(msg1_lines))
+
+        # Second message: insights + suggestions
+        msg2_lines = [
+            "<b>12H ANALYSIS — INSIGHTS</b>",
+            "",
+        ]
+
+        if top_wins:
+            msg2_lines.append("<b>Top Wins:</b>")
+            for t in top_wins[:3]:
+                q = (t.market_question or '?')[:55]
+                msg2_lines.append(f"  ${t.pnl:+.2f} | {q}")
+            msg2_lines.append("")
+
+        if top_losses:
+            msg2_lines.append("<b>Top Losses:</b>")
+            for t in top_losses[:3]:
+                q = (t.market_question or '?')[:55]
+                msg2_lines.append(f"  ${t.pnl:+.2f} | {q}")
+            msg2_lines.append("")
+
+        msg2_lines.append("<b>LEARNINGS:</b>")
+        for i, insight in enumerate(insights[:8], 1):
+            msg2_lines.append(f"  {i}. {insight}")
+
+        msg2_lines += ["", "<b>SUGGESTIONS (relay to dev):</b>"]
+        for i, sug in enumerate(suggestions[:5], 1):
+            msg2_lines.append(f"  {i}. {sug}")
+
+        if shadow_lines:
+            msg2_lines += ["", "<b>FILTER STATS:</b>"] + shadow_lines
+
+        # ARB + WEATHER summary
+        if arb_trades:
+            arb_pnl = sum(t.pnl for t in arb_trades)
+            msg2_lines += ["", f"<b>ARB:</b> {len(arb_trades)} trades, ${arb_pnl:+.2f}"]
+        if weather_trades:
+            w_pnl = sum(t.pnl for t in weather_trades)
+            msg2_lines += [f"<b>WEATHER:</b> {len(weather_trades)} trades, ${w_pnl:+.2f}"]
+
+        # Balance snapshot
+        balance = 1000.0  # Epoch 4 starting balance
+        for t in state.trades:
+            if t.pnl:
+                balance += t.pnl
+        msg2_lines += [
+            "",
+            f"<b>BALANCE:</b> ${balance:.2f}",
+            "<b>NEXT ANALYSIS:</b> in 12 hours",
+        ]
+
+        self._fire("\n".join(msg2_lines))
+        logger.info("[TELEGRAM] 12h deep analysis sent")
+
+    def _detect_window_from_question(self, q: str) -> str:
+        """Detect time window from market question text."""
+        import re
+        # Look for time range patterns like "7:00PM-7:05PM" (5m), "7:00PM-7:15PM" (15m), etc.
+        time_pat = re.findall(r'(\d{1,2}):(\d{2})(am|pm)\s*-\s*(\d{1,2}):(\d{2})(am|pm)', q.replace(' ', ''))
+        if not time_pat:
+            time_pat = re.findall(r'(\d{1,2}):(\d{2})(am|pm)-(\d{1,2}):(\d{2})(am|pm)', q)
+        if time_pat:
+            m = time_pat[0]
+            h1 = int(m[0]) % 12 + (12 if m[2] == 'pm' else 0)
+            min1 = int(m[1])
+            h2 = int(m[3]) % 12 + (12 if m[5] == 'pm' else 0)
+            min2 = int(m[4])
+            diff_min = (h2 * 60 + min2) - (h1 * 60 + min1)
+            if diff_min < 0:
+                diff_min += 24 * 60
+            if diff_min <= 5:
+                return "5m"
+            elif diff_min <= 15:
+                return "15m"
+            elif diff_min <= 60:
+                return "1h"
+            else:
+                return "4h+"
+        return "4h+"
+
+    def _extract_timestamp(self, trade) -> Optional[float]:
+        """Extract unix timestamp from a trade object."""
+        for attr in ('closed_at', 'timestamp', 'created_at'):
+            val = getattr(trade, attr, None)
+            if val:
+                try:
+                    return datetime.fromisoformat(str(val).replace('Z', '+00:00')).timestamp()
+                except (ValueError, TypeError):
+                    pass
+        return None
 

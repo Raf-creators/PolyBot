@@ -36,9 +36,9 @@ class SniperConfig(BaseModel):
     momentum_lookback_seconds: float = 300.0
     momentum_weight: float = 0.05
 
-    # Sizing
+    # Sizing (dynamic Kelly tiers: $5/$12/$18/$25 by edge)
     default_size: float = 3.0
-    max_signal_size: float = 8.0
+    max_signal_size: float = 25.0
     max_concurrent_signals: int = 5
     cooldown_seconds: float = 60.0
 
