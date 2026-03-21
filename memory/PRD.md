@@ -3,10 +3,10 @@
 ## Original Problem Statement
 Multi-strategy automated trading system for Polymarket prediction markets.
 
-## Current Epoch: EPOCH 3
-- **Started**: 2026-03-20 ~19:34 UTC
+## Current Epoch: EPOCH 4
+- **Started**: 2026-03-20 ~23:42 UTC
 - **Starting Balance**: $1,000.00
-- **Previous Epochs**: Epoch 1 archived (7,444 trades), Epoch 2 archived (405 trades, 307 orders)
+- **Previous Epochs**: Epoch 1 (7,444 trades), Epoch 2 (405 trades), Epoch 3 (archived for Phase 1+2 baseline)
 
 ## Core Architecture
 - **Backend**: FastAPI + MongoDB, engine state, strategies, risk, positions
@@ -14,11 +14,10 @@ Multi-strategy automated trading system for Polymarket prediction markets.
 - **External Data**: Binance WS, Open-Meteo, Polymarket Gamma + CLOB WS
 - **Notifications**: Telegram
 
-## Live Configuration (Unchanged)
-- max_position_size: 25, crypto_max_exposure: $250
-- arb_max_exposure: $8, weather_reserved_capital: $15
-- Crypto sniper: max_tte=8h, min_edge=200bps, anti-clustering active
-- Weather: min_edge=350bps, asymmetric=off, lifecycle=shadow_exit
+## Live Strategies
+- **Crypto Sniper**: Dynamic Kelly-inspired sizing ($5/$8/$12/$18/$25 tiers by edge, capped by max_signal_size=8 per order), window-aware caps (5m=10, 15m=18, 1h=22), dislocation filter (< 3% = coin-flip rejection), anti-clustering
+- **Arb Scanner**: Multi-outcome structural arbitrage
+- **Weather Trader**: Temperature prediction markets
 
 ## Shadow Systems (ALL Shadow-Only)
 
@@ -27,14 +26,12 @@ Multi-strategy automated trading system for Polymarket prediction markets.
 - API: /api/shadow/*
 
 ### Wave 1: Active Experiments
-1. **MoonDev Short Window** — 5m/15m crypto shadow, dual-mode
-   - API: /api/experiments/moondev/*
-2. **Phantom Spread** — YES+NO dislocation scanner, unit-size
-   - API: /api/experiments/phantom/*
-3. **Whrrari Fair-Value / LMSR** — Multi-outcome fair-value model, **3 sizing modes**
-   - **Unit-Size**: Flat $3/signal, normalized research comparison
-   - **Sandbox Notional**: Edge-tiered bands ($3 at 300-599bps, $8 at 600-899bps, $15 at 900+bps) — PRIMARY PROMOTION METRIC
-   - **Crypto-Mirrored**: $3/signal accumulating to $25 cap — STRESS TEST ONLY
+1. **MoonDev Short Window** — 5m/15m crypto shadow, dual-mode (API: /api/experiments/moondev/*)
+2. **Phantom Spread** — YES+NO dislocation + **Gabagool both-sides** structural arb (buy YES+NO when sum < $0.96)
+   - One-Side: Directional dislocation
+   - Gabagool: Guaranteed structural arb — 100% win rate on 4 closed pairs
+   - API: /api/experiments/phantom/* (positions/closed accept ?mode=unit|gabagool)
+3. **Whrrari Fair-Value / LMSR** — Multi-outcome model, 3 sizing modes (unit/sandbox/crypto)
    - API: /api/experiments/whrrari/* (positions/closed accept ?mode=unit|sandbox|crypto)
 
 ### Wave 2: Scaffolded / Planned
@@ -44,29 +41,31 @@ Multi-strategy automated trading system for Polymarket prediction markets.
 ### Master Registry: GET /api/experiments/registry
 
 ## What Has Been Implemented
-1-20. (See CHANGELOG)
-21. Quant Lab Incubator — Wave 1 + Wave 2 Scaffold (Mar 20)
-22. **Whrrari 3 Sizing Modes** (Mar 20)
-    - Unit-Size (normalized), Sandbox Notional (edge-tiered $3/$8/$15), Crypto-Mirrored (stress test)
-    - Sandbox Notional designated as primary promotion metric
-    - 7 data sub-tabs in UI (per-mode open/closed + evaluations)
+1-22. (See previous PRD entries)
+23. **Phase 1: Dynamic Sizing** (Mar 20) — Kelly-inspired tiers, window caps, dislocation filter
+24. **Phase 2: Phantom Gabagool** (Mar 20) — Both-sides structural arb mode in Phantom
+25. **Epoch 4 Reset** (Mar 20) — Clean $1000 baseline for Phase 1+2 evaluation
+26. **Gabagool UI Fix** (Mar 21) — Added missing gabagoolOpenCols/gabagoolClosedCols in QuantLab.jsx
 
 ## Testing Status
 - iteration_74: Quant Lab Incubator — 32/32
-- iteration_75: Whrrari 3 Sizing Modes — 30/30 (16 backend + 14 frontend)
+- iteration_75: Whrrari 3 Sizing Modes — 30/30
+- iteration_76: Sanity Check Audit — 50/50 (33 backend + 17 frontend)
 
 ## Backlog
 
 ### P1 — Active Monitoring
-- Watch MoonDev vs live divergence, Phantom detection rate, Whrrari group coverage
-- Compare Sandbox Notional performance as primary evaluation metric
+- Watch dynamic sizing performance vs flat sizing
+- Gabagool structural arb: track resolution times and edge persistence
+- Shadow Sniper LE outperforming live (+$24 vs negative) — investigate divergence
 
-### P1 — Proposed
-- Weather asymmetric as shadow-only telemetry
+### P1 — Upcoming
+- Activate Marik Latency Execution
+- Activate Argona Macro Event
 
-### P2 — Planned
-- Wave 2 activation (Marik, Argona)
-- Promote best shadow if data supports
+### P2 — Config Tuning
+- Consider increasing max_signal_size from 8 to allow upper dynamic tiers to activate
+- Window detection only works for slug-format markets; question-text markets default to global cap
 
 ### P3 — Future
 - XRP/SOL, trailing stop-loss, regime detection, resolution timeline, copy trading
