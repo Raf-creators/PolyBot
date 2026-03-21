@@ -137,13 +137,13 @@ class RiskConfig(BaseModel):
     # Per-strategy exposure caps (capital $, not position count)
     crypto_max_exposure: float = 250.0          # primary profit driver, increased from 180
     weather_max_exposure: float = 120.0
-    arb_max_exposure: float = 60.0               # increased for Gabagool live arb
-    arb_reserved_capital: float = 60.0           # Gabagool + traditional arb capital
+    arb_max_exposure: float = 250.0              # Gabagool live arb — guaranteed profit, max out
+    arb_reserved_capital: float = 250.0          # Gabagool + traditional arb capital
     weather_reserved_capital: float = 30.0      # doubled weather floor for higher sizing
     max_concurrent_positions: int = 85          # global safety cap
     max_weather_positions: int = 25             # weather reserved slots
     max_crypto_positions: int = 20              # crypto sniper reserved slots
-    max_arb_positions: int = 15                 # increased for Gabagool pairs (each pair = 2 positions)
+    max_arb_positions: int = 45                 # Gabagool pairs (each pair = 2 positions) + traditional arb
     max_order_size: float = 25.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0

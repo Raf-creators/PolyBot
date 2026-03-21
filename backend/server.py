@@ -665,15 +665,15 @@ async def lifespan(app: FastAPI):
             crypto_sniper_ref.config.min_edge_bps = 400.0
             upgrade_applied = True
 
-        # 8. Arb: Gabagool needs capital — increase arb exposure for live structural arb
-        if state.risk_config.arb_max_exposure < 60.0:
-            state.risk_config.arb_max_exposure = 60.0
+        # 8. Arb: Gabagool needs capital — guaranteed profit, max out slots
+        if state.risk_config.arb_max_exposure < 250.0:
+            state.risk_config.arb_max_exposure = 250.0
             upgrade_applied = True
-        if state.risk_config.arb_reserved_capital < 60.0:
-            state.risk_config.arb_reserved_capital = 60.0
+        if state.risk_config.arb_reserved_capital < 250.0:
+            state.risk_config.arb_reserved_capital = 250.0
             upgrade_applied = True
-        if state.risk_config.max_arb_positions < 15:
-            state.risk_config.max_arb_positions = 15
+        if state.risk_config.max_arb_positions < 45:
+            state.risk_config.max_arb_positions = 45
             upgrade_applied = True
 
         # 9. Weather push: increase sizing from $5 to $8 (100% WR, PF=6.47 proven)

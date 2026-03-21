@@ -32,7 +32,7 @@ class GabagoolExecutor:
         self._scan_interval = 10.0
         self._size_per_side = 10.0    # $ per side (total = 2x this)
         self._cooldown_seconds = 300.0
-        self._max_open_pairs = 6      # max simultaneous gabagool pairs
+        self._max_open_pairs = 20     # max simultaneous gabagool pairs
 
         # Tracking
         self._open_pairs: Dict[str, dict] = {}   # condition_id -> pair info
@@ -260,12 +260,22 @@ class GabagoolExecutor:
             del self._open_pairs[cid]
 
     def _calculate_pair_pnl(self, pair_info):
-        """Calculate PnL for a resolved gabagool pair from trade history."""
+        """Calculate PnL for a resolved gabagool pair, including realistic Polymarket fees.
+        Trading fee: 0.2% per leg (already charged by paper adapter on fills).
+        Resolution fee: 2% on winning side profit (Polymarket's actual fee).
+        """
         size = pair_info["size"]
         pair_cost = pair_info["pair_cost"]
-        # Guaranteed: one side resolves to $1, other to $0
-        # PnL = size * (1.0 - pair_cost) = guaranteed profit
-        return round(size * (1.0 - pair_cost), 4)
+        yes_entry = pair_info["yes_entry"]
+        no_entry = pair_info["no_entry"]
+        gross_profit = size * (1.0 - pair_cost)
+        # Resolution fee: 2% on the winning side's profit (worst case = cheaper side wins more)
+        # Winning side profit = size * (1.0 - cheaper_entry)
+        cheaper = min(yes_entry, no_entry)
+        winning_side_profit = size * (1.0 - cheaper)
+        resolution_fee = winning_side_profit * 0.02
+        net_profit = gross_profit - resolution_fee
+        return round(net_profit, 4)
 
     def get_report(self) -> dict:
         total_closed = self._wins + self._losses
