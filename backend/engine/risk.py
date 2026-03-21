@@ -28,7 +28,7 @@ def classify_strategy(pos_or_order) -> str:
     q = (getattr(pos_or_order, "market_question", "") or "").lower()
     if any(kw in q for kw in WEATHER_KEYWORDS):
         return "weather"
-    if any(kw in q for kw in ("btc", "bitcoin", "eth", "ethereum", "up or down")):
+    if any(kw in q for kw in ("btc", "bitcoin", "eth", "ethereum", "sol", "solana", "xrp", "ripple", "up or down")):
         return "crypto"
     return "unknown"
 

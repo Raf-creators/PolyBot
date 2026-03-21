@@ -5,7 +5,7 @@ import { SectionCard } from '../components/SectionCard';
 import { DataTable } from '../components/DataTable';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { formatPnl, formatPrice, formatBps, formatTimestamp, formatTimeAgo, pnlColor, truncate, formatPercent } from '../utils/formatters';
-import { FlaskConical, Zap, Ghost, BarChart3, Clock, Globe, AlertTriangle } from 'lucide-react';
+import { FlaskConical, Zap, Ghost, BarChart3, Clock, Globe, AlertTriangle, TrendingUp, Coins, Activity } from 'lucide-react';
 
 const api = axios.create({ baseURL: API_BASE });
 
@@ -44,6 +44,21 @@ export default function QuantLab() {
   const [whSandboxClosed, setWhSandboxClosed] = useState([]);
   const [whCryptoPos, setWhCryptoPos] = useState([]);
   const [whCryptoClosed, setWhCryptoClosed] = useState([]);
+
+  // Smart Exit shadow
+  const [seReport, setSeReport] = useState(null);
+  const [sePositions, setSePositions] = useState([]);
+  const [seClosed, setSeClosed] = useState([]);
+
+  // Altcoin shadow
+  const [altReport, setAltReport] = useState(null);
+  const [altPositions, setAltPositions] = useState([]);
+  const [altClosed, setAltClosed] = useState([]);
+
+  // Adaptive Edge shadow
+  const [aeReport, setAeReport] = useState(null);
+  const [aePositions, setAePositions] = useState([]);
+  const [aeClosed, setAeClosed] = useState([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -89,6 +104,27 @@ export default function QuantLab() {
         setWhUnitPos(uP.data); setWhUnitClosed(uC.data);
         setWhSandboxPos(sP.data); setWhSandboxClosed(sC.data);
         setWhCryptoPos(cP.data); setWhCryptoClosed(cC.data);
+      } else if (activeTab === 'smart_exit') {
+        const [rpt, pos, cls] = await Promise.all([
+          api.get('/experiments/smart_exit/report'),
+          api.get('/experiments/smart_exit/positions'),
+          api.get('/experiments/smart_exit/closed?limit=50'),
+        ]);
+        setSeReport(rpt.data); setSePositions(pos.data); setSeClosed(cls.data);
+      } else if (activeTab === 'altcoin') {
+        const [rpt, pos, cls] = await Promise.all([
+          api.get('/experiments/altcoin/report'),
+          api.get('/experiments/altcoin/positions'),
+          api.get('/experiments/altcoin/closed?limit=50'),
+        ]);
+        setAltReport(rpt.data); setAltPositions(pos.data); setAltClosed(cls.data);
+      } else if (activeTab === 'adaptive') {
+        const [rpt, pos, cls] = await Promise.all([
+          api.get('/experiments/adaptive/report'),
+          api.get('/experiments/adaptive/positions'),
+          api.get('/experiments/adaptive/closed?limit=50'),
+        ]);
+        setAeReport(rpt.data); setAePositions(pos.data); setAeClosed(cls.data);
       }
     } catch { /* silent */ }
   }, [activeTab]);
@@ -104,8 +140,11 @@ export default function QuantLab() {
     { id: 'moondev', label: 'MoonDev 5m/15m', icon: Zap, wave: 1, color: 'violet' },
     { id: 'phantom', label: 'Phantom Spread', icon: Ghost, wave: 1, color: 'emerald' },
     { id: 'whrrari', label: 'Whrrari LMSR', icon: BarChart3, wave: 1, color: 'amber' },
-    { id: 'marik', label: 'Marik Latency', icon: Clock, wave: 2, color: 'zinc' },
-    { id: 'argona', label: 'Argona Macro', icon: Globe, wave: 2, color: 'zinc' },
+    { id: 'smart_exit', label: 'Smart Exit', icon: TrendingUp, wave: 2, color: 'cyan' },
+    { id: 'altcoin', label: 'SOL/XRP Sniper', icon: Coins, wave: 2, color: 'orange' },
+    { id: 'adaptive', label: 'Adaptive Edge', icon: Activity, wave: 2, color: 'rose' },
+    { id: 'marik', label: 'Marik Latency', icon: Clock, wave: 3, color: 'zinc' },
+    { id: 'argona', label: 'Argona Macro', icon: Globe, wave: 3, color: 'zinc' },
   ];
 
   const getExpStatus = (id) => {
@@ -196,16 +235,31 @@ export default function QuantLab() {
             cryptoPositions={whCryptoPos} cryptoClosed={whCryptoClosed} />
         </TabsContent>
 
-        {/* Marik (Wave 2 — Planned) */}
+        {/* Smart Exit (Wave 2 — Active) */}
+        <TabsContent value="smart_exit">
+          <SmartExitTab report={seReport} positions={sePositions} closed={seClosed} />
+        </TabsContent>
+
+        {/* Altcoin SOL/XRP (Wave 2 — Active) */}
+        <TabsContent value="altcoin">
+          <AltcoinTab report={altReport} positions={altPositions} closed={altClosed} />
+        </TabsContent>
+
+        {/* Adaptive Edge + Dynamic Gabagool (Wave 2 — Active) */}
+        <TabsContent value="adaptive">
+          <AdaptiveEdgeTab report={aeReport} positions={aePositions} closed={aeClosed} />
+        </TabsContent>
+
+        {/* Marik (Wave 3 — Planned) */}
         <TabsContent value="marik">
-          <PlannedExperiment name="Marik Latency Execution" wave={2}
+          <PlannedExperiment name="Marik Latency Execution" wave={3}
             description="Latency-sensitive execution timing analysis. Evaluates whether sub-second order timing can capture spread edges before they close. Requires 2-second WebSocket polling infrastructure (not yet built)."
             prerequisites={['Sub-second market data polling', 'Execution timing model', 'Fill latency benchmarking']} />
         </TabsContent>
 
-        {/* Argona (Wave 2 — Planned) */}
+        {/* Argona (Wave 3 — Planned) */}
         <TabsContent value="argona">
-          <PlannedExperiment name="Argona Macro Event" wave={2}
+          <PlannedExperiment name="Argona Macro Event" wave={3}
             description="Macro economic event-driven strategy. Detects scheduled events (CPI, FOMC, earnings) and evaluates prediction market pricing dislocations around announcement windows. Requires external event calendar API."
             prerequisites={['External macro event calendar API', 'Event impact model', 'Pre/post-announcement spread analysis']} />
         </TabsContent>
@@ -939,4 +993,208 @@ const genericClosedCols = [
 function ResType({ v }) {
   const c = { resolved_yes: 'text-emerald-400', resolved_no: 'text-red-400', expired_mtm: 'text-amber-500', no_data: 'text-zinc-600' };
   return <span className={`font-mono text-xs ${c[v] || 'text-zinc-500'}`}>{v || '--'}</span>;
+}
+
+
+// ---- Smart Exit (Trailing Stop) Tab ----
+function SmartExitTab({ report, positions, closed }) {
+  const r = report || {};
+  const trailing = r.trailing || {};
+  const hold = r.hold_comparison || {};
+  const cfg = r.config || {};
+  const m = r.metrics || {};
+
+  const sePosCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 40)}</span> },
+    { key: 'asset', label: 'Asset', render: v => <span className="font-mono text-cyan-300">{v}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono">{v}</span> },
+    { key: 'entry_price', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+    { key: 'current_multiple', label: 'Multiple', align: 'right', render: v => <span className={`font-mono font-medium ${v >= 1.5 ? 'text-cyan-300' : v >= 1 ? 'text-zinc-300' : 'text-red-400'}`}>{v?.toFixed(2)}x</span> },
+    { key: 'peak_multiple', label: 'Peak', align: 'right', render: v => <span className="font-mono text-amber-300">{v?.toFixed(2)}x</span> },
+    { key: 'trailing_active', label: 'Trailing', render: v => v ? <span className="text-cyan-400 font-semibold">ACTIVE</span> : <span className="text-zinc-600">--</span> },
+    { key: 'unrealized_pnl', label: 'PnL', align: 'right', render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  ];
+
+  const seClosedCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 35)}</span> },
+    { key: 'asset', label: 'Asset', render: v => <span className="font-mono text-cyan-300">{v}</span> },
+    { key: 'exit_reason', label: 'Exit', render: v => <span className={`font-mono text-xs ${v === 'trailing_stop' ? 'text-cyan-400' : v === 'resolution' ? 'text-emerald-400' : 'text-amber-400'}`}>{v}</span> },
+    { key: 'peak_multiple', label: 'Peak', align: 'right', render: v => <span className="font-mono text-amber-300">{v?.toFixed(2)}x</span> },
+    { key: 'exit_multiple', label: 'Exit @', align: 'right', render: v => <span className="font-mono">{v?.toFixed(2)}x</span> },
+    { key: 'pnl', label: 'PnL', align: 'right', render: v => <span className={`font-mono font-semibold ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+    { key: 'won', label: '', render: v => <span className={v ? 'text-emerald-400' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+  ];
+
+  return (
+    <div className="space-y-4" data-testid="smart-exit-tab">
+      <SectionCard title="Smart Exit Shadow — Trailing Profit Capture">
+        <p className="text-xs text-zinc-500 mb-3">Mirrors live sniper signals but exits via trailing stop at 75% of peak after 1.5x activation. Compares vs hold-to-resolution.</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <MetricBox label="Trailing PnL" value={formatPnl(trailing.pnl)} color={pnlColor(trailing.pnl)} />
+          <MetricBox label="Hold PnL" value={formatPnl(hold.pnl)} color={pnlColor(hold.pnl)} />
+          <MetricBox label="Trailing WR" value={formatPercent((trailing.win_rate || 0) * 100)} color="text-cyan-300" />
+          <MetricBox label="Hold WR" value={formatPercent((hold.win_rate || 0) * 100)} color="text-zinc-300" />
+        </div>
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+          <MiniStat label="Trailing Exits" value={trailing.trailing_exits || 0} />
+          <MiniStat label="Resolution Exits" value={trailing.resolution_exits || 0} />
+          <MiniStat label="Open" value={trailing.open_positions || 0} />
+          <MiniStat label="Avg Peak @ Exit" value={`${(m.peak_captures?.length ? (m.peak_captures.reduce((a,b)=>a+b,0)/m.peak_captures.length).toFixed(2) : '0')}x`} />
+          <MiniStat label="Signals" value={m.signals_received || 0} />
+          <MiniStat label="Activation" value={`${cfg.trailing_activation || 1.5}x`} />
+        </div>
+      </SectionCard>
+      {positions?.length > 0 && <SectionCard title={`Open (${positions.length})`}><DataTable columns={sePosCols} data={positions} /></SectionCard>}
+      {closed?.length > 0 && <SectionCard title={`Closed (${closed.length})`}><DataTable columns={seClosedCols} data={closed} /></SectionCard>}
+    </div>
+  );
+}
+
+
+// ---- Altcoin (SOL/XRP) Tab ----
+function AltcoinTab({ report, positions, closed }) {
+  const r = report || {};
+  const perf = r.performance || {};
+  const per_asset = r.per_asset || {};
+  const m = r.metrics || {};
+
+  const altPosCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 40)}</span> },
+    { key: 'asset', label: 'Asset', render: v => <span className={`font-mono font-medium ${v === 'SOL' ? 'text-purple-400' : 'text-blue-400'}`}>{v}</span> },
+    { key: 'direction', label: 'Dir', render: v => <span className={v === 'up' ? 'text-emerald-400' : 'text-red-400'}>{v}</span> },
+    { key: 'window', label: 'Window', render: v => <span className="font-mono text-zinc-400">{v}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono">{v}</span> },
+    { key: 'edge_bps', label: 'Edge', align: 'right', render: v => <span className="font-mono text-amber-300">{formatBps(v)}</span> },
+    { key: 'entry_price', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+    { key: 'current_multiple', label: 'Multiple', align: 'right', render: v => <span className={`font-mono ${pnlColor((v||1) - 1)}`}>{v?.toFixed(2)}x</span> },
+    { key: 'unrealized_pnl', label: 'PnL', align: 'right', render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  ];
+
+  const altClosedCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 35)}</span> },
+    { key: 'asset', label: 'Asset', render: v => <span className={`font-mono font-medium ${v === 'SOL' ? 'text-purple-400' : 'text-blue-400'}`}>{v}</span> },
+    { key: 'direction', label: 'Dir', render: v => <span className={v === 'up' ? 'text-emerald-400' : 'text-red-400'}>{v}</span> },
+    { key: 'profit_multiple', label: 'Multiple', align: 'right', render: v => <span className="font-mono">{v?.toFixed(2)}x</span> },
+    { key: 'pnl', label: 'PnL', align: 'right', render: v => <span className={`font-mono font-semibold ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+    { key: 'won', label: '', render: v => <span className={v ? 'text-emerald-400' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+  ];
+
+  return (
+    <div className="space-y-4" data-testid="altcoin-tab">
+      <SectionCard title="Altcoin Shadow — SOL/XRP Sniper">
+        <p className="text-xs text-zinc-500 mb-3">Independent performance tracking for SOL and XRP markets. Same sniper logic, separate from BTC/ETH to evaluate edge quality.</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <MetricBox label="Total PnL" value={formatPnl(perf.pnl)} color={pnlColor(perf.pnl)} />
+          <MetricBox label="Win Rate" value={formatPercent((perf.win_rate || 0) * 100)} color="text-orange-300" />
+          <MetricBox label="Trades" value={perf.total || 0} color="text-zinc-300" />
+          <MetricBox label="Open" value={perf.open_positions || 0} color="text-zinc-300" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {Object.entries(per_asset).map(([asset, stats]) => (
+            <div key={asset} className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`font-mono font-semibold ${asset === 'SOL' ? 'text-purple-400' : 'text-blue-400'}`}>{asset}</span>
+                <span className="text-xs text-zinc-500">{stats.signals || 0} signals</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <MiniStat label="PnL" value={formatPnl(stats.pnl)} />
+                <MiniStat label="Trades" value={stats.trades || 0} />
+                <MiniStat label="WR" value={formatPercent((stats.win_rate || 0) * 100)} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+      {positions?.length > 0 && <SectionCard title={`Open (${positions.length})`}><DataTable columns={altPosCols} data={positions} /></SectionCard>}
+      {closed?.length > 0 && <SectionCard title={`Closed (${closed.length})`}><DataTable columns={altClosedCols} data={closed} /></SectionCard>}
+    </div>
+  );
+}
+
+
+// ---- Adaptive Edge + Dynamic Gabagool Tab ----
+function AdaptiveEdgeTab({ report, positions, closed }) {
+  const r = report || {};
+  const ae = r.adaptive_edge || {};
+  const gd = r.gabagool_dynamic || {};
+  const cfg = r.config || {};
+  const disagree = ae.disagreements || {};
+  const byWindow = gd.by_window || {};
+
+  const aePosCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[140px] truncate block">{truncate(v, 40)}</span> },
+    { key: 'asset', label: 'Asset', render: v => <span className="font-mono text-rose-300">{v}</span> },
+    { key: 'edge_bps', label: 'Edge', align: 'right', render: v => <span className="font-mono text-amber-300">{formatBps(v)}</span> },
+    { key: 'vol_at_entry', label: 'Vol', align: 'right', render: v => <span className="font-mono text-zinc-400">{v?.toFixed(4)}</span> },
+    { key: 'adaptive_edge_at_entry', label: 'Adapt Edge', align: 'right', render: v => <span className="font-mono text-rose-300">{v}bps</span> },
+    { key: 'entry_price', label: 'Entry', align: 'right', render: v => <span className="font-mono">{formatPrice(v)}</span> },
+    { key: 'current_multiple', label: 'Mult', align: 'right', render: v => <span className={`font-mono ${pnlColor((v||1) - 1)}`}>{v?.toFixed(2)}x</span> },
+    { key: 'unrealized_pnl', label: 'PnL', align: 'right', render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  ];
+
+  return (
+    <div className="space-y-4" data-testid="adaptive-edge-tab">
+      <SectionCard title="Adaptive Edge Shadow — Vol-Scaled Min Edge">
+        <p className="text-xs text-zinc-500 mb-3">Tests dynamic min_edge_bps based on volatility: High vol (&gt;0.15) = 350bps, Med = 400bps, Low (&lt;0.08) = 500bps. Tracks signals that differ from live.</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <MetricBox label="Current Vol" value={ae.current_vol?.toFixed(4) || '--'} color="text-rose-300" />
+          <MetricBox label="Adaptive Edge" value={`${ae.current_adaptive_edge || '--'}bps`} color="text-rose-300" />
+          <MetricBox label="Signals" value={ae.signals_received || 0} color="text-zinc-300" />
+          <MetricBox label="Unique PnL" value={formatPnl(ae.pnl_unique_signals)} color={pnlColor(ae.pnl_unique_signals)} />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+          <MiniStat label="Would Trade" value={ae.would_trade || 0} />
+          <MiniStat label="Would Skip" value={ae.would_skip || 0} />
+          <MiniStat label="Live traded, adaptive skip" value={disagree.live_traded_adaptive_skip || 0} />
+          <MiniStat label="Live skipped, adaptive trade" value={disagree.live_skipped_adaptive_trade || 0} />
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Dynamic Gabagool Threshold Shadow">
+        <p className="text-xs text-zinc-500 mb-3">Tests time-weighted Gabagool thresholds: 5m=0.975, 15m=0.970, 1h=0.965, 4h+=0.960</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <MetricBox label="Total Scanned" value={gd.scanned || 0} color="text-zinc-300" />
+          <MetricBox label="Pairs Opened" value={gd.open_pairs || 0} color="text-rose-300" />
+          <MetricBox label="Gaba PnL" value={formatPnl(gd.pnl)} color={pnlColor(gd.pnl)} />
+          <MetricBox label="Total Pairs" value={gd.total_pairs || 0} color="text-zinc-300" />
+        </div>
+        {Object.keys(byWindow).length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs font-mono">
+              <thead><tr className="text-zinc-500 border-b border-zinc-800">
+                <th className="text-left py-1 px-2">Window</th>
+                <th className="text-right py-1 px-2">Threshold</th>
+                <th className="text-right py-1 px-2">Scanned</th>
+                <th className="text-right py-1 px-2">Triggered</th>
+                <th className="text-right py-1 px-2">Hit Rate</th>
+              </tr></thead>
+              <tbody>
+                {Object.entries(byWindow).map(([w, s]) => (
+                  <tr key={w} className="border-b border-zinc-800/50">
+                    <td className="py-1 px-2 text-zinc-300">{w}</td>
+                    <td className="py-1 px-2 text-right text-rose-300">{s.threshold?.toFixed(3)}</td>
+                    <td className="py-1 px-2 text-right text-zinc-400">{s.scanned || 0}</td>
+                    <td className="py-1 px-2 text-right text-emerald-400">{s.triggered || 0}</td>
+                    <td className="py-1 px-2 text-right text-amber-300">{s.scanned ? ((s.triggered / s.scanned) * 100).toFixed(1) + '%' : '0%'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+
+      {positions?.length > 0 && <SectionCard title={`Adaptive Unique Positions (${positions.length})`}><DataTable columns={aePosCols} data={positions} /></SectionCard>}
+    </div>
+  );
+}
+
+// ---- Helper components used by new tabs ----
+function MetricBox({ label, value, color }) {
+  return (
+    <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-2.5 text-center">
+      <div className={`text-lg font-mono font-semibold ${color || 'text-zinc-200'}`}>{value}</div>
+      <div className="text-[10px] text-zinc-500 uppercase tracking-wider">{label}</div>
+    </div>
+  );
 }

@@ -30,9 +30,11 @@ class PriceFeedManager:
         self._tasks = [
             asyncio.create_task(self._stream("btcusdt@trade", "BTC")),
             asyncio.create_task(self._stream("ethusdt@trade", "ETH")),
+            asyncio.create_task(self._stream("solusdt@trade", "SOL")),
+            asyncio.create_task(self._stream("xrpusdt@trade", "XRP")),
             asyncio.create_task(self._staleness_monitor()),
         ]
-        logger.info("PriceFeedManager started (BTC + ETH)")
+        logger.info("PriceFeedManager started (BTC + ETH + SOL + XRP)")
 
     async def stop(self):
         self._running = False
@@ -84,7 +86,7 @@ class PriceFeedManager:
             try:
                 await asyncio.sleep(5)
                 now = time.time()
-                for symbol in ["btc", "eth"]:
+                for symbol in ["btc", "eth", "sol", "xrp"]:
                     ts_key = f"last_spot_{symbol}_update"
                     last = self._state.health.get(ts_key)
                     stale = last is None or (now - last) > STALENESS_THRESHOLD

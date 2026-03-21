@@ -63,6 +63,9 @@ from engine.strategies.shadow_sniper import ShadowSniperEngine
 from engine.strategies.shadow_moondev import MoonDevShadowEngine
 from engine.strategies.shadow_phantom import PhantomSpreadEngine
 from engine.strategies.shadow_whrrari import WhrrariShadowEngine
+from engine.strategies.shadow_smart_exit import SmartExitShadowEngine
+from engine.strategies.shadow_altcoin import AltcoinShadowEngine
+from engine.strategies.shadow_adaptive import AdaptiveEdgeShadow
 from engine.strategies.gabagool_executor import GabagoolExecutor
 
 # Engine globals
@@ -89,6 +92,9 @@ shadow_sniper: Optional[ShadowSniperEngine] = None
 shadow_moondev: Optional[MoonDevShadowEngine] = None
 shadow_phantom: Optional[PhantomSpreadEngine] = None
 shadow_whrrari: Optional[WhrrariShadowEngine] = None
+shadow_smart_exit: Optional[SmartExitShadowEngine] = None
+shadow_altcoin: Optional[AltcoinShadowEngine] = None
+shadow_adaptive: Optional[AdaptiveEdgeShadow] = None
 ws_clients: Set[WebSocket] = set()
 ws_broadcast_task: Optional[asyncio.Task] = None
 
@@ -199,7 +205,7 @@ async def _notify_trade_closed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, gabagool_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, shadow_moondev, shadow_phantom, shadow_whrrari, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, gabagool_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, shadow_moondev, shadow_phantom, shadow_whrrari, shadow_smart_exit, shadow_altcoin, shadow_adaptive, ws_broadcast_task
     global _server_start_time, _git_commit, _build_info, _trades_loaded_from_db
 
     # Diagnostics — capture at boot
@@ -526,6 +532,7 @@ async def lifespan(app: FastAPI):
 
     # Wave 1 Quant Lab experiments (ALL shadow-only, NO live fills)
     global shadow_moondev, shadow_phantom, shadow_whrrari
+    global shadow_smart_exit, shadow_altcoin, shadow_adaptive
     shadow_moondev = MoonDevShadowEngine()
     await shadow_moondev.start(state, crypto_sniper_ref)
     crypto_sniper_ref._moondev = shadow_moondev
@@ -538,6 +545,23 @@ async def lifespan(app: FastAPI):
     shadow_whrrari = WhrrariShadowEngine()
     await shadow_whrrari.start(state)
     logger.info("[STARTUP] Whrrari LMSR shadow initialized")
+
+    # Wave 2 shadows — Smart Exit, Altcoin, Adaptive Edge
+    shadow_smart_exit = SmartExitShadowEngine()
+    await shadow_smart_exit.start(state)
+    crypto_sniper_ref._smart_exit = shadow_smart_exit
+    logger.info("[STARTUP] Smart Exit trailing-stop shadow initialized")
+
+    shadow_altcoin = AltcoinShadowEngine()
+    await shadow_altcoin.start(state)
+    crypto_sniper_ref._altcoin = shadow_altcoin
+    logger.info("[STARTUP] Altcoin (SOL/XRP) shadow sniper initialized")
+
+    shadow_adaptive = AdaptiveEdgeShadow()
+    await shadow_adaptive.start(state)
+    crypto_sniper_ref._adaptive = shadow_adaptive
+    shadow_phantom._adaptive_shadow = shadow_adaptive  # inject after both are created
+    logger.info("[STARTUP] Adaptive Edge + Dynamic Gabagool shadow initialized")
 
     # Phase 7: Config persistence — load from MongoDB and apply
     config_service = ConfigService(db)
@@ -913,6 +937,12 @@ async def lifespan(app: FastAPI):
         await shadow_phantom.stop()
     if shadow_whrrari:
         await shadow_whrrari.stop()
+    if shadow_smart_exit:
+        await shadow_smart_exit.stop()
+    if shadow_altcoin:
+        await shadow_altcoin.stop()
+    if shadow_adaptive:
+        await shadow_adaptive.stop()
     mongo_client.close()
 
 
@@ -3797,6 +3827,77 @@ async def get_gabagool_closed(limit: int = 50):
     return gabagool_ref.get_closed_pairs(limit=min(limit, 200))
 
 
+# ---- Quant Lab: Smart Exit Shadow ----
+
+@api_router.get("/experiments/smart_exit/report")
+async def get_smart_exit_report():
+    if not shadow_smart_exit:
+        return {"status": "disabled"}
+    return shadow_smart_exit.get_report()
+
+@api_router.get("/experiments/smart_exit/positions")
+async def get_smart_exit_positions():
+    if not shadow_smart_exit:
+        return []
+    return shadow_smart_exit.get_positions()
+
+@api_router.get("/experiments/smart_exit/closed")
+async def get_smart_exit_closed(limit: int = 50):
+    if not shadow_smart_exit:
+        return []
+    return shadow_smart_exit.get_closed(limit=min(limit, 200))
+
+
+# ---- Quant Lab: Altcoin (SOL/XRP) Shadow ----
+
+@api_router.get("/experiments/altcoin/report")
+async def get_altcoin_report():
+    if not shadow_altcoin:
+        return {"status": "disabled"}
+    return shadow_altcoin.get_report()
+
+@api_router.get("/experiments/altcoin/positions")
+async def get_altcoin_positions():
+    if not shadow_altcoin:
+        return []
+    return shadow_altcoin.get_positions()
+
+@api_router.get("/experiments/altcoin/closed")
+async def get_altcoin_closed(limit: int = 50):
+    if not shadow_altcoin:
+        return []
+    return shadow_altcoin.get_closed(limit=min(limit, 200))
+
+
+# ---- Quant Lab: Adaptive Edge Shadow ----
+
+@api_router.get("/experiments/adaptive/report")
+async def get_adaptive_report():
+    if not shadow_adaptive:
+        return {"status": "disabled"}
+    # Trigger resolution check
+    shadow_adaptive.check_resolutions()
+    return shadow_adaptive.get_report()
+
+@api_router.get("/experiments/adaptive/positions")
+async def get_adaptive_positions():
+    if not shadow_adaptive:
+        return []
+    return shadow_adaptive.get_positions()
+
+@api_router.get("/experiments/adaptive/closed")
+async def get_adaptive_closed(limit: int = 50):
+    if not shadow_adaptive:
+        return []
+    return shadow_adaptive.get_closed(limit=min(limit, 200))
+
+@api_router.get("/experiments/adaptive/gabagool")
+async def get_adaptive_gabagool():
+    if not shadow_adaptive:
+        return []
+    return shadow_adaptive.get_gaba_pairs()
+
+
 # ---- Quant Lab: Master experiment list ----
 
 @api_router.get("/experiments/registry")
@@ -3819,8 +3920,22 @@ async def get_experiment_registry():
             "wave": 1, "status": "active", "report": r})
 
     # Wave 2: Scaffolded / Inactive
+    if shadow_smart_exit:
+        r = shadow_smart_exit.get_report()
+        experiments.append({"id": "smart_exit", "name": "Smart Exit (Trailing Stop)",
+            "wave": 2, "status": "active", "report": r})
+    if shadow_altcoin:
+        r = shadow_altcoin.get_report()
+        experiments.append({"id": "altcoin", "name": "Altcoin Sniper (SOL/XRP)",
+            "wave": 2, "status": "active", "report": r})
+    if shadow_adaptive:
+        r = shadow_adaptive.get_report()
+        experiments.append({"id": "adaptive", "name": "Adaptive Edge + Dynamic Gabagool",
+            "wave": 2, "status": "active", "report": r})
+
+    # Wave 3: Scaffolded / Planned
     experiments.append({"id": "marik", "name": "Marik Latency Execution",
-        "wave": 2, "status": "planned",
+        "wave": 3, "status": "planned",
         "description": "Latency-sensitive execution timing analysis. Requires sub-second market data polling.",
         "report": None})
     experiments.append({"id": "argona", "name": "Argona Macro Event",

@@ -23,6 +23,7 @@ class PhantomSpreadEngine:
     def __init__(self):
         self._state = None
         self._running = False
+        self._adaptive_shadow = None  # AdaptiveEdgeShadow (injected from server.py)
 
         self._min_spread_bps = 80.0
         self._gabagool_threshold = 0.985  # buy both when sum < this (matches live executor)
@@ -177,6 +178,21 @@ class PhantomSpreadEngine:
             self._evaluations.append(record)
             if len(self._evaluations) > self._max_evaluations:
                 self._evaluations = self._evaluations[-self._max_evaluations:]
+
+            # Feed dynamic Gabagool shadow — tests different thresholds per window
+            if self._adaptive_shadow:
+                try:
+                    # Extract window from question (e.g., "5m", "15m", "1h")
+                    import re
+                    w_match = re.search(r'\b(5m|15m|1h|4h)\b', question, re.IGNORECASE)
+                    window = w_match.group(1).lower() if w_match else None
+                    self._adaptive_shadow.evaluate_gabagool_pair(
+                        yes_price=yp, no_price=np_,
+                        condition_id=cid, question=question,
+                        window=window,
+                    )
+                except Exception:
+                    pass
 
             if on_cooldown:
                 continue

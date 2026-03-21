@@ -186,8 +186,8 @@ class GabagoolExecutor:
             )
 
             # Risk check and execute both sides
-            yes_ok, yes_reason = self._risk_engine.approve_order(yes_order)
-            no_ok, no_reason = self._risk_engine.approve_order(no_order)
+            yes_ok, yes_reason = self._risk_engine.check_order(yes_order)
+            no_ok, no_reason = self._risk_engine.check_order(no_order)
 
             if yes_ok and no_ok:
                 await self._execution_engine.submit_order(yes_order)

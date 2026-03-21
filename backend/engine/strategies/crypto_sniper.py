@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 _ASSET_NORM = {
     "btc": "BTC", "bitcoin": "BTC",
     "eth": "ETH", "ethereum": "ETH",
+    "sol": "SOL", "solana": "SOL",
+    "xrp": "XRP", "ripple": "XRP",
 }
 _DIR_NORM = {
     "above": "above", "over": "above", "higher than": "above",
@@ -57,25 +59,25 @@ _DIR_NORM = {
 _SLUG_PATTERNS = [
     # {asset}-updown-{window}-{timestamp}  e.g., btc-updown-5m-1773666000
     re.compile(
-        r"^(?P<asset>btc|eth|bitcoin|ethereum)-updown-"
+        r"^(?P<asset>btc|eth|bitcoin|ethereum|sol|solana|xrp|ripple)-updown-"
         r"(?P<window>5m|15m|1h|4h)-"
         r"(?P<ts>\d{10,})",
         re.IGNORECASE,
     ),
     # {asset}-up-or-down-{date-info}  e.g., bitcoin-up-or-down-march-17-2026-12pm-et
     re.compile(
-        r"^(?P<asset>btc|eth|bitcoin|ethereum)-up-or-down-",
+        r"^(?P<asset>btc|eth|bitcoin|ethereum|sol|solana|xrp|ripple)-up-or-down-",
         re.IGNORECASE,
     ),
     # {asset}-above-{price}-on-{date}  e.g., ethereum-above-2400-on-march-16
     re.compile(
-        r"^(?P<asset>btc|eth|bitcoin|ethereum)-above-"
+        r"^(?P<asset>btc|eth|bitcoin|ethereum|sol|solana|xrp|ripple)-above-"
         r"(?P<strike>[\d]+[km]?)-on-",
         re.IGNORECASE,
     ),
     # will-{asset}-hit-{price}-by-{date}  e.g., will-bitcoin-hit-150k-by-march-31-2026
     re.compile(
-        r"^will-(?P<asset>btc|eth|bitcoin|ethereum)-(?:hit|reach)-"
+        r"^will-(?P<asset>btc|eth|bitcoin|ethereum|sol|solana|xrp|ripple)-(?:hit|reach)-"
         r"(?P<strike>[\d]+[km]?)-by-",
         re.IGNORECASE,
     ),
@@ -83,37 +85,32 @@ _SLUG_PATTERNS = [
 
 # Question-based patterns — fallback when slug doesn't match
 _QUESTION_PATTERNS = [
-    # "Will BTC be above $97,000 at 12:15 UTC?"
     re.compile(
-        r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"(?:Will\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum|SOL|Solana|XRP|Ripple)\b"
         r".*?(?P<dir>above|below|over|under|higher than|lower than)"
         r"\s+\$?(?P<strike>[\d,]+(?:\.\d+)?)"
         r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
         re.IGNORECASE,
     ),
-    # "Will the price of Ethereum be above $2,400 on March 16?" / "Will Bitcoin hit $150k by March 31?"
     re.compile(
-        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum|SOL|Solana|XRP|Ripple)\b"
         r".*?(?:be\s+)?(?P<dir>above|below|over|under|higher than|lower than|reach|hit|dip(?:\s+to)?)"
         r"\s+\$?(?P<strike>[\d,]+(?:[km])?(?:\.\d+)?)",
         re.IGNORECASE,
     ),
-    # "Bitcoin Up or Down - March 17, 12PM ET" (question-based updown)
     re.compile(
-        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum|SOL|Solana|XRP|Ripple)\b"
         r"\s+Up\s+or\s+Down",
         re.IGNORECASE,
     ),
-    # "BTC price ≥ $97000 at 4:00 PM ET"
     re.compile(
-        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"(?P<asset>BTC|Bitcoin|ETH|Ethereum|SOL|Solana|XRP|Ripple)\b"
         r".*?(?:price\s*)?(?P<dir>[>≥<≤])\s*\$?(?P<strike>[\d,]+(?:\.\d+)?)"
         r".*?(?:at|by)\s+(?P<time>\d{1,2}:\d{2})\s*(?:(?:AM|PM)\s*)?(?:UTC|ET|EST|EDT)?",
         re.IGNORECASE,
     ),
-    # "Will the price of Bitcoin be between $70,000 and $72,000 on March 16?"
     re.compile(
-        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum)\b"
+        r"(?:Will\s+)?(?:the\s+)?(?:price\s+of\s+)?(?P<asset>BTC|Bitcoin|ETH|Ethereum|SOL|Solana|XRP|Ripple)\b"
         r".*?between\s+\$?(?P<strike_low>[\d,]+(?:\.\d+)?)"
         r"\s+and\s+\$?(?P<strike_high>[\d,]+(?:\.\d+)?)",
         re.IGNORECASE,
@@ -384,6 +381,8 @@ class CryptoSniper(BaseStrategy):
         self._tracker = None  # StrategyTracker (injected at start)
         self._shadow = None   # ShadowSniperEngine (injected from server.py)
         self._moondev = None  # MoonDevShadowEngine (injected from server.py)
+        self._smart_exit = None  # SmartExitShadowEngine (injected from server.py)
+        self._altcoin = None    # AltcoinShadowEngine (injected from server.py)
 
         # Classification cache (refreshed every classification_refresh_interval)
         self._classified_cache: Dict[str, CryptoMarketClassification] = {}
@@ -395,6 +394,8 @@ class CryptoSniper(BaseStrategy):
         self._price_history: Dict[str, deque] = {
             "BTC": deque(maxlen=max_samples),
             "ETH": deque(maxlen=max_samples),
+            "SOL": deque(maxlen=max_samples),
+            "XRP": deque(maxlen=max_samples),
         }
         self._last_sample_time: float = 0.0
 
@@ -427,8 +428,12 @@ class CryptoSniper(BaseStrategy):
             "stale_feed_skips": 0,
             "btc_vol_samples": 0,
             "eth_vol_samples": 0,
+            "sol_vol_samples": 0,
+            "xrp_vol_samples": 0,
             "btc_realized_vol": None,
             "eth_realized_vol": None,
+            "sol_realized_vol": None,
+            "xrp_realized_vol": None,
             "active_executions": 0,
             "completed_executions": 0,
             "last_execution_time": None,
@@ -516,7 +521,7 @@ class CryptoSniper(BaseStrategy):
             return
         self._last_sample_time = now
 
-        for asset in ("BTC", "ETH"):
+        for asset in ("BTC", "ETH", "SOL", "XRP"):
             # StateManager stores as "BTC" key from PriceFeedManager
             price = self._state.spot_prices.get(asset)
             if price and price > 0:
@@ -524,6 +529,8 @@ class CryptoSniper(BaseStrategy):
 
         self._m["btc_vol_samples"] = len(self._price_history["BTC"])
         self._m["eth_vol_samples"] = len(self._price_history["ETH"])
+        self._m["sol_vol_samples"] = len(self._price_history.get("SOL", []))
+        self._m["xrp_vol_samples"] = len(self._price_history.get("XRP", []))
 
     # ---- Stage 2: Classification Cache ----
 
@@ -651,11 +658,11 @@ class CryptoSniper(BaseStrategy):
         # Pre-compute volatility and momentum once per scan (not per market)
         vol_cache = {}
         mom_cache = {}
-        for asset in ("BTC", "ETH"):
-            buf = self._price_history[asset]
-            vol = compute_realized_volatility(buf, self.config.vol_min_samples)
+        for asset in ("BTC", "ETH", "SOL", "XRP"):
+            buf = self._price_history.get(asset, [])
+            vol = compute_realized_volatility(buf, self.config.vol_min_samples) if buf else None
             vol_cache[asset] = vol
-            mom_cache[asset] = compute_momentum(buf, self.config.momentum_lookback_seconds)
+            mom_cache[asset] = compute_momentum(buf, self.config.momentum_lookback_seconds) if buf else None
 
             # Update metrics
             self._m[f"{asset.lower()}_realized_vol"] = vol
@@ -732,6 +739,77 @@ class CryptoSniper(BaseStrategy):
                             )
                     except Exception:
                         pass  # moondev must never break live
+
+                # Smart Exit Shadow: feed tradable signals for trailing stop comparison
+                if self._smart_exit and sig.is_tradable:
+                    try:
+                        self._smart_exit.evaluate_signal(
+                            condition_id=cm.condition_id,
+                            asset=cm.asset,
+                            direction=cm.direction,
+                            spot=sig.spot_price,
+                            fair_prob=sig.fair_price if sig.fair_price > 0 else 0.5,
+                            yes_price=self._state.get_market(cm.yes_token_id).mid_price or 0,
+                            no_price=self._state.get_market(cm.no_token_id).mid_price or 0,
+                            edge_bps=sig.edge_bps,
+                            tte_seconds=sig.time_to_expiry_seconds,
+                            side=sig.side,
+                            token_id=cm.yes_token_id if "yes" in sig.side else cm.no_token_id,
+                            size=sig.recommended_size,
+                            question=cm.question,
+                            is_tradable=True,
+                        )
+                    except Exception as exc:
+                        logger.error(f"[SMART-EXIT-DISPATCH] Error: {exc}")
+
+                # Altcoin Shadow: feed SOL/XRP signals only
+                if self._altcoin and cm.asset in ("SOL", "XRP"):
+                    try:
+                        yes_snap = self._state.get_market(cm.yes_token_id)
+                        no_snap = self._state.get_market(cm.no_token_id)
+                        if yes_snap and no_snap:
+                            self._altcoin.evaluate_signal(
+                                condition_id=cm.condition_id,
+                                asset=cm.asset,
+                                direction=cm.direction,
+                                spot=sig.spot_price,
+                                fair_prob=sig.fair_price if sig.fair_price > 0 else 0.5,
+                                yes_price=yes_snap.mid_price or 0,
+                                no_price=no_snap.mid_price or 0,
+                                edge_bps=sig.edge_bps,
+                                tte_seconds=sig.time_to_expiry_seconds,
+                                side=sig.side,
+                                token_id=cm.yes_token_id if "yes" in sig.side else cm.no_token_id,
+                                size=sig.recommended_size,
+                                question=cm.question,
+                                is_tradable=sig.is_tradable,
+                                window=cm.window,
+                            )
+                    except Exception:
+                        pass
+
+                # Adaptive Edge Shadow: feed ALL signals with vol context
+                if hasattr(self, '_adaptive') and self._adaptive:
+                    try:
+                        entry_side_price = self._state.get_market(
+                            cm.yes_token_id if "yes" in (sig.side or "") else cm.no_token_id
+                        )
+                        ep = entry_side_price.mid_price if entry_side_price else 0
+                        self._adaptive.evaluate_signal(
+                            condition_id=cm.condition_id,
+                            asset=cm.asset,
+                            edge_bps=sig.edge_bps,
+                            vol=vol_cache.get(cm.asset) or 0,
+                            is_live_tradable=sig.is_tradable,
+                            side=sig.side,
+                            token_id=cm.yes_token_id if "yes" in (sig.side or "") else cm.no_token_id,
+                            size=sig.recommended_size,
+                            entry_price=ep,
+                            question=cm.question,
+                            window=cm.window,
+                        )
+                    except Exception as exc:
+                        logger.error(f"[ADAPTIVE-DISPATCH] Error: {exc}")
 
             evaluated += 1
 
