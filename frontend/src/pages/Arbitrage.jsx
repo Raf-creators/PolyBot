@@ -15,23 +15,42 @@ export default function Arbitrage() {
   const arbDiag = useDashboardStore((s) => s.arbDiagnostics);
   const strategyPositions = useDashboardStore((s) => s.strategyPositions);
   const { fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics, fetchStrategyPositions } = useApi();
-  const [tab, setTab] = useState('opportunities');
+  const [tab, setTab] = useState('gabagool');
+  const [gabaReport, setGabaReport] = useState({});
+  const [gabaOpen, setGabaOpen] = useState([]);
+  const [gabaClosed, setGabaClosed] = useState([]);
+
+  const API = process.env.REACT_APP_BACKEND_URL;
 
   useEffect(() => {
+    const fetchGaba = async () => {
+      try {
+        const [r, o, c] = await Promise.all([
+          fetch(`${API}/api/gabagool/report`).then(r => r.json()),
+          fetch(`${API}/api/gabagool/positions`).then(r => r.json()),
+          fetch(`${API}/api/gabagool/closed`).then(r => r.json()),
+        ]);
+        setGabaReport(r);
+        setGabaOpen(o);
+        setGabaClosed(c);
+      } catch {}
+    };
     fetchArbOpportunities();
     fetchArbExecutions();
     fetchArbHealth();
     fetchArbDiagnostics();
     fetchStrategyPositions();
+    fetchGaba();
     const interval = setInterval(() => {
       fetchArbOpportunities();
       fetchArbExecutions();
       fetchArbHealth();
       fetchArbDiagnostics();
       fetchStrategyPositions();
+      fetchGaba();
     }, 8000);
     return () => clearInterval(interval);
-  }, [fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics, fetchStrategyPositions]);
+  }, [fetchArbOpportunities, fetchArbExecutions, fetchArbHealth, fetchArbDiagnostics, fetchStrategyPositions, API]);
 
   const arbSummary = strategyPositions?.summaries?.arb || {};
 
@@ -82,14 +101,59 @@ export default function Arbitrage() {
   const rejReasons = arbHealth.rejection_reasons || {};
   const diag = arbDiag || {};
   const diagMetrics = diag.metrics || {};
+  const gabaPerf = gabaReport.performance || {};
+  const gabaMetrics = gabaReport.metrics || {};
+  const gabaConfig = gabaReport.config || {};
+
+  const gabaOpenCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[180px] truncate block">{truncate(v, 50)}</span> },
+    { key: 'yes_entry', label: 'YES', align: 'right', render: v => <span className="font-mono text-emerald-400">{formatPrice(v)}</span> },
+    { key: 'no_entry', label: 'NO', align: 'right', render: v => <span className="font-mono text-red-400">{formatPrice(v)}</span> },
+    { key: 'pair_cost', label: 'Pair $', align: 'right', render: v => <span className={`font-mono ${v < 0.96 ? 'text-cyan-300 font-semibold' : 'text-zinc-400'}`}>{v?.toFixed(4)}</span> },
+    { key: 'guaranteed_edge_pct', label: 'Edge', align: 'right', sortable: true, render: v => <span className="font-mono text-cyan-300">{v}%</span> },
+    { key: 'guaranteed_profit', label: 'Guar PnL', align: 'right', render: v => <span className="font-mono text-emerald-400">${v?.toFixed(4)}</span> },
+    { key: 'size', label: 'Size/Side', align: 'right', render: v => <span className="font-mono text-cyan-300">${v}</span> },
+    { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },
+  ];
+
+  const gabaClosedCols = [
+    { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[180px] truncate block">{truncate(v, 50)}</span> },
+    { key: 'pair_cost', label: 'Pair $', align: 'right', render: v => <span className="font-mono text-cyan-300">{v?.toFixed(4)}</span> },
+    { key: 'guaranteed_edge_pct', label: 'Edge', align: 'right', render: v => <span className="font-mono text-cyan-300">{v}%</span> },
+    { key: 'pnl', label: 'PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-semibold ${v >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatPnl(v)}</span> },
+    { key: 'won', label: 'Result', render: v => <span className={v ? 'text-emerald-400 font-semibold' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+    { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono">${v}</span> },
+    { key: 'closed_at', label: 'Closed', render: v => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
+  ];
 
   return (
     <div data-testid="arbitrage-page" className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-zinc-100">Arbitrage Scanner</h1>
+        <h1 className="text-lg font-semibold text-zinc-100">Arbitrage & Gabagool</h1>
         <span className="text-xs text-zinc-600 font-mono">
           {arbHealth.running ? 'SCANNING' : 'IDLE'} | Scans: {diagMetrics.total_scans || arbHealth.total_scans || 0}
         </span>
+      </div>
+
+      {/* Gabagool Live Arb Banner */}
+      <div data-testid="gabagool-live-section" className="border border-cyan-900/50 bg-gradient-to-r from-cyan-950/20 to-zinc-900/40 rounded-lg p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-cyan-300">GABAGOOL</span>
+            <span className="text-[10px] px-1.5 py-0.5 bg-cyan-900/40 border border-cyan-800/40 rounded text-cyan-400 font-mono">LIVE ARB</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${gabaReport.status === 'active' ? 'bg-emerald-900/40 text-emerald-400' : 'bg-zinc-800 text-zinc-500'}`}>
+              {gabaReport.status === 'active' ? 'ACTIVE' : 'OFFLINE'}
+            </span>
+          </div>
+          <span className="text-[10px] text-zinc-600 font-mono">threshold &lt; ${gabaConfig.threshold || 0.96} | ${gabaConfig.size_per_side || 10}/side</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <StatCard testId="gaba-pnl" label="Gabagool PnL" value={formatPnl(gabaPerf.pnl_total || 0)} color={(gabaPerf.pnl_total || 0) >= 0 ? 'emerald' : 'red'} />
+          <StatCard testId="gaba-wr" label="Win Rate" value={`${gabaPerf.win_rate || 0}%`} color={gabaPerf.win_rate >= 80 ? 'emerald' : 'amber'} />
+          <StatCard testId="gaba-open" label="Open Pairs" value={gabaPerf.open_pairs || 0} />
+          <StatCard testId="gaba-closed" label="Closed Pairs" value={gabaPerf.closed_pairs || 0} />
+          <StatCard testId="gaba-found" label="Pairs Found" value={gabaMetrics.pairs_found || 0} />
+        </div>
       </div>
 
       {/* PnL Summary Bar — matches Sniper and Weather pages */}
@@ -133,6 +197,9 @@ export default function Arbitrage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-zinc-900 border border-zinc-800">
+          <TabsTrigger value="gabagool" className="text-xs data-[state=active]:bg-cyan-900/40 data-[state=active]:text-cyan-300">
+            Gabagool ({gabaOpen.length} open / {gabaClosed.length} closed)
+          </TabsTrigger>
           <TabsTrigger value="opportunities" className="text-xs data-[state=active]:bg-zinc-800">
             Opportunities ({arbOpps.total_tradable})
           </TabsTrigger>
@@ -149,6 +216,15 @@ export default function Arbitrage() {
             Health
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="gabagool" className="mt-4 space-y-4">
+          <SectionCard title="Open Pairs (Awaiting Resolution)" testId="section-gaba-open">
+            <DataTable columns={gabaOpenCols} data={gabaOpen} emptyMessage="No open Gabagool pairs — waiting for YES+NO sum < threshold" testId="gaba-open-table" />
+          </SectionCard>
+          <SectionCard title="Closed Pairs (Resolved)" testId="section-gaba-closed">
+            <DataTable columns={gabaClosedCols} data={gabaClosed} emptyMessage="No closed Gabagool trades yet — pairs resolve when markets close" testId="gaba-closed-table" />
+          </SectionCard>
+        </TabsContent>
 
         <TabsContent value="opportunities" className="mt-4">
           <SectionCard testId="section-arb-opportunities">

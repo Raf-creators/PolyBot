@@ -19,7 +19,7 @@ def classify_strategy(pos_or_order) -> str:
         return "weather"
     if sid == "crypto_sniper":
         return "crypto"
-    if sid == "arb_scanner":
+    if sid in ("arb_scanner", "gabagool"):
         return "arb"
     if sid and sid != "unknown":
         return sid  # pass through unknown strategies

@@ -120,7 +120,7 @@ export default function QuantLab() {
         <div className="flex items-center gap-3">
           <FlaskConical size={20} className="text-indigo-400" />
           <h1 className="text-lg font-semibold text-zinc-100">Quant Lab</h1>
-          <span className="text-[10px] font-mono text-zinc-600 bg-zinc-800/60 px-2 py-0.5 rounded">EPOCH 4</span>
+          <span className="text-[10px] font-mono text-zinc-600 bg-zinc-800/60 px-2 py-0.5 rounded">EPOCH 5</span>
         </div>
         <span className="text-xs text-zinc-600 font-mono">
           {registry.filter(e => e.status === 'active').length} active / {registry.length} total experiments

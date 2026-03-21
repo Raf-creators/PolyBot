@@ -63,6 +63,7 @@ from engine.strategies.shadow_sniper import ShadowSniperEngine
 from engine.strategies.shadow_moondev import MoonDevShadowEngine
 from engine.strategies.shadow_phantom import PhantomSpreadEngine
 from engine.strategies.shadow_whrrari import WhrrariShadowEngine
+from engine.strategies.gabagool_executor import GabagoolExecutor
 
 # Engine globals
 state: Optional[StateManager] = None
@@ -71,6 +72,7 @@ engine: Optional[TradingEngine] = None
 arb_scanner_ref: Optional[ArbScanner] = None
 crypto_sniper_ref: Optional[CryptoSniper] = None
 weather_trader_ref: Optional[WeatherTrader] = None
+gabagool_ref: Optional[GabagoolExecutor] = None
 telegram_notifier: Optional[TelegramNotifier] = None
 config_service: Optional[ConfigService] = None
 live_order_service: Optional[LiveOrderService] = None
@@ -197,7 +199,7 @@ async def _notify_trade_closed():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, shadow_moondev, shadow_phantom, shadow_whrrari, ws_broadcast_task
+    global state, bus, engine, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref, gabagool_ref, telegram_notifier, config_service, live_order_service, forecast_accuracy_service, calibration_service, clob_ws_client, clob_fill_ws_client, weather_alert_service, rolling_calibration_service, auto_resolver_service, market_resolver_service, stale_arb_cleanup, shadow_sniper, shadow_moondev, shadow_phantom, shadow_whrrari, ws_broadcast_task
     global _server_start_time, _git_commit, _build_info, _trades_loaded_from_db
 
     # Diagnostics — capture at boot
@@ -364,6 +366,49 @@ async def lifespan(app: FastAPI):
         _trades_loaded_from_db = 0
         logger.info("[EPOCH-RESET] Epoch 4 started. Paper balance reset to $1000. Dynamic sizing + window caps active.")
 
+    # ---- EPOCH 5 RESET: Gabagool Live + Kelly Unlocked + Regime Detector ----
+    epoch5_marker = await db.epochs.find_one({"epoch_id": "epoch_5"}, {"_id": 0})
+    if not epoch5_marker:
+        logger.info("[EPOCH-RESET] Starting epoch 5 — archiving epoch 4 data for overnight run baseline...")
+
+        old_trades = await db.trades.count_documents({})
+        old_orders = await db.orders.count_documents({})
+
+        if old_trades > 0:
+            pipeline = [{"$match": {}}, {"$out": "trades_archive_epoch4"}]
+            await db.trades.aggregate(pipeline).to_list(length=1)
+            await db.trades.delete_many({})
+
+        if old_orders > 0:
+            pipeline = [{"$match": {}}, {"$out": "orders_archive_epoch4"}]
+            await db.orders.aggregate(pipeline).to_list(length=1)
+            await db.orders.delete_many({})
+
+        # Clear positions for truly clean start
+        await db.positions_snapshots.delete_many({})
+
+        state.trades.clear()
+        state.orders.clear()
+        state.positions.clear()
+        state.daily_pnl = 0.0
+        state.total_trades = 0
+        state.win_count = 0
+        state.loss_count = 0
+
+        engine.persistence._last_trade_idx = 0
+        engine.persistence._persisted_orders.clear()
+
+        await db.epochs.insert_one({
+            "epoch_id": "epoch_5",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "starting_balance": 1000.0,
+            "archived_trades": old_trades,
+            "archived_orders": old_orders,
+            "reason": "Gabagool live arb + Kelly tiers unlocked + regime detector + weather push",
+        })
+        _trades_loaded_from_db = 0
+        logger.info("[EPOCH-RESET] Epoch 5 started. Clean $1000 baseline for overnight run.")
+
     # Phase 3: register arb strategy (enabled by default)
     arb = ArbScanner()
     engine.register_strategy(arb)
@@ -382,6 +427,10 @@ async def lifespan(app: FastAPI):
     engine.register_strategy(weather)
     state.strategies["weather_trader"].enabled = True
     weather_trader_ref = weather
+
+    # Phase 11: Gabagool live arb executor (guaranteed structural arbitrage)
+    gabagool_ref = GabagoolExecutor()
+    logger.info("Gabagool live arb executor created — will wire execution context after engine start")
 
     # Forecast accuracy tracking
     forecast_accuracy_service = ForecastAccuracyService(db)
@@ -606,6 +655,47 @@ async def lifespan(app: FastAPI):
             crypto_sniper_ref.config.max_signal_size = 25.0
             upgrade_applied = True
 
+        # 6. Risk: max_order_size must match Kelly tiers (was 10, blocking $12/$18/$25)
+        if state.risk_config.max_order_size < 25.0:
+            state.risk_config.max_order_size = 25.0
+            upgrade_applied = True
+
+        # 7. Crypto: Kill $5 tier — 0% WR across 64 trades, pure noise below 400bps
+        if crypto_sniper_ref and crypto_sniper_ref.config.min_edge_bps < 400.0:
+            crypto_sniper_ref.config.min_edge_bps = 400.0
+            upgrade_applied = True
+
+        # 8. Arb: Gabagool needs capital — increase arb exposure for live structural arb
+        if state.risk_config.arb_max_exposure < 60.0:
+            state.risk_config.arb_max_exposure = 60.0
+            upgrade_applied = True
+        if state.risk_config.arb_reserved_capital < 60.0:
+            state.risk_config.arb_reserved_capital = 60.0
+            upgrade_applied = True
+        if state.risk_config.max_arb_positions < 15:
+            state.risk_config.max_arb_positions = 15
+            upgrade_applied = True
+
+        # 9. Weather push: increase sizing from $5 to $8 (100% WR, PF=6.47 proven)
+        if weather_trader_ref:
+            if weather_trader_ref.config.default_size < 8.0:
+                weather_trader_ref.config.default_size = 8.0
+                upgrade_applied = True
+            if weather_trader_ref.config.min_edge_bps > 300.0:
+                weather_trader_ref.config.min_edge_bps = 300.0
+                upgrade_applied = True
+            if weather_trader_ref.config.min_confidence > 0.40:
+                weather_trader_ref.config.min_confidence = 0.40
+                upgrade_applied = True
+
+        # 10. Weather position size in risk config
+        if state.risk_config.weather_position_size < 8.0:
+            state.risk_config.weather_position_size = 8.0
+            upgrade_applied = True
+        if state.risk_config.weather_reserved_capital < 30.0:
+            state.risk_config.weather_reserved_capital = 30.0
+            upgrade_applied = True
+
         if upgrade_applied:
             # Persist the upgraded config
             snapshot = config_service.build_snapshot(state, telegram_notifier, arb_scanner_ref, crypto_sniper_ref, weather_trader_ref)
@@ -698,6 +788,16 @@ async def lifespan(app: FastAPI):
             adapter.set_fill_ws(clob_fill_ws_client)
             clob_fill_ws_client._fill_callback = adapter.on_ws_fill
         logger.info("Engine auto-started — all strategies and feeds active")
+
+    # Wire Gabagool live executor (needs engine running for execution context)
+    if gabagool_ref and engine.is_running:
+        gabagool_ref.set_execution_context(engine.risk_engine, engine.execution_engine)
+        await gabagool_ref.start(state)
+        logger.info("[GABAGOOL] Live executor wired and started")
+
+    # Wire gabagool ref to telegram notifier for reporting
+    if telegram_notifier:
+        telegram_notifier._strategy_refs["gabagool"] = gabagool_ref
 
     # ---- UPGRADE TRACKING: Capture baseline, cleanup arb, send deploy notification ----
     try:
@@ -3658,6 +3758,27 @@ async def get_whrrari_closed(mode: str = "unit", limit: int = 50):
     if not shadow_whrrari:
         return []
     return shadow_whrrari.get_closed(mode=mode, limit=min(limit, 200))
+
+
+# ---- Gabagool Live Arb ----
+
+@api_router.get("/gabagool/report")
+async def get_gabagool_report():
+    if not gabagool_ref:
+        return {"status": "disabled"}
+    return gabagool_ref.get_report()
+
+@api_router.get("/gabagool/positions")
+async def get_gabagool_positions():
+    if not gabagool_ref:
+        return []
+    return gabagool_ref.get_open_pairs()
+
+@api_router.get("/gabagool/closed")
+async def get_gabagool_closed(limit: int = 50):
+    if not gabagool_ref:
+        return []
+    return gabagool_ref.get_closed_pairs(limit=min(limit, 200))
 
 
 # ---- Quant Lab: Master experiment list ----

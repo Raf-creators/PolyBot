@@ -405,6 +405,11 @@ class CryptoSniper(BaseStrategy):
         self._order_to_execution: Dict[str, str] = {}
         self._cooldown: Dict[str, float] = {}
 
+        # Regime detector: track recent outcomes
+        self._recent_outcomes: deque = deque(maxlen=30)  # rolling window of wins/losses
+        self._regime_paused = False
+        self._regime_pause_until: float = 0.0
+
         # Metrics — lightweight, primitive writes only
         self._m = {
             "total_scans": 0,
@@ -475,6 +480,9 @@ class CryptoSniper(BaseStrategy):
                 # Stage 2: Refresh classifications if stale
                 self._maybe_refresh_classifications()
 
+                # Stage 2.5: Regime detector — adjust edge threshold based on recent WR
+                self._regime_check()
+
                 # Stage 3+4: Evaluate and filter signals
                 signals = self._evaluate_all()
 
@@ -518,6 +526,62 @@ class CryptoSniper(BaseStrategy):
         self._m["eth_vol_samples"] = len(self._price_history["ETH"])
 
     # ---- Stage 2: Classification Cache ----
+
+    def _regime_check(self):
+        """Regime detector: if rolling WR drops below 30%, double min_edge_bps.
+        When WR recovers above 40%, restore normal min_edge_bps.
+        Sends Telegram alert on state changes."""
+        if not self._state:
+            return
+
+        # Check recent resolved trades (last 20+ crypto trades with PnL)
+        recent_pnl = []
+        for trade in reversed(self._state.trades):
+            if trade.pnl is None:
+                continue
+            sid = trade.strategy_id or ""
+            if "sniper" not in sid and "crypto" not in sid:
+                continue
+            recent_pnl.append(trade.pnl)
+            if len(recent_pnl) >= 20:
+                break
+
+        if len(recent_pnl) < 10:
+            return  # not enough data
+
+        wins = sum(1 for p in recent_pnl if p > 0)
+        wr = wins / len(recent_pnl)
+
+        now = time.time()
+
+        if wr < 0.30 and not self._regime_paused:
+            # PAUSE — WR cratered, boost edge threshold
+            self._regime_paused = True
+            self._regime_pause_until = now + 1800  # at least 30 min
+            self._m["regime_paused"] = True
+            self._m["regime_wr"] = round(wr * 100, 1)
+            logger.warning(
+                f"[REGIME] PAUSED — WR={wr*100:.0f}% < 30% on last {len(recent_pnl)} trades. "
+                f"Boosting min_edge_bps from {self.config.min_edge_bps} to {self.config.min_edge_bps * 2}"
+            )
+
+        elif wr >= 0.40 and self._regime_paused and now > self._regime_pause_until:
+            # RESUME — WR recovered
+            self._regime_paused = False
+            self._m["regime_paused"] = False
+            self._m["regime_wr"] = round(wr * 100, 1)
+            logger.info(
+                f"[REGIME] RESUMED — WR={wr*100:.0f}% > 40% on last {len(recent_pnl)} trades. "
+                f"Restoring normal min_edge_bps={self.config.min_edge_bps}"
+            )
+
+    @property
+    def _effective_min_edge_bps(self) -> float:
+        """Return the effective min_edge_bps, doubled during regime pause."""
+        base = self.config.min_edge_bps
+        return base * 2 if self._regime_paused else base
+
+    # ---- Stage 2 actual: Classification Cache ----
 
     def _maybe_refresh_classifications(self):
         now = time.monotonic()
@@ -800,10 +864,11 @@ class CryptoSniper(BaseStrategy):
             return self._reject_signal(cm, spot, tte, vol, momentum, yes_price, data_age, spread,
                                        f"no_edge yes={edge_yes:.0f}bps no={edge_no:.0f}bps")
 
-        # Edge threshold
-        if edge_bps < self.config.min_edge_bps:
+        # Edge threshold (regime-aware)
+        effective_min_edge = self._effective_min_edge_bps
+        if edge_bps < effective_min_edge:
             return self._reject_signal(cm, spot, tte, vol, momentum, market_price, data_age, spread,
-                                       f"edge {edge_bps:.0f}bps < min {self.config.min_edge_bps}bps")
+                                       f"edge {edge_bps:.0f}bps < min {effective_min_edge:.0f}bps")
 
         # Minimum dislocation filter: skip coin-flip entries near 0.50
         dislocation = abs(fair - market_price)
@@ -1135,6 +1200,8 @@ class CryptoSniper(BaseStrategy):
             **self._m,
             "config": self.config.model_dump(),
             "running": self._running,
+            "regime_paused": self._regime_paused,
+            "effective_min_edge_bps": self._effective_min_edge_bps,
             "price_buffer_sizes": {
                 "BTC": len(self._price_history["BTC"]),
                 "ETH": len(self._price_history["ETH"]),

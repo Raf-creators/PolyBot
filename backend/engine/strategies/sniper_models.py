@@ -15,8 +15,8 @@ class SniperConfig(BaseModel):
     scan_interval: float = 5.0
     classification_refresh_interval: float = 30.0
 
-    # Edge thresholds
-    min_edge_bps: float = 200.0
+    # Edge thresholds (raised from 200 — $5 tier had 0% WR, pure noise below 400)
+    min_edge_bps: float = 400.0
 
     # Filters
     min_liquidity: float = 500.0
