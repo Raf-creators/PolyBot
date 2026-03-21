@@ -27,7 +27,7 @@ class GabagoolExecutor:
         self._running = False
 
         # Config
-        self._threshold = 0.985       # buy both sides when sum < this (break-even ~0.987 after fees)
+        self._threshold = 0.960       # buy both sides when sum < this (net +2.6%/pair after 2% resolution fee)
         self._max_stale_seconds = 180.0  # relaxed for less-liquid markets
         self._scan_interval = 10.0
         self._size_per_side = 10.0    # $ per side (total = 2x this)

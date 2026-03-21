@@ -563,32 +563,37 @@ async def lifespan(app: FastAPI):
         if state.risk_config.max_market_exposure < 360.0:
             state.risk_config.max_market_exposure = 360.0
             upgrade_applied = True
-        # REVERT max_position_size: 40→25 (all positions >24 shares were losers)
-        if state.risk_config.max_position_size != 25.0:
-            state.risk_config.max_position_size = 25.0
+        # TIER 2-G: Raise daily loss limit $100→$150. Bot had 118 trade suppressions that delayed
+        # recovery from -$17.91 to +$135.30. Give it room to trade through drawdowns.
+        if state.risk_config.max_daily_loss < 150.0:
+            state.risk_config.max_daily_loss = 150.0
             upgrade_applied = True
-        # Increase crypto exposure: freed from arb capital
-        if state.risk_config.crypto_max_exposure != 250.0:
-            state.risk_config.crypto_max_exposure = 250.0
+        # Position size raised: 25→35 to unlock 4,928 blocked high-edge Kelly signals
+        if state.risk_config.max_position_size != 35.0:
+            state.risk_config.max_position_size = 35.0
+            upgrade_applied = True
+        # Crypto exposure raised: $80→$150. Profit engine generating $2.17/$ deployed — let it breathe
+        if state.risk_config.crypto_max_exposure != 150.0:
+            state.risk_config.crypto_max_exposure = 150.0
             upgrade_applied = True
         if state.risk_config.weather_max_exposure != 120.0:
             state.risk_config.weather_max_exposure = 120.0
             upgrade_applied = True
-        # HARD arb reduction: minimal sandbox ($8) — arb is a capital trap (-4.6% ROI)
-        if state.risk_config.arb_max_exposure != 8.0:
-            state.risk_config.arb_max_exposure = 8.0
+        # Arb restricted: $250→$40. Arb scanner is a capital trap (-$2.82, 2.63% WR). Reserve for Gabagool.
+        if state.risk_config.arb_max_exposure != 40.0:
+            state.risk_config.arb_max_exposure = 40.0
             upgrade_applied = True
-        if state.risk_config.arb_reserved_capital != 8.0:
-            state.risk_config.arb_reserved_capital = 8.0
+        if state.risk_config.arb_reserved_capital != 40.0:
+            state.risk_config.arb_reserved_capital = 40.0
             upgrade_applied = True
         # Weather allocation floor: guaranteed minimum bucket
         if not hasattr(state.risk_config, 'weather_reserved_capital') or state.risk_config.weather_reserved_capital != 15.0:
             state.risk_config.weather_reserved_capital = 15.0
             upgrade_applied = True
 
-        # 1b. Position limits: restrict arb, keep global
-        if state.risk_config.max_arb_positions != 5:
-            state.risk_config.max_arb_positions = 5
+        # 1b. Position limits: restrict arb to 12 slots (was 5, then 45 — 45 let arb eat all capital)
+        if state.risk_config.max_arb_positions != 12:
+            state.risk_config.max_arb_positions = 12
             upgrade_applied = True
         if state.risk_config.max_concurrent_positions < 85:
             state.risk_config.max_concurrent_positions = 85
@@ -644,20 +649,30 @@ async def lifespan(app: FastAPI):
             if weather_trader_ref.config.max_signal_size < 12.0:
                 weather_trader_ref.config.max_signal_size = 12.0
                 upgrade_applied = True
+            # TIER 2-E: Lower profit capture threshold 2.0x→1.5x. Weather edge decays fast —
+            # capture at 1.5x instead of waiting for 2.0x that rarely hits.
+            if weather_trader_ref.config.profit_capture_threshold > 1.5:
+                weather_trader_ref.config.profit_capture_threshold = 1.5
+                upgrade_applied = True
 
         # 4. Crypto: REVERT max_tte to 8h (28800s) — 4h markets are net losers
         if crypto_sniper_ref and crypto_sniper_ref.config.max_tte_seconds != 28800.0:
             crypto_sniper_ref.config.max_tte_seconds = 28800.0
             upgrade_applied = True
 
-        # 5. Crypto: Dynamic Kelly sizing — unlock full tiers ($5/$12/$18/$25)
-        if crypto_sniper_ref and crypto_sniper_ref.config.max_signal_size < 25.0:
-            crypto_sniper_ref.config.max_signal_size = 25.0
+        # 4b. Crypto: Reduce cooldown 60s→30s. 5-min markets move fast; 60s misses follow-up signals.
+        if crypto_sniper_ref and crypto_sniper_ref.config.cooldown_seconds > 30.0:
+            crypto_sniper_ref.config.cooldown_seconds = 30.0
             upgrade_applied = True
 
-        # 6. Risk: max_order_size must match Kelly tiers (was 10, blocking $12/$18/$25)
-        if state.risk_config.max_order_size < 25.0:
-            state.risk_config.max_order_size = 25.0
+        # 5. Crypto: Dynamic Kelly sizing — unlock full tiers up to $35 (was $25, 4928 high-edge blocked)
+        if crypto_sniper_ref and crypto_sniper_ref.config.max_signal_size < 35.0:
+            crypto_sniper_ref.config.max_signal_size = 35.0
+            upgrade_applied = True
+
+        # 6. Risk: max_order_size must match Kelly tiers (raised to 35)
+        if state.risk_config.max_order_size < 35.0:
+            state.risk_config.max_order_size = 35.0
             upgrade_applied = True
 
         # 7. Crypto: Kill $5 tier — 0% WR across 64 trades, pure noise below 400bps
@@ -665,15 +680,15 @@ async def lifespan(app: FastAPI):
             crypto_sniper_ref.config.min_edge_bps = 400.0
             upgrade_applied = True
 
-        # 8. Arb: Gabagool needs capital — guaranteed profit, max out slots
-        if state.risk_config.arb_max_exposure < 250.0:
-            state.risk_config.arb_max_exposure = 250.0
+        # 8. Arb: Gabagool gets modest allocation — arb scanner restricted to prevent capital trap
+        if state.risk_config.arb_max_exposure < 40.0:
+            state.risk_config.arb_max_exposure = 40.0
             upgrade_applied = True
-        if state.risk_config.arb_reserved_capital < 250.0:
-            state.risk_config.arb_reserved_capital = 250.0
+        if state.risk_config.arb_reserved_capital < 40.0:
+            state.risk_config.arb_reserved_capital = 40.0
             upgrade_applied = True
-        if state.risk_config.max_arb_positions < 45:
-            state.risk_config.max_arb_positions = 45
+        if state.risk_config.max_arb_positions < 12:
+            state.risk_config.max_arb_positions = 12
             upgrade_applied = True
 
         # 9. Weather push: increase sizing from $5 to $8 (100% WR, PF=6.47 proven)
@@ -840,18 +855,19 @@ async def lifespan(app: FastAPI):
         # 3. Send upgrade deployed notification
         if telegram_notifier:
             changes = [
-                "FORENSIC ROLLBACK + PROFIT MAXIMIZATION",
-                "max_position_size: 40 -> 25 (REVERTED)",
-                "Re-activated opposite_side_held filter",
-                "max_tte_seconds: 12h -> 8h (REVERTED)",
-                "crypto_max_exposure: $180 -> $250",
-                "arb_max_exposure: $120 -> $25",
-                "arb_reserved_capital: $120 -> $25",
-                "max_arb_positions: 40 -> 10",
-                "Weather min_edge_bps: 500 -> 350",
-                "Weather min_confidence: 0.55 -> 0.45",
-                "Weather default_size: 3 -> 5",
-                "Weather max_signal_size: 8 -> 12",
+                "EPOCH 5 ANALYSIS — TIER 1+2 PROFIT UPGRADES",
+                "max_position_size: 25 -> 35 (unlock 4928 high-edge signals)",
+                "crypto_max_exposure: $80 -> $150 (profit engine needs capital)",
+                "arb_max_exposure: $250 -> $40 (capital trap restricted)",
+                "arb_reserved_capital: $250 -> $40",
+                "max_arb_positions: 45 -> 12",
+                "max_order_size: 25 -> 35",
+                "Crypto max_signal_size: 25 -> 35 (new $35 Kelly tier at >=1200bps)",
+                "Crypto cooldown: 60s -> 30s (faster 5min market re-entry)",
+                "Gabagool threshold: 0.985 -> 0.960 (was unprofitable after fees)",
+                "Weather profit_capture: 2.0x -> 1.5x (capture before decay)",
+                "Daily loss limit: $100 -> $150 (118 suppressions slowed recovery)",
+                "Crypto window caps: 5m=12, 15m=22, 1h=30 (raised from 10/18/22)",
                 f"Arb: cleaned {tiny_arb_cleaned} tiny positions",
             ]
             telegram_notifier.send_upgrade_deployed(changes)

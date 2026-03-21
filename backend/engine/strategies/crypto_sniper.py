@@ -754,7 +754,7 @@ class CryptoSniper(BaseStrategy):
         """Evaluate a single classified market. Returns SniperSignal or None."""
 
         # Window-aware position cap: short windows get smaller max positions
-        window_caps = {"5m": 10, "15m": 18, "1h": 22}
+        window_caps = {"5m": 12, "15m": 22, "1h": 30}
         effective_cap = window_caps.get(cm.window, self._state.risk_config.max_position_size if self._state else 25.0)
         base_cap = self._state.risk_config.max_position_size if self._state else 25.0
         cap = min(effective_cap, base_cap)
@@ -905,7 +905,9 @@ class CryptoSniper(BaseStrategy):
 
         # ---- Signal is tradable ----
         # Dynamic sizing: scale with edge magnitude (Kelly-inspired)
-        if edge_bps >= 900:
+        if edge_bps >= 1200:
+            size = 35.0
+        elif edge_bps >= 900:
             size = 25.0
         elif edge_bps >= 600:
             size = 18.0

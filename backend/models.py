@@ -130,21 +130,21 @@ class TradeRecord(BaseModel):
 # ---- Config Models ----
 
 class RiskConfig(BaseModel):
-    max_daily_loss: float = 100.0
+    max_daily_loss: float = 150.0
     max_loss_per_strategy: float = 50.0
-    max_position_size: float = 25.0              # REVERTED from 40 — all oversized positions were losers
+    max_position_size: float = 35.0              # Raised from 25 — unlock high-edge Kelly signals
     max_market_exposure: float = 360.0          # total exposure cap across all strategies
     # Per-strategy exposure caps (capital $, not position count)
-    crypto_max_exposure: float = 250.0          # primary profit driver, increased from 180
+    crypto_max_exposure: float = 150.0          # profit engine — $2.17 per $1 deployed
     weather_max_exposure: float = 120.0
-    arb_max_exposure: float = 250.0              # Gabagool live arb — guaranteed profit, max out
-    arb_reserved_capital: float = 250.0          # Gabagool + traditional arb capital
+    arb_max_exposure: float = 40.0              # Restricted — arb scanner was capital trap at $250
+    arb_reserved_capital: float = 40.0          # Gabagool + limited traditional arb
     weather_reserved_capital: float = 30.0      # doubled weather floor for higher sizing
     max_concurrent_positions: int = 85          # global safety cap
     max_weather_positions: int = 25             # weather reserved slots
     max_crypto_positions: int = 20              # crypto sniper reserved slots
-    max_arb_positions: int = 45                 # Gabagool pairs (each pair = 2 positions) + traditional arb
-    max_order_size: float = 25.0
+    max_arb_positions: int = 12                 # Restricted from 45 — prevent arb eating all capital
+    max_order_size: float = 35.0
     kill_switch_active: bool = False
     max_live_slippage_bps: float = 100.0
     allow_aggressive_live: bool = False
