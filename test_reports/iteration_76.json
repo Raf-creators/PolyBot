@@ -1,0 +1,135 @@
+{
+  "summary": "Iteration 76: Sanity Check Audit - Phase 1 + Phase 2 Features PASS. Backend: 33/33 tests pass. Frontend: All pages load correctly, Phantom tab Gabagool fix verified (no crash), EPOCH 4 label visible, all 6 experiment tabs working.",
+
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+
+  "passed_tests": {
+    "backend_api_tests": [
+      "test_status_endpoint - PASS: status=running, mode=paper",
+      "test_positions_endpoint - PASS: returns array",
+      "test_trades_endpoint - PASS: returns array",
+      "test_diagnostics_endpoint - PASS: returns system info",
+      "test_sniper_health_endpoint - PASS: running=true",
+      "test_sniper_dislocation_filtered_field_exists - PASS: field exists",
+      "test_sniper_position_capped_field_exists - PASS: field exists",
+      "test_sniper_rejection_reasons_field_exists - PASS: field exists",
+      "test_shadow_report_status - PASS: status=active",
+      "test_shadow_report_structure - PASS: has expected structure",
+      "test_moondev_report_status - PASS: status=active",
+      "test_moondev_report_has_metrics - PASS: metrics present",
+      "test_phantom_report_status - PASS: status=active",
+      "test_phantom_gabagool_threshold - PASS: threshold=0.96",
+      "test_phantom_gabagool_trades_field_exists - PASS: field exists",
+      "test_phantom_gabagool_stats - PASS: gabagool stats object present",
+      "test_phantom_gabagool_positions_returns_array - PASS",
+      "test_phantom_gabagool_closed_returns_array - PASS",
+      "test_phantom_gabagool_closed_returns_valid_structure - PASS",
+      "test_phantom_gabagool_closed_structure - PASS",
+      "test_phantom_unit_positions_returns_array - PASS",
+      "test_phantom_unit_closed_returns_array - PASS",
+      "test_phantom_evaluations_returns_array - PASS",
+      "test_phantom_evaluations_has_gabagool_eligible_field - PASS",
+      "test_whrrari_report_returns_valid_status - PASS",
+      "test_whrrari_report_has_3_mode_stats - PASS",
+      "test_whrrari_positions_mode_unit - PASS",
+      "test_whrrari_positions_mode_sandbox - PASS",
+      "test_whrrari_positions_mode_crypto - PASS",
+      "test_registry_returns_all_6_experiments - PASS",
+      "test_registry_experiment_ids - PASS",
+      "test_registry_active_experiments - PASS: 4 active",
+      "test_registry_planned_experiments - PASS: 2 planned"
+    ],
+    "frontend_ui_tests": [
+      "Overview page loads with PnL data (+$36.89 daily) - PASS",
+      "Overview shows all strategies active (Structural Arbitrage, Crypto Sniper, Weather Trader) - PASS",
+      "Overview shows Feed Health (Polymarket Connected, Binance WS Connected) - PASS",
+      "Quant Lab page loads with data-testid='quant-lab-page' - PASS",
+      "EPOCH 4 label visible - PASS",
+      "All 6 experiment tabs visible (EV-Gap, MoonDev, Phantom, Whrrari, Marik, Argona) - PASS",
+      "Shadow Only banner displayed - PASS",
+      "Phantom tab loads without crash (gabagoolOpenCols/gabagoolClosedCols fix verified) - PASS",
+      "Phantom tab shows Gabagool Both-Sides card with stats - PASS",
+      "Phantom tab shows One-Side Spread card - PASS",
+      "Phantom tab shows all 5 data tabs (Gabagool Open/Closed, One-Side Open/Closed, Evaluations) - PASS",
+      "Phantom Gabagool Open table renders with data - PASS",
+      "Whrrari tab loads with 3 mode cards (Unit-Size, Sandbox Notional, Crypto-Mirrored) - PASS",
+      "Whrrari tab shows Engine Metrics and Config - PASS",
+      "MoonDev tab loads with metrics and positions - PASS",
+      "Sniper page shows active trading with 7 open positions - PASS",
+      "Sniper page shows dynamic sizing (sizes 5, 8, 10, 15, 21, 25) - PASS"
+    ]
+  },
+
+  "features_verified": {
+    "phase1_dynamic_kelly_sizing": {
+      "status": "PASS",
+      "evidence": "Sniper health shows position_capped field, rejection_reasons includes risk:projected position > max entries"
+    },
+    "phase1_window_aware_position_caps": {
+      "status": "PASS",
+      "evidence": "Sniper positions show varying sizes (5, 8, 10, 15, 21, 25) based on window/edge"
+    },
+    "phase1_minimum_dislocation_filter": {
+      "status": "PASS",
+      "evidence": "Sniper health shows dislocation_filtered field"
+    },
+    "phase2_phantom_gabagool": {
+      "status": "PASS",
+      "evidence": "Phantom report shows gabagool_threshold=0.96, gabagool stats object with pnl_total, win_rate, closed_trades"
+    },
+    "phantom_tab_gabagool_fix": {
+      "status": "PASS",
+      "evidence": "Phantom tab renders without crash, gabagoolOpenCols and gabagoolClosedCols defined at line 844-865 in QuantLab.jsx"
+    },
+    "epoch4_label": {
+      "status": "PASS",
+      "evidence": "EPOCH 4 label visible in Quant Lab header"
+    },
+    "experiments_registry": {
+      "status": "PASS",
+      "evidence": "6 experiments returned: shadow_sniper, moondev, phantom, whrrari (active), marik, argona (planned)"
+    }
+  },
+
+  "test_report_links": [
+    "/app/backend/tests/test_iteration76_sanity_audit.py",
+    "/app/test_reports/pytest/pytest_results_iteration76.xml"
+  ],
+
+  "action_items": [],
+
+  "critical_code_review_comments": [
+    "QuantLab.jsx: gabagoolOpenCols and gabagoolClosedCols correctly defined at lines 844-865",
+    "QuantLab.jsx: EPOCH 4 label at line 123",
+    "All shadow engines (MoonDev, Phantom, Whrrari) returning correct status and metrics",
+    "Sniper health endpoint correctly exposes Phase 1 fields (dislocation_filtered, position_capped)",
+    "Phantom Gabagool both-sides mode working with threshold=0.96"
+  ],
+
+  "updated_files": [
+    "/app/backend/tests/test_iteration76_sanity_audit.py"
+  ],
+
+  "success_rate": {
+    "backend": "100% (33/33 tests passed)",
+    "frontend": "100% (17/17 UI features verified)"
+  },
+
+  "test_credentials": "None required",
+
+  "seed_data_creation": "None - tested with live shadow engine data after EPOCH 4 reset",
+
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+
+  "context_for_next_testing_agent": "Iteration 76 validated the sanity check audit for Phase 1 + Phase 2 features. Key findings: (1) All backend APIs healthy - /api/status, /api/positions, /api/trades, /api/diagnostics return 200, (2) Sniper health shows Phase 1 fields: dislocation_filtered, position_capped, rejection_reasons with risk:projected position entries, (3) Phantom Gabagool both-sides mode working with threshold=0.96, gabagool stats object present, (4) Phantom tab renders without crash - gabagoolOpenCols/gabagoolClosedCols fix verified, (5) EPOCH 4 label visible in Quant Lab, (6) All 6 experiment tabs working (4 active, 2 planned), (7) Sniper page shows dynamic sizing with varying position sizes. Server was recently reset (EPOCH 4) so some counters are still collecting data."
+}

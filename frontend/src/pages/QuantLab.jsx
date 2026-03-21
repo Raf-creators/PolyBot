@@ -120,7 +120,7 @@ export default function QuantLab() {
         <div className="flex items-center gap-3">
           <FlaskConical size={20} className="text-indigo-400" />
           <h1 className="text-lg font-semibold text-zinc-100">Quant Lab</h1>
-          <span className="text-[10px] font-mono text-zinc-600 bg-zinc-800/60 px-2 py-0.5 rounded">EPOCH 3</span>
+          <span className="text-[10px] font-mono text-zinc-600 bg-zinc-800/60 px-2 py-0.5 rounded">EPOCH 4</span>
         </div>
         <span className="text-xs text-zinc-600 font-mono">
           {registry.filter(e => e.status === 'active').length} active / {registry.length} total experiments
@@ -838,6 +838,30 @@ const phantomPosCols = [
   { key: 'current_price', label: 'Mark', align: 'right', render: v => <span className="font-mono text-zinc-200">{v != null ? formatPrice(v) : '--'}</span> },
   { key: 'unrealized_pnl', label: 'Unrl PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-medium ${pnlColor(v)}`}>{formatPnl(v)}</span> },
   { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },
+];
+
+// Gabagool columns (both-sides pairs)
+const gabagoolOpenCols = [
+  { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[160px] truncate block">{truncate(v, 40)}</span> },
+  { key: 'yes_entry', label: 'YES Entry', align: 'right', render: v => <span className="font-mono text-emerald-400">{formatPrice(v)}</span> },
+  { key: 'no_entry', label: 'NO Entry', align: 'right', render: v => <span className="font-mono text-red-400">{formatPrice(v)}</span> },
+  { key: 'pair_cost', label: 'Pair Cost', align: 'right', render: v => <span className={`font-mono ${(v || 1) < 0.96 ? 'text-cyan-300 font-semibold' : 'text-zinc-400'}`}>{v?.toFixed(4)}</span> },
+  { key: 'guaranteed_edge_pct', label: 'Edge %', align: 'right', sortable: true, render: v => <span className="font-mono text-cyan-300">{v ? `${v}%` : '--'}</span> },
+  { key: 'guaranteed_profit', label: 'Guar. PnL', align: 'right', render: v => <span className="font-mono text-emerald-400">{v ? `$${v.toFixed(4)}` : '--'}</span> },
+  { key: 'size', label: 'Size', align: 'right', render: v => <span className="font-mono text-cyan-300">{v}</span> },
+  { key: 'notional', label: 'Notional', align: 'right', render: v => <span className="font-mono text-zinc-300">{v ? `$${v.toFixed(2)}` : '--'}</span> },
+  { key: 'opened_at', label: 'Opened', render: v => <span className="text-zinc-500">{formatTimeAgo(v)}</span> },
+];
+
+const gabagoolClosedCols = [
+  { key: 'question', label: 'Market', render: v => <span className="text-zinc-300 max-w-[160px] truncate block">{truncate(v, 40)}</span> },
+  { key: 'pair_cost', label: 'Pair Cost', align: 'right', render: v => <span className="font-mono text-cyan-300">{v?.toFixed(4)}</span> },
+  { key: 'guaranteed_edge_pct', label: 'Edge %', align: 'right', render: v => <span className="font-mono text-cyan-300">{v ? `${v}%` : '--'}</span> },
+  { key: 'pnl', label: 'PnL', align: 'right', sortable: true, render: v => <span className={`font-mono font-semibold ${pnlColor(v)}`}>{formatPnl(v)}</span> },
+  { key: 'won', label: 'Result', render: v => <span className={v ? 'text-emerald-400' : 'text-red-400'}>{v ? 'WIN' : 'LOSS'}</span> },
+  { key: 'hours_to_resolve', label: 'Hours', align: 'right', render: v => <span className="font-mono text-zinc-400">{v != null ? `${v}h` : '--'}</span> },
+  { key: 'resolution_type', label: 'Resolution', render: v => <ResType v={v} /> },
+  { key: 'closed_at', label: 'Closed', render: v => <span className="text-zinc-500">{formatTimestamp(v)}</span> },
 ];
 
 // Whrrari columns
